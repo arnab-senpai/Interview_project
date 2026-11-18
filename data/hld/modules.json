@@ -1,0 +1,1018 @@
+{
+  "version": "2.0.0",
+  "modules": [
+    {
+      "id": "module-1",
+      "moduleNumber": 1,
+      "title": "Distributed Foundations, Metrics & Architectural Agility",
+      "ddiaSources": [
+        "DDIA Chapter 1: Reliable, Scalable, and Maintainable Applications"
+      ],
+      "tppSources": [
+        "Topic 8: ETC (Easier to Change)",
+        "Topic 10: Orthogonality",
+        "Topic 11: Reversibility"
+      ],
+      "linkedLessonIds": [
+        "l7-load-balancer",
+        "dns-and-cdn",
+        "distributed-rate-limiter",
+        "idempotency-and-circuit-breakers"
+      ],
+      "linkedCaseStudyIds": [
+        "api-gateway-500k-ingestion"
+      ],
+      "deepDiveFoundations": [
+        {
+          "heading": "1.1 Faults vs. Failures & Defense-in-Depth Blast Isolation",
+          "corePrinciple": "A fault is a component deviating from spec (corrupt NVMe block, GC pause, misconfigured route); a failure is the whole user-facing system stopping service. Reliability comes from preventing localized faults from multiplying into fleet-wide failures.",
+          "mechanicsAndConstraints": "Mitigate hardware faults with quorum replication and multi-AZ cell placement; mitigate software bugs with memory-bounded queues, process supervision, and schema bounds; mitigate human errors (the #1 cause of Tier-1 outages) with sandboxed staging, fast canary rollback, and typed configuration validation.",
+          "tppApplication": "TPP Topic 10 (Orthogonality) & Topic 11 (Reversibility): isolate ingress routing, auth verification, rate-limit accounting, and downstream service pools so swapping a rate-limit store or draining one cellular AZ causes zero cross-tier cascade.",
+          "keyMetricsOrFormulas": [
+            "Composite Multi-Hop Availability: A_total = Π(A_i) across serial synchronous calls",
+            "Annual Error Budget at 99.99% SLO = 52.56 minutes/year",
+            "Cell Blast Radius = 1 / N_cells of total tenants on regional dependency failure"
+          ]
+        },
+        {
+          "heading": "1.2 Tail-Latency Physics (p95, p99, p99.9) & Head-of-Line Amplification",
+          "corePrinciple": "Mean latency conceals bi-modal distributions (cache hits at 1ms vs GC/disk misses at 180ms). In fan-out architectures, the slowest downstream call dominates end-to-end SLA.",
+          "mechanicsAndConstraints": "If one page request fans out in parallel to K backend shards each having p99 = 40ms (i.e. 1% slow rate), the probability that at least one shard is slow equals 1 - (0.99)^K: at K = 20 shards, ~18.2% of user requests experience >40ms latency. Queuing delays inside shared HTTP/1.1 keep-alive pools or overloaded NIC rings trigger Head-of-Line (HoL) blocking.",
+          "tppApplication": "Apply TPP Topic 8 (ETC) by wrapping downstream adapters with explicit deadline propagation (gRPC deadline headers), connection-pool per-tenant bulkheads, and idempotent hedged requests (fire backup RPC to replica 2 only after p95 threshold elapses).",
+          "keyMetricsOrFormulas": [
+            "Parallel Fan-Out Slow Probability: P(slow) = 1 - (1 - p)^K",
+            "Little's Law Queueing Bound: L = λ · W (Concurrency = Arrival Rate × Response Time)",
+            "Hedged Request Extra Traffic Budget: ~2% extra QPS when hedging at p98"
+          ]
+        },
+        {
+          "heading": "1.3 Operability, Simplicity & Evolvability Under ETC",
+          "corePrinciple": "Architecture decays when accidental complexity (ad-hoc retries, shared global singletons, hard-coded vendor APIs) eclipses essential domain complexity.",
+          "mechanicsAndConstraints": "Operability requires RED telemetry (Rate, Errors, Duration histograms via HdrHistogram—never averaged percentiles across nodes) paired with W3C TraceContext propagation. Simplicity decouples control planes from fast data paths so data-plane gateways remain stateless.",
+          "tppApplication": "TPP Topic 11 (Reversibility): keep gateway policies (WAF rules, routing weights, token-bucket quotas) behind declarative interfaces rather than baking Envoy/Nginx vendor Lua specifics directly into application domain services.",
+          "keyMetricsOrFormulas": [
+            "HdrHistogram log-linear buckets preserve exact p99.9 without cross-pod average distortion",
+            "Load shedding triggers cleanly above ~75% CPU/worker saturation before queue explosion"
+          ]
+        }
+      ],
+      "tradeoffsMatrix": [
+        {
+          "option": "Token Bucket (Redis Lua / Local Burst Window)",
+          "pros": "Allows bounded legitimate traffic bursts up to bucket capacity B while enforcing steady refill rate R; O(1) memory per key.",
+          "consBottlenecks": "Remote Redis check adds 0.5–1.5ms RTT per hop unless amortized with local micro-batch token leasing.",
+          "idealWorkload": "Public API gateways absorbing mobile client reconnect bursts within strict SLA quotas."
+        },
+        {
+          "option": "Leaky Bucket / Strict Pacing Queue (FQ-CoDel)",
+          "pros": "Smooths egress into downstream fixed-capacity databases at strictly constant outflow rate; absorbs short spikes via bounded queue.",
+          "consBottlenecks": "Adds deterministic queuing delay to every burst packet; drops tail traffic once bounded queue overflows.",
+          "idealWorkload": "Protecting brittle legacy payment processors or unsharded downstream SQL write primaries."
+        },
+        {
+          "option": "Hedged Requests (Backup RPC after p95 Timer)",
+          "pros": "Slashes p99/p99.9 tail spikes caused by single-replica GC pauses or noisy-neighbor storage stalls by racing alternate replicas.",
+          "consBottlenecks": "Dangerous during global overload (amplifies load if naive); strictly restricted to read/idempotent operations and guarded by circuit-breaker retry budget.",
+          "idealWorkload": "Scatter-gather search/feed fan-outs with strict p99 < 50ms SLAs."
+        },
+        {
+          "option": "Cell-Based Architecture (Shuffle Sharding)",
+          "pros": "Isolates poison-pill tenant bugs, noisy neighbors, and zone failures to 1/(N choose K) of users instead of cascading globally.",
+          "consBottlenecks": "Increases routing-tier complexity (cell directory lookup) and requires cross-cell aggregation for global admin queries.",
+          "idealWorkload": "Multi-tenant Tier-1 ingress platforms and high-availability SaaS control planes."
+        }
+      ],
+      "caseStudy": {
+        "systemName": "500k RPS API Gateway & Adaptive Ingestion Pipeline (p99 < 50ms)",
+        "problemStatement": "Design a multi-region Edge API Gateway and telemetry/order Ingestion Pipeline sustaining 500,000 requests/sec steady state and absorbing 3x flash-crowd spikes (1.5M RPS) while holding end-to-end p99 latency under 50ms.",
+        "functionalRequirements": [
+          "Terminate TLS 1.3 at edge PoPs, authenticate JWT/API keys offline without per-request auth-DB round trips, and enforce per-tenant quota tiers.",
+          "Route idempotent GET traffic with optional hedged fan-out while ingesting POST events onto durable partitioned streams with HTTP 429/503 adaptive load shedding."
+        ],
+        "nonFunctionalRequirements": [
+          "End-to-end Ingress p99 Latency <= 50ms (Edge TLS + Auth <= 5ms, Gateway Quota/Routing <= 8ms, Downstream Execution/Ack <= 37ms).",
+          "Sustained 500,000 RPS baseline; clean survival under 1.5M RPS flash-crowd spike via HTTP 429 Retry-After jitter rather than OOM crash.",
+          "99.99% Availability via multi-AZ Anycast routing and cell-isolated worker pools."
+        ],
+        "trafficSummary": "500k RPS steady (~1.5M RPS flash peak), ~1.5 KB avg payload -> 750 MB/s steady / 2.25 GB/s peak ingress bandwidth across 6 regional cells.",
+        "estimates": [
+          {
+            "label": "Network Ingress Bandwidth (Steady / Peak)",
+            "calculation": "500,000 RPS * 1,500 B = 750 MB/s (~6 Gbps); 3x spike = 18 Gbps",
+            "result": "6 Gbps steady / 18 Gbps flash peak"
+          },
+          {
+            "label": "Stateless Edge Proxy Fleet Sizing",
+            "calculation": "1 Envoy/Rust proxy core handles ~25,000 TLS-terminated RPS -> 500k / 25k = 20 cores steady; 3x spike + 40% headroom",
+            "result": "90–120 vCPU across 3 AZs (6 isolated cells)"
+          },
+          {
+            "label": "Distributed Quota State Memory",
+            "calculation": "10M active API keys * 64 B token-bucket entry (with local 50ms token lease cache)",
+            "result": "~640 MB RAM per region"
+          }
+        ],
+        "architectureFlow": "Client (TLS 1.3 / HTTP/2-3) -> Anycast GeoDNS -> L4 Maglev/ECMP Load Balancer -> Regional Stateless Envoy/Rust Cell Gateway (Local JWKS verify + Hierarchical Token Bucket) -> Bounded Per-Tenant Bulkhead Pools -> [GET: Hedged Read Mesh + LFU Cache | POST: Partitioned Ingestion Log]",
+        "services": [
+          {
+            "name": "L4 Anycast + Maglev Consistent Load Balancer",
+            "responsibility": "Direct Server Return (DSR) packet forwarding with zero TLS termination overhead; maintains stable connection hashing during node churn.",
+            "technologyChoice": "BGP Anycast + eBPF/XDP + Maglev hashing"
+          },
+          {
+            "name": "Cell-Isolated L7 Gateway Plane",
+            "responsibility": "TLS 1.3 session resumption, local EdDSA/RS256 JWKS verification, two-tier token bucket rate limiting (in-process lock-free counter synced async to Redis Cluster), and deadline propagation.",
+            "technologyChoice": "Rust/Envoy async reactor (epoll/io_uring)"
+          },
+          {
+            "name": "Adaptive Load Shedder & Ingestion Buffer",
+            "responsibility": "Monitors Little's Law inflight concurrency and p95 queue depth (CoDel); sheds low-priority requests immediately with HTTP 429 + full-jitter Retry-After while preserving critical control endpoints.",
+            "technologyChoice": "Adaptive Concurrency Limiter + Partitioned Kafka / WAL"
+          }
+        ],
+        "dataModelAndStorage": "Edge JWKS public keys cached locally in shared memory (refreshed via out-of-band push every 60s, immune to auth DB downtime). Quota buckets partitioned across sharded Redis Cluster using hash tags `{tenant_id}` amortized via local 50ms micro-leases so 98% of quota checks avoid network RTT.",
+        "deepDives": [
+          {
+            "title": "Eliminating Tail-Latency Explosion During Flash Crowds",
+            "failureScenario": "1.5M RPS flash spike saturates downstream threads; FIFO backlog grows unboundedly, causing valid clients to wait >2s only to time out after gateway resources already burned.",
+            "mitigationMechanics": "Enforce CoDel / Little's Law adaptive concurrency limits per cell plus request deadline headers (`X-Deadline-Ms`). If remaining deadline < expected p50 downstream cost, fail fast at the gateway in <0.5ms. Add token-bucket rejection (`429`) before allocating downstream buffers.",
+            "etcTradeoff": "Admitting fewer requests strictly below knee-of-curve preserves <30ms p99 for healthy callers instead of degrading 100% of users to timeouts."
+          },
+          {
+            "title": "Poison-Pill Tenant Isolation via Shuffle Sharding",
+            "failureScenario": "One abusive tenant triggers an infinite retry loop, saturating shared gateway worker pools and degrading unrelated paying customers.",
+            "mitigationMechanics": "Assign each tenant deterministically to K = 2 virtual worker cells out of M = 16 pools (120 unique combinations). Even if a tenant overwhelms both assigned cells, >90% of tenants never share both cells simultaneously.",
+            "etcTradeoff": "Trades marginal unused idle headroom per cell for mathematical blast-radius containment (TPP Orthogonality)."
+          }
+        ]
+      },
+      "candidateRubric": {
+        "juniorMid": {
+          "summary": "Reasons in averages and generic autoscaling without identifying shared bottlenecks or tail-latency physics.",
+          "signals": [
+            "Claims 'just add Kubernetes autoscaling + CDN' without mentioning TLS cost or synchronous auth bottlenecks.",
+            "Optimizes mean latency (~10ms) and ignores p99 fan-out amplification or retry storms.",
+            "Proposes a single shared Redis check synchronously on every request without local batching or failure fallback."
+          ]
+        },
+        "senior": {
+          "summary": "Explicitly models load/QPS math, applies multi-layer rate limiting, circuit breakers, connection pooling, and tail mitigation.",
+          "signals": [
+            "Computes bandwidth/CPU envelopes upfront and selects Token Bucket vs Leaky Bucket intentionally.",
+            "Uses offline JWKS verification, HTTP/2 multiplexing, per-origin connection pooling, and hedged GET requests capped by retry budgets.",
+            "Protects downstream dependencies via circuit breakers, deadlines, and jittered Retry-After responses."
+          ]
+        },
+        "staffPrincipal": {
+          "summary": "Architects orthogonal failure domains, adaptive backpressure under Little's Law, and reversible non-vendor abstractions.",
+          "signals": [
+            "Applies cell-based / shuffle-sharded blast radius isolation so poison-pill tenants or single-AZ faults never cascade.",
+            "Implements CoDel / gradient concurrency load shedding that rejects excess work in <0.5ms before queue saturation.",
+            "Explicitly argues TPP Reversibility & ETC: decouples vendor gateway policies behind declarative contracts and ensures stateless data-plane fail-open/fail-closed tuning per route tier."
+          ]
+        }
+      }
+    },
+    {
+      "id": "module-2",
+      "moduleNumber": 2,
+      "title": "Data Models, Storage Engines & Access Patterns",
+      "ddiaSources": [
+        "DDIA Chapter 2: Data Models and Query Languages",
+        "DDIA Chapter 3: Storage and Retrieval"
+      ],
+      "tppSources": [
+        "Topic 16: The Power of Plain Text",
+        "Topic 30: Transforming Programming"
+      ],
+      "linkedLessonIds": [
+        "btrees-vs-lsm-trees"
+      ],
+      "linkedCaseStudyIds": [
+        "financial-auditing-ledger",
+        "whatsapp-chat"
+      ],
+      "deepDiveFoundations": [
+        {
+          "heading": "2.1 Data Model Locality vs. Impedance Mismatch (Relational, Document, Graph)",
+          "corePrinciple": "Pick the data model that eliminates impedance mismatch and respects physical disk locality for your dominant traversal direction.",
+          "mechanicsAndConstraints": "Document databases pack self-contained trees into contiguous byte ranges—ideal for O(1) aggregate profile reads without joins—but degrade on many-to-many links where schema normalization wins. Graph engines outperform repeated recursive SQL joins via index-free adjacency when edge-traversal depth is unbounded.",
+          "tppApplication": "TPP Topic 16 (Plain Text / Self-Describing Data) & Topic 30 (Transforming Programming): treat data models as explicit immutable pipelines rather than tangling business entities across fragile ORM object graphs.",
+          "keyMetricsOrFormulas": [
+            "1-to-Many Tree -> Document Locality (single disk seek)",
+            "Many-to-Many -> Normalized Relational / Join Optimizer",
+            "N-Hop Traversals -> Graph Index-Free Adjacency O(degree) per hop"
+          ]
+        },
+        {
+          "heading": "2.2 Storage Engine Internals: LSM-Trees vs. Fixed-Page B-Trees",
+          "corePrinciple": "Every storage engine trades off Read Amplification, Write Amplification, and Space Amplification (the RUM Conjecture).",
+          "mechanicsAndConstraints": "B-Trees divide storage into fixed 4 KB–16 KB pages modified in place with an accompanying WAL for crash recovery and page latches for concurrency. Lookups take O(log_500 N) (~3–4 hops), giving deterministic point-read latency, but random small writes rewrite full 4 KB pages plus WAL (high write amplification). LSM-Trees buffer writes sequentially in an append-only WAL + sorted in-memory MemTable (Skip List / Red-Black Tree), flushing immutable sorted SSTables sequentially to NVMe. Background leveled or size-tiered compaction merges SSTables and prunes tombstones, while per-SSTable Bloom Filters reject absent keys in O(1) RAM before touching disk.",
+          "tppApplication": "Monitor compaction lag and NVMe SSD wear explicitly: size-tiered compaction cuts write amplification at the cost of 2x temporary compaction space, whereas leveled compaction bounds space overhead at ~10% while multiplying write amplification (10–30x across levels).",
+          "keyMetricsOrFormulas": [
+            "B-Tree Depth: ~500 keys/page -> 4 levels index ~62.5B keys",
+            "Bloom Filter False Positive Rate (~1%): ~9.6 bits per key (~1.2 MB RAM per 1M keys)",
+            "Write Amplification (Leveled LSM): ~10x–30x; Read Seek Worst-Case without Bloom Filter: O(L SSTable levels)"
+          ]
+        },
+        {
+          "heading": "2.3 OLTP Row Stores vs. Compressed Columnar OLAP Engines",
+          "corePrinciple": "Row stores materialize every attribute per tuple on one page for fast transactional mutations; Columnar stores pack identical attributes contiguously across rows for SIMD analytics.",
+          "mechanicsAndConstraints": "Audit dashboards and aggregations touch 3–5 columns across 50M rows. Reading entire 400-byte OLTP rows wastes 95%+ of memory and PCIe bandwidth. Columnar formats (Parquet, ClickHouse MergeTree) compress repeated low-cardinality values using Dictionary Encoding, Run-Length Encoding (RLE), and Bitmap Indexes, scanning compressed column vectors directly in L1/L2 CPU caches via vectorized execution.",
+          "tppApplication": "TPP Topic 30 (Transformations): bridge operational OLTP ledgers into immutable Parquet/columnar partitions asynchronously via deterministic append-only pipelines—zero heavy `GROUP BY` analytic scans hitting live transactional B-Trees.",
+          "keyMetricsOrFormulas": [
+            "Columnar Compression Ratio: typically 5x–15x over raw JSON/row tuples via RLE + Dictionary Encoding",
+            "I/O Savings on 4-of-40-column scan: >90% reduction in bytes read from NVMe/S3"
+          ]
+        }
+      ],
+      "tradeoffsMatrix": [
+        {
+          "option": "B-Tree (PostgreSQL / InnoDB, 4–16 KB Pages + WAL)",
+          "pros": "Predictable sub-millisecond point lookups and narrow range scans; simple row/page locking enables strict serializability; zero compaction pause spikes.",
+          "consBottlenecks": "Random inserts fragment B-Tree pages, trigger page splits, and suffer full-page write amplification on SSDs.",
+          "idealWorkload": "Read-heavy/balanced ACID OLTP transactions, point lookups, and transactional index constraints."
+        },
+        {
+          "option": "LSM-Tree (RocksDB / Cassandra / Pebble, MemTable + SSTables)",
+          "pros": "Maximizes sequential write throughput (append-only WAL + batch SSTable flush); higher storage density without interior page fragmentation.",
+          "consBottlenecks": "Background compaction competes for NVMe IOPS (`compaction stalls` spike p99); range queries must merge-sort across active L0..Ln levels.",
+          "idealWorkload": "Write-heavy append logs, time-series telemetry, chat/messaging history, and high-ingest audit journals."
+        },
+        {
+          "option": "Column-Oriented Store (Parquet / ClickHouse MergeTree)",
+          "pros": "10x compression via Dictionary/RLE/Delta encoding; vectorized SIMD batch scans over cold/warm analytical slices.",
+          "consBottlenecks": "Individual row updates/deletes are prohibitively expensive (require rewriting column stripes or LSM delete-masks).",
+          "idealWorkload": "Immutable time-bounded audit analytics, regulatory compliance scans, and financial aggregations."
+        }
+      ],
+      "caseStudy": {
+        "systemName": "High-Volume Financial Auditing Ledger (Hot LSM -> Cold Columnar Tiering)",
+        "problemStatement": "Design the storage architecture for a financial auditing ledger ingesting 150,000 immutable ledger entries/sec (peak 400k/s) requiring sub-20ms point-in-time state reconstruction and <2-second quarterly audit range aggregations over 5 years of history.",
+        "functionalRequirements": [
+          "Append immutable cryptographically chained debit/credit entries with monotonic sequence IDs per account and exact point-in-time balance snapshots.",
+          "Support both low-latency recent account transaction history and full multi-month regulatory audit aggregations without slowing writes."
+        ],
+        "nonFunctionalRequirements": [
+          "Write throughput: 150k entries/sec sustained (400k/s burst) at p99 write ack < 15ms.",
+          "Audit query SLA: recent account lookup p99 < 25ms; multi-billion row quarterly range aggregation < 2s.",
+          "Zero data loss: synchronous quorum WAL persistence across 3 AZs before client ACK."
+        ],
+        "trafficSummary": "150k entries/sec * 350 B = 52.5 MB/s raw ingest -> 1.65 PB uncompressed over 5 years -> ~220 TB compressed columnar cold storage.",
+        "estimates": [
+          {
+            "label": "Daily Write Ingestion Volume",
+            "calculation": "150,000 * 86,400 * 350 B = 4.53 TB/day raw (compressed ~1.1 TB/day in columnar cold tier)",
+            "result": "4.53 TB/day hot / ~1.1 TB/day cold"
+          },
+          {
+            "label": "Hot MemTable + Bloom Filter RAM per Shard (64 Shards)",
+            "calculation": "7 days hot LSM (31 TB total -> ~480 GB/shard); Bloom filters ~10 bits/key -> ~1.5 GB RAM/shard",
+            "result": "~96 GB total Bloom filter RAM across cluster"
+          },
+          {
+            "label": "Quarterly Audit Columnar Scan Speed",
+            "calculation": "Reading 3 columns (account_id, delta, ts) via ZSTD/RLE skips 88% of payload + min/max granule pruning",
+            "result": "~180 MB scanned per query batch (<1.2s)"
+          }
+        ],
+        "architectureFlow": "Ledger Writers -> Consistent-Hash Account Router -> Hot LSM Ledger Shards (WAL + SkipList MemTable + NVMe SSTables w/ Bloom Filters) -> [Sync Checkpoint Snapshots] -> Async Transformation Compactor -> Cold Compressed Parquet/Columnar Engine on S3 + Iceberg Manifests",
+        "services": [
+          {
+            "name": "Hot Write Shard Engine (LSM + Checkpoint Snapshots)",
+            "responsibility": "Buffers high-velocity append-only entries sequentially in Raft-replicated WAL + MemTable; emits periodic running-balance checkpoints every 1,000 entries for O(1) point-in-time state reconstruction.",
+            "technologyChoice": "RocksDB / Cockroach Pebble / TiKV (Leveled + FIFO L0 Guard)"
+          },
+          {
+            "name": "Deterministic Iceberg/Parquet Compaction Pipeline",
+            "responsibility": "Transforms flushed immutable SSTables older than 7 days into time- & account-sorted Parquet stripes with Z-order sorting, Dictionary Encoding, and RLE bitmaps.",
+            "technologyChoice": "Apache Flink Compactor -> Iceberg + S3 Object Store"
+          },
+          {
+            "name": "Vectorized Audit Query Engine",
+            "responsibility": "Pushes predicate filters (`ts BETWEEN ... AND account_tier = ...`) into Parquet min/max statistics and merges with recent 7-day hot LSM tail transparently.",
+            "technologyChoice": "ClickHouse / Trino Vectorized Reader"
+          }
+        ],
+        "dataModelAndStorage": "Primary key `(account_id_hash_prefix, account_id, ledger_seq DESC)` avoids sequential key append skew on single partitions. Checkpoint snapshots eliminate replaying millions of historical entries for point-in-time queries. Cold columnar files sort by `(date_bucket, account_id)` using Dictionary Encoding on currency/event_type and Delta Encoding on monotonic timestamps.",
+        "deepDives": [
+          {
+            "title": "Stopping LSM L0 Compaction Stalls Under 400k/s Bursts",
+            "failureScenario": "During market-close bursts, MemTable flushes accumulate unmerged L0 files faster than background threads compact L0->L1; overlapping L0 SSTables block writes completely (`write stall`) and balloon point-read latency.",
+            "mitigationMechanics": "Isolate dedicated compaction NVMe queues with rate-limited write IOPS (rate-limiter reserving 35% disk bandwidth strictly for compaction), raise `level0_slowdown_writes_trigger`, and use partitioned hash-prefixed keys so each shard fits easily in memory-cached L1/L2 Bloom filters.",
+            "etcTradeoff": "Accepting temporarily higher read-merge cost during bursts prevents hard write stalls while keeping hot writes linear and sequential."
+          },
+          {
+            "title": "Sub-20ms Point-in-Time Reconstruction Without Full Replay",
+            "failureScenario": "Reconstructing an enterprise merchant's exact balance 18 months ago requires scanning 50M historical ledger rows.",
+            "mitigationMechanics": "Write immutable `balance_checkpoint` anchor records every N = 1,000 transactions or daily boundary. Point-in-time queries perform one binary search on Parquet/SSTable checkpoint index (`checkpoint <= target_ts`) and replay at most <= 1,000 trailing entries.",
+            "etcTradeoff": "Adds <0.2% storage amplification while guaranteeing bounded O(1000) point-in-time reconstruction time forever."
+          }
+        ]
+      },
+      "candidateRubric": {
+        "juniorMid": {
+          "summary": "Selects a single general-purpose SQL engine without analyzing disk I/O patterns, index overhead, or OLTP/OLAP separation.",
+          "signals": [
+            "Recommends a single PostgreSQL table with `SUM(amount) GROUP BY ...` across 5 years of unpartitioned ledger data.",
+            "Never compares B-Tree page modification cost against sequential LSM WAL/MemTable flushing.",
+            "Confuses normalized relational schemas with analytic columnar storage requirements."
+          ]
+        },
+        "senior": {
+          "summary": "Explicitly maps access patterns to storage engine internals (B-Tree vs LSM vs Columnar) and avoids OLTP analytical lock contention.",
+          "signals": [
+            "Explains MemTable/WAL/SSTable flushing, Bloom filter memory math, and why random writes hurt B-Tree pages.",
+            "Uses append-only immutable entries + snapshot checkpoints for fast point-in-time queries and offloads audit analytics to columnar stores.",
+            "Quantifies secondary index write amplification and partitions keys to prevent hot shards."
+          ]
+        },
+        "staffPrincipal": {
+          "summary": "Architects an end-to-end Hot LSM -> Cold Compressed Columnar lifecycle accounting for compaction physics and SSD longevity.",
+          "signals": [
+            "Designs tiered hot LSM shards streaming deterministically into Dictionary/RLE-encoded Parquet on S3 with Iceberg partition pruning.",
+            "Mitigates L0 compaction write stalls, SSD wear leveling, and read amplification via isolated compaction I/O budgets and Bloom filter sizing.",
+            "Explicitly grounds choices in TPP Plain Text/Transforming Programming so replaying or re-indexing immutable ledger history never mutates source truth."
+          ]
+        }
+      }
+    },
+    {
+      "id": "module-3",
+      "moduleNumber": 3,
+      "title": "Interface Contracts, Serialization & Schema Evolution",
+      "ddiaSources": [
+        "DDIA Chapter 4: Encoding and Evolution"
+      ],
+      "tppSources": [
+        "Topic 23: Design by Contract",
+        "Topic 28: Decoupling"
+      ],
+      "linkedLessonIds": [
+        "schema-evolution-contracts",
+        "idempotency-and-circuit-breakers"
+      ],
+      "linkedCaseStudyIds": [
+        "multi-version-billing-api",
+        "payment-gateway"
+      ],
+      "deepDiveFoundations": [
+        {
+          "heading": "3.1 Binary Wire Formats vs. Textual Encodings (Protobuf, Thrift, Avro vs. JSON)",
+          "corePrinciple": "In distributed rolling deployments, old and new producers/consumers coexist simultaneously in memory and on queues. Wire formats must guarantee bi-directional schema evolution without lockstep deploys.",
+          "mechanicsAndConstraints": "JSON/XML duplicate textual field names on every message (4–10x wire bloat) and suffer numeric precision surprises (`int64` > `2^53` precision loss in JavaScript). Protocol Buffers and Thrift assign compact integer field tags (`1, 2, 3...`) and varint encoding; Avro strips even tags from payloads and resolves writer-schema vs reader-schema IDs via a central Schema Registry.",
+          "tppApplication": "TPP Topic 23 (Design by Contract): embed schema compatibility checks (`BACKWARD`, `FORWARD`, `FULL_TRANSITIVE`) into CI pipelines before deployment—breaking changes fail at build time, never in production.",
+          "keyMetricsOrFormulas": [
+            "Protobuf wire savings vs JSON: typically 3x–7x smaller payloads & 5x–10x faster serialization CPU",
+            "Strict Schema Rules: NEVER reuse retired field tag numbers; all newly added fields MUST be optional or carry safe defaults"
+          ]
+        },
+        {
+          "heading": "3.2 Forward & Backward Compatibility During Rolling Deployments",
+          "corePrinciple": "Backward compatibility lets new code read old data; Forward compatibility lets old code safely skip unknown fields written by new producers.",
+          "mechanicsAndConstraints": "With Protobuf/Thrift, forward compatibility relies on old parsers skipping unknown tag+wire-type lengths cleanly without corrupting buffer offsets (never stripping unknown fields blindly before re-serializing if pass-through preservation matters). With Avro/Kafka, every message carries a 4-byte Schema ID referencing the Schema Registry.",
+          "tppApplication": "Apply TPP Topic 28 (Decoupling) via expand-and-contract migrations: Step 1 add optional new field `v2_amount_minor`; Step 2 deploy consumers reading both; Step 3 backfill / migrate writers; Step 4 retire legacy field only after retention window expires.",
+          "keyMetricsOrFormulas": [
+            "Expand-Contract Migration Windows prevent 100% of mixed-version serialization crashes",
+            "Avro Schema Header Overhead: fixed 5 bytes (`0x00` magic byte + 4-byte Schema Registry ID)"
+          ]
+        },
+        {
+          "heading": "3.3 Pitfalls of RPC Location Transparency & Contract-Driven Boundaries",
+          "corePrinciple": "Network RPCs are fundamentally unlike local function calls: latency is unpredictable, requests or responses can vanish silently mid-flight, and partial failures leave state ambiguous.",
+          "mechanicsAndConstraints": "Masking remote calls behind 'location-transparent' stubs encourages chatty N+1 loops and unsafe blind retries. Production gRPC/HTTP APIs enforce explicit per-call timeouts, full-jitter exponential backoff, caller-supplied `idempotency_key` tokens, and strict preconditions/postconditions + Dead-Letter Queues (DLQs) when malformed events breach consumer invariants.",
+          "tppApplication": "TPP Topic 23 (Design by Contract): every service boundary explicitly specifies caller preconditions (valid currency minor units, non-null `idempotency_key`), provider postconditions (invariant debit/credit zero-sum), and observable error taxonomies (`400 Bad Contract`, `409 In-Flight`, `422 Payload Mismatch`).",
+          "keyMetricsOrFormulas": [
+            "Full Jitter Backoff: sleep = random(0, min(cap, base * 2^attempt)) breaks retry synchronization",
+            "End-to-End Idempotency requires BOTH key uniqueness AND SHA-256 request payload digest match check"
+          ]
+        }
+      ],
+      "tradeoffsMatrix": [
+        {
+          "option": "JSON over HTTP/REST (OpenAPI Contract)",
+          "pros": "Human-readable debugging, universal browser support, rich public ecosystem.",
+          "consBottlenecks": "Verbosity inflates egress bandwidth and GC allocations; weak integer/64-bit precision safety; no compact tag evolution.",
+          "idealWorkload": "Public edge REST APIs, browser frontends, and external webhook integrations."
+        },
+        {
+          "option": "Protocol Buffers + gRPC (HTTP/2 Binary Contracts)",
+          "pros": "3–7x smaller binary frames, strict field-tag forward/backward evolution, bi-directional streaming & native deadline propagation.",
+          "consBottlenecks": "Not human-inspectable without `.proto` descriptor; HTTP/2 single-TCP connection can still stall under packet loss without multi-conn pooling.",
+          "idealWorkload": "High-QPS internal microservice meshes, payment pipelines, and low-latency control planes."
+        },
+        {
+          "option": "Apache Avro + Schema Registry",
+          "pros": "Smallest event payload size (zero tag numbers embedded per record); dynamic codegen optional; ideal for self-describing archival data lakes.",
+          "consBottlenecks": "Hard runtime dependency on Schema Registry lookup cache to decode records; reader must know exact writer schema version.",
+          "idealWorkload": "High-volume Kafka event streams, CDC topics, and Parquet/Hadoop analytical ingestion."
+        }
+      ],
+      "caseStudy": {
+        "systemName": "Multi-Versioned Billing & Payment API (Zero-Downtime Rolling Microservices)",
+        "problemStatement": "Design a multi-versioned billing and payment processing platform serving both external merchants (REST JSON v1/v2) and 40+ internal microservices (gRPC + Kafka) undergoing 200+ independent zero-downtime deployments per week.",
+        "functionalRequirements": [
+          "Maintain strict backward/forward compatibility across mixed versions of Invoice, Subscription, and Charge schemas during canary & rolling rollouts.",
+          "Guarantee zero double charges across network retries, edge timeouts, and async webhook/Kafka event replays."
+        ],
+        "nonFunctionalRequirements": [
+          "Zero downtime or deserialization failures across asynchronous releases of producers and consumers.",
+          "Internal RPC serialization overhead < 0.5ms; strict contract validation rejecting malformed payloads before entering core ledgers.",
+          "Exactly-once financial effect via deterministic `Idempotency-Key` + SHA-256 request fingerprint check."
+        ],
+        "trafficSummary": "45,000 billing API RPS + 180,000 internal gRPC calls/sec + 90,000 Kafka billing events/sec across independent service release cycles.",
+        "estimates": [
+          {
+            "label": "Protobuf vs JSON Bandwidth Saved Internally",
+            "calculation": "180k internal calls/s * (1,400 B JSON - 320 B Protobuf) = ~194 MB/s (~1.55 Gbps saved per region)",
+            "result": "77% internal wire bandwidth reduction"
+          },
+          {
+            "label": "Idempotency Key Hot Window Storage (24h)",
+            "calculation": "45k RPS * 30% mutating = 13.5k POSTs/s * 86,400 * 512 B = ~597 GB (hot Redis + Postgres unique index)",
+            "result": "~600 GB rolling 24h key store"
+          },
+          {
+            "label": "Schema Registry Cache Hit Ratio",
+            "calculation": "~500 active schemas cached in-memory per pod (few MBs) -> 99.999% local cache hits",
+            "result": "< 0.05ms lookup overhead"
+          }
+        ],
+        "architectureFlow": "Merchant Client (JSON/REST + Date-Version Header) -> Edge Contract Translator (OpenAPI Validate + Stripe-Style Version Transformer) -> Billing Core (gRPC + Protobuf v3 Tags + Deadline + Idempotency Guard) -> Outbox + Avro Event (5-Byte Schema ID + Schema Registry Gate) -> Consumers + Contract DLQ",
+        "services": [
+          {
+            "name": "API Edge Version Adapter (TPP Boundary Translator)",
+            "responsibility": "Translates merchant-pinned date versions (`2024-05-01`, `2026-01-15`) into latest internal canonical Protobuf structs via declarative compatibility modules (isolating legacy API quirks from core billing logic).",
+            "technologyChoice": "Envoy Gateway + Version Transform Pipeline"
+          },
+          {
+            "name": "CI Schema Registry & Buf Breaking-Change Gate",
+            "responsibility": "Validates Protobuf/Avro changes against `FULL_TRANSITIVE` compatibility before merge: forbids tag reuse, forbids type narrowing, enforces default-safe optional fields.",
+            "technologyChoice": "Confluent Schema Registry + Buf Schema Registry"
+          },
+          {
+            "name": "Contract-Enforced Idempotency & DLQ Guard",
+            "responsibility": "Verifies preconditions, hashes request payload into `idempotency_ledger`, returns `409` on concurrent race or `422` on mismatched body, and routes poisoned schema messages to an inspected DLQ with full trace context.",
+            "technologyChoice": "PostgreSQL Atomic Reservation + Kafka DLQ"
+          }
+        ],
+        "dataModelAndStorage": "`idempotency_keys(merchant_id, key PRIMARY KEY, payload_sha256, status ENUM('IN_PROGRESS','COMPLETED'), response_blob, expires_at)`. Billing events encoded using Avro referencing immutable Schema Registry IDs so event consumers replaying 6-month-old Kafka topics deserialize effortlessly alongside today's schema.",
+        "deepDives": [
+          {
+            "title": "Rolling Deployment Backward/Forward Skew Between Billing & Tax Engine",
+            "failureScenario": "Billing Service v2.1 rolls out new field `tax_jurisdiction_tag = 14` while Tax Engine v2.0 pods are still live alongside v2.1 pods; naive strict JSON parsing throws unknown-field 400 errors and drops invoices.",
+            "mitigationMechanics": "Use Protobuf optional fields (`optional TaxInfo`, tag `14`) backed by CI Buf linting (`WIRE_JSON` + `FILE` compatibility). Older Tax v2.0 pods silently ignore unknown field tag `14` and preserve fallback tax calculation until the canary reaches 100%.",
+            "etcTradeoff": "Requires discipline to keep newly added fields non-mandatory for one full deployment cycle (Expand -> Migrate -> Contract)."
+          },
+          {
+            "title": "Handling Poison-Pill Unparseable Messages Without Halting Consumer Groups",
+            "failureScenario": "A buggy third-party webhook forwarder injects a malformed schema payload into a Kafka partition; synchronous consumer crash-loops block 100,000 subsequent valid invoices behind that offset.",
+            "mitigationMechanics": "Wrap deserialization inside a strict Design-by-Contract boundary validator: catch deserialization/invariant violations immediately, emit full binary payload + error reason + trace ID to a monitored `billing.dlq`, advance the main offset, and trigger instant PagerDuty/Slack alert on `DLQ > 0`.",
+            "etcTradeoff": "Trades automatic quarantine & human-assisted replay for uninterrupted healthy partition throughput."
+          }
+        ]
+      },
+      "candidateRubric": {
+        "juniorMid": {
+          "summary": "Assumes synchronous coordinated releases with raw JSON payloads and zero schema or contract safeguards.",
+          "signals": [
+            "Proposes unversioned JSON over REST and expects all microservices to deploy simultaneously when a field changes.",
+            "Treats gRPC/RPC calls as reliable local functions—omitting timeouts, jitter, and idempotency keys.",
+            "Crashes consumers repeatedly on bad messages without DLQs or schema validation."
+          ]
+        },
+        "senior": {
+          "summary": "Enforces binary serialization rules, non-breaking schema evolution, and idempotent RPC retry hygiene.",
+          "signals": [
+            "Compares JSON vs Protobuf/Thrift/Avro using field tags, unknown-field skipping, and central Schema Registries.",
+            "Details safe Expand-Contract rollouts (never reusing deleted tags, always adding optional fields with defaults).",
+            "Enforces `Idempotency-Key` storage with payload hashing and full-jitter exponential backoff."
+          ]
+        },
+        "staffPrincipal": {
+          "summary": "Architects formal contract-driven API boundaries, version isolation adapters, and decoupled schema governance.",
+          "signals": [
+            "Applies TPP Design by Contract & Decoupling: pushes external API version translation into edge adapters so core domain engines stay cleanly decoupled.",
+            "Embeds automated compatibility gates (`FULL_TRANSITIVE`) in CI plus contract-breach DLQs so malformed poison messages never stall stream partitions.",
+            "Explicitly contrasts synchronous RPC coupling hazards against event-carried state transfer and explains why naive pass-through JSON re-serialization breaks forward compatibility."
+          ]
+        }
+      }
+    },
+    {
+      "id": "module-4",
+      "moduleNumber": 4,
+      "title": "High Availability via Replication & Partitioning",
+      "ddiaSources": [
+        "DDIA Chapter 5: Replication",
+        "DDIA Chapter 6: Partitioning"
+      ],
+      "tppSources": [
+        "Topic 32: Configure, Don't Integrate",
+        "Topic 34: Shared State Is Incorrect State"
+      ],
+      "linkedLessonIds": [
+        "replication-and-consensus",
+        "consistent-hashing",
+        "sharding-and-hot-keys"
+      ],
+      "linkedCaseStudyIds": [
+        "collaborative-docs",
+        "uber-rideshare",
+        "news-feed"
+      ],
+      "deepDiveFoundations": [
+        {
+          "heading": "4.1 Replication Topologies & Replication Lag Anomalies",
+          "corePrinciple": "Async replication boosts read scale and geographic latency at the cost of temporal staleness anomalies; multi-leader and leaderless models demand deterministic conflict convergence.",
+          "mechanicsAndConstraints": "Single-leader async followers risk data loss and split-brain (two leaders accepting writes) during naive failover; synchronous followers stall writes if one follower freezes. Multi-leader setups cut cross-datacenter write latency locally but create concurrent conflicts resolved via LWW (risks silent dropped writes under clock skew), Operational Transformation (OT), or CRDTs. Leaderless Dynamo rings achieve quorum consistency when `W + R > N`, while sloppy quorums + hinted handoff favor write availability over linearizable reads until read-repair / anti-entropy Merkle trees converge.",
+          "tppApplication": "Protect users from jarring anomalies: guarantee Read-Your-Own-Writes (route author reads to leader for N seconds after mutation), Monotonic Reads (pin user sessions to consistent replica hash), and Consistent Prefix Reads (causal version vectors).",
+          "keyMetricsOrFormulas": [
+            "Strict Quorum Condition: W + R > N guarantees read/write node overlap",
+            "Typical 3-Replica Balanced Quorum: N = 3, W = 2, R = 2 (survives 1 node outage)",
+            "CRDT Convergence Property: Associative, Commutative, Idempotent state merge"
+          ]
+        },
+        {
+          "heading": "4.2 Key-Range vs. Hash Partitioning & Hot-Spot Key Salting",
+          "corePrinciple": "Good partitioning distributes both storage AND active write IOPS uniformly without creating tail bottlenecks on monotonic or celebrity keys.",
+          "mechanicsAndConstraints": "Key-range partitioning keeps contiguous keys sorted on disk for fast `WHERE ts BETWEEN a AND b` scans, yet suffers catastrophic write hot spots on monotonic timestamps unless hash-salted. Hash partitioning + Consistent Hashing with Virtual Nodes (`VNodes`) scatters keys evenly across nodes, while heavy-hitter celebrity keys break pure hashing unless split further with a random prefix (`key#0..S-1`).",
+          "tppApplication": "TPP Topic 34 (Shared State Is Incorrect State): isolate shard state cleanly behind key-salted partitions so high-traffic tenants cannot monopolize shared storage IOPS.",
+          "keyMetricsOrFormulas": [
+            "Consistent Hash Rebalance Movement: only K / N keys move when adding a node (with VNodes ~150–256/host)",
+            "Key Salting Spread: `hot_key#0..S-1` trades S-way read fan-out to eliminate S-fold single-shard write bottlenecks"
+          ]
+        },
+        {
+          "heading": "4.3 Secondary Index Partitioning & Zero-Reindex Rebalancing",
+          "corePrinciple": "Secondary indexes fundamentally force choosing between single-shard write simplicity (Local Document Index) and fast targeted reads (Global Term Index).",
+          "mechanicsAndConstraints": "In Local (Document-Partitioned) indexes, each shard indexes ONLY the documents it owns—keeping writes synchronous and fast, but forcing reads by tag/email to scatter-gather across ALL N shards (exposing p99 tail latency to the slowest shard). In Global (Term-Partitioned) indexes, index entries for term T live on one dedicated index partition for O(1) reads, at the cost of distributed async updates via CDC/streams.",
+          "tppApplication": "TPP Topic 32 (Configure, Don't Integrate): allocate a fixed number of logical virtual partitions (e.g., 1,024 logical buckets mapped to physical nodes via etcd configuration) so scaling nodes simply streams whole intact buckets without cluster-wide key re-hashing.",
+          "keyMetricsOrFormulas": [
+            "Scatter-Gather p99 Slow Rate (Local Index across N=32 shards): `1 - (1 - p)^32`",
+            "Virtual Bucket Topology Change: zero key re-computation, linear bucket streaming over Raft/SSTable snapshots"
+          ]
+        }
+      ],
+      "tradeoffsMatrix": [
+        {
+          "option": "Single-Leader (Semi-Sync Quorum + Read Replicas)",
+          "pros": "Zero multi-writer write conflicts; linearizable reads possible via leader; straightforward secondary indexes.",
+          "consBottlenecks": "Cross-continent write RTT hurts global authors; split-brain hazard if leader failover lacks strict quorum fencing.",
+          "idealWorkload": "Financial ledgers, primary relational SaaS apps, and single-region low-conflict writes."
+        },
+        {
+          "option": "Multi-Leader + CRDT / OT Sync Engine",
+          "pros": "Local datacenter/edge write latency (~15ms); native offline editing and partition survival across continents.",
+          "consBottlenecks": "Conflict convergence complexity; metadata tombstones grow unless garbage-collected; trickier uniqueness constraints.",
+          "idealWorkload": "Collaborative document editors (Docs/Figma/Notion), multi-region shopping carts, offline-first mobile sync."
+        },
+        {
+          "option": "Leaderless Quorum (Dynamo / Cassandra W+R>N)",
+          "pros": "Zero single-point-of-failure leader election delays; tunable per-query latency vs consistency (`LOCAL_QUORUM` vs `ONE`).",
+          "consBottlenecks": "Sloppy quorums break strict `W+R>N` guarantees; concurrent writes require LWW or sibling resolution via client.",
+          "idealWorkload": "Always-writeable telemetry ingestion, session catalogs, and multi-region key-value lookups."
+        },
+        {
+          "option": "Local (Document) vs. Global (Term) Secondary Index",
+          "pros": "Local: synchronous single-shard write ACID. Global: fast O(1) index read without scatter-gather fan-out.",
+          "consBottlenecks": "Local: reads scatter-gather across N shards (p99 tail hit!). Global: async updates lag slightly behind primary writes.",
+          "idealWorkload": "Local for write-heavy shard isolation; Global when secondary tag queries dominate."
+        }
+      ],
+      "caseStudy": {
+        "systemName": "Global Collaborative Document Editor (CRDT Multi-Region Sync + Offline Edits)",
+        "problemStatement": "Design a globally distributed collaborative document editor (Google Docs / Notion / Figma notes) supporting 50M DAU, 100+ simultaneous editors per document, full offline local editing, and <80ms cross-region collaborative delta sync.",
+        "functionalRequirements": [
+          "Real-time concurrent character/block insertion, formatting, and cursor presence across collaborators in North America, Europe, and Asia.",
+          "Seamless offline queue buffering on laptops/phones that converges deterministically without corrupted text upon reconnect."
+        ],
+        "nonFunctionalRequirements": [
+          "Local keystroke echo < 1ms; remote collaborator propagation < 80ms intra-region, < 200ms cross-continent.",
+          "Mathematical convergence guarantee (Strong Eventual Consistency): all peers reach identical state regardless of message arrival order.",
+          "Read-Your-Own-Writes continuity across page reloads and multi-device switching."
+        ],
+        "trafficSummary": "50M DAU -> 5M concurrent connected editors; average ~3 ops/sec active -> 300k–600k WebSocket delta ops/sec cluster-wide.",
+        "estimates": [
+          {
+            "label": "Peak Operation Sync Throughput",
+            "calculation": "2M actively typing users at peak * 0.5 keystrokes/sec (batched every 50ms) = 1M ops/s -> ~250k WebSocket batches/s",
+            "result": "~250k delta batches/sec"
+          },
+          {
+            "label": "Concurrent WebSocket Gateway Footprint",
+            "calculation": "5M concurrent WebSockets / 100k conns per tuned epoll pod = 50 stateful sync gateways",
+            "result": "50–65 edge sync pods globally"
+          },
+          {
+            "label": "CRDT Op-Log + Periodic Compacted Snapshot Storage",
+            "calculation": "100M active docs/day * 400 ops * 40 B delta -> 1.6 TB/day uncompressed deltas; compressed snapshots cut 85%",
+            "result": "~250 GB/day long-term growth"
+          }
+        ],
+        "architectureFlow": "Browser/Mobile Local CRDT Store (IndexedDB) -> Edge GeoDNS + Stateful WebSocket Room Gateway (Pinned by Consistent Hash `doc_id`) -> CRDT State Vector Sync / Broadcast Engine (Kafka Cross-Region Relay) -> Append-Only Op-Log (LSM Storage) + Async Checkpoint Compactor",
+        "services": [
+          {
+            "name": "Local-First Client CRDT Engine (Yjs / Automerge / RGA)",
+            "responsibility": "Applies edits locally in <1ms using causal `(clientId, logicalClock)` Lamport/state-vector IDs; persists offline edits in IndexedDB and exchanges compact binary state-vector diffs on reconnect.",
+            "technologyChoice": "WebAssembly/TS Yjs RGA Sequence CRDT"
+          },
+          {
+            "name": "Consistent-Hashed Room Sync Router",
+            "responsibility": "Pins all editors of `doc_id` onto the regional room shard via Consistent Hashing (VNodes); fans out delta ops over Redis Pub/Sub / internal mesh without round-tripping through disk first.",
+            "technologyChoice": "Consistent Hash Directory (etcd) + Rust/Go WebSocket Hub"
+          },
+          {
+            "name": "Multi-Region Causal Op-Log & Snapshot Compactor",
+            "responsibility": "Persists ops sequentially in partitioned LSM storage; replicates ops asynchronously cross-region via Kafka mirror and periodically folds CRDT tombstones into compact binary checkpoints.",
+            "technologyChoice": "ScyllaDB / RocksDB Op-Log + Background Compactor"
+          }
+        ],
+        "dataModelAndStorage": "Documents partitioned across 1,024 logical virtual buckets using `consistent_hash(doc_id)`. Each delta row keyed by `(doc_id, region_epoch, lamport_ts, client_id)`. Secondary index by `workspace_id` uses global async projections (updating workspace doc lists without forcing scatter-gather searches across 1,024 doc shards).",
+        "deepDives": [
+          {
+            "title": "Eliminating LWW Lost Updates & Divergent OT States During Cross-Region Partitions",
+            "failureScenario": "Alice offline in Tokyo and Bob in London edit overlapping paragraphs concurrently. Operational Transformation requires central lock-step server ordering (breaking offline convergence), while naive Last-Write-Wins silently overwrites Alice's edits.",
+            "mitigationMechanics": "Use an associative, commutative, idempotent Sequence CRDT (RGA / Yjs) assigning unique `(logical_clock, replica_id)` IDs to every character/block. Offline operations merge cleanly in any arrival order with zero central coordinator needed, guaranteeing identical document trees.",
+            "etcTradeoff": "CRDTs accumulate tombstone metadata on deletions; mitigate memory creep via background epoch-based tombstone GC once all replicas acknowledge checkpoint state vectors."
+          },
+          {
+            "title": "Guaranteeing Read-Your-Own-Writes & Avoiding Stale Secondary Index Lag",
+            "failureScenario": "User renames a doc, immediately refreshes their Workspace Sidebar (served by an async global index replica), and watches the old doc title reappear.",
+            "mitigationMechanics": "Return a monotonic write vector/LSN cookie (`x-doc-min-epoch`) on every mutation; sidebar/read-after-write queries either read local client cache first or pass the minimum causal offset so replicas wait briefly or route to an up-to-date follower.",
+            "etcTradeoff": "Encodes causal readiness cleanly into protocol metadata (DDIA Ch. 5) instead of forcing every sidebar list query onto synchronous single-leader DBs."
+          }
+        ]
+      },
+      "candidateRubric": {
+        "juniorMid": {
+          "summary": "Assumes simple primary-replica MySQL synchronization and overlooks cross-region conflicts and shard rebalancing.",
+          "signals": [
+            "Suggests naive master-slave SQL replication without addressing concurrent edit overwrites or offline sync.",
+            "Hashes directly by `hash(doc_id) % N`, causing massive cache/shard migration chaos when nodes scale.",
+            "Ignores replication lag anomalies like users not seeing edits they just committed."
+          ]
+        },
+        "senior": {
+          "summary": "Applies consistent hashing (VNodes), multi-leader/CRDT convergence, quorum formulas, and session-level consistency.",
+          "signals": [
+            "Chooses Multi-Leader or CRDT over central synchronous locking to achieve sub-50ms local UX and offline edits.",
+            "Articulates `W + R > N`, read-your-own-writes causal session tokens, and consistent hashing with virtual nodes.",
+            "Explains local vs global secondary index trade-offs explicitly."
+          ]
+        },
+        "staffPrincipal": {
+          "summary": "Analyzes tombstone lifecycle, split-brain safety, causal vector convergence, and zero-reindexing rebalancing.",
+          "signals": [
+            "Separates logical partitions from physical host topology (`Configure, Don't Integrate`) so rebalancing moves immutable chunks without global index scans.",
+            "Designs CRDT compaction/tombstone GC boundaries and evaluates scatter-gather tail amplification of local secondary indexes.",
+            "Traces end-to-end causality cleanly from browser IndexedDB state vectors through multi-region replication and read-repair."
+          ]
+        }
+      }
+    },
+    {
+      "id": "module-5",
+      "moduleNumber": 5,
+      "title": "Distributed Transactions, Isolation & Consensus",
+      "ddiaSources": [
+        "DDIA Chapter 7: Transactions",
+        "DDIA Chapter 8: The Trouble with Distributed Systems",
+        "DDIA Chapter 9: Consistency and Consensus"
+      ],
+      "tppSources": [
+        "Topic 24: Dead Programs Tell No Lies",
+        "Topic 26: How to Balance Resources"
+      ],
+      "linkedLessonIds": [
+        "sql-acid-and-isolation",
+        "distributed-locking-fencing",
+        "replication-and-consensus"
+      ],
+      "linkedCaseStudyIds": [
+        "ticketmaster-flash-sale",
+        "payment-gateway"
+      ],
+      "deepDiveFoundations": [
+        {
+          "heading": "5.1 Weak Isolation, MVCC Snapshot Isolation & Write Skew Anomalies",
+          "corePrinciple": "Most databases default to Read Committed or Snapshot Isolation (MVCC) for throughput—neither automatically guarantees true Serializability.",
+          "mechanicsAndConstraints": "Read Committed prevents dirty reads/writes but allows non-repeatable reads and lost updates. Snapshot Isolation reads from a consistent point-in-time snapshot (`readers never block writers`) but STILL permits Write Skew: two concurrent transactions read an overlapping precondition (`>= 2 on-call doctors`), mutate disjoint rows, and both commit—violating the global invariant! True Serializability requires Single-Threaded Execution (Redis/LMAX), Two-Phase Locking (`SELECT FOR UPDATE` / predicate gaps), or Optimistic Serializable Snapshot Isolation (SSI tracking `SIREAD` antidependencies and raising `SQLSTATE 40001`).",
+          "tppApplication": "TPP Topic 24 (Dead Programs Tell No Lies): when optimistic SSI aborts with `40001` or invariants fail, crash fast / roll back cleanly and execute bounded idempotent retries—never silently swallow serialization conflicts.",
+          "keyMetricsOrFormulas": [
+            "Write Skew occurs when TxA & TxB read shared precondition P and update DISJOINT rows",
+            "Postgres SSI retries safely on `SQLSTATE 40001` via bounded jittered loop"
+          ]
+        },
+        {
+          "heading": "5.2 Unreliable Time, GC Pauses & Why Fencing Tokens Are Mandatory",
+          "corePrinciple": "In asynchronous networks, a process can pause mid-request for 10+ seconds (JVM GC, VM live migration, disk stall) while physical NTP clocks jump backward.",
+          "mechanicsAndConstraints": "A distributed TTL lock (`SET key val NX PX 10000`) alone CANNOT guarantee mutual exclusion: Worker A takes the lock, freezes during GC for 15 seconds while TTL expires, Worker B acquires the lock and writes, and Worker A unfreezes and overwrites storage! Correctness demands a consensus-issued monotonically increasing **Fencing Token** (`epoch = 33, 34...`) validated **by the downstream storage layer itself** (`WHERE fencing_epoch < :tok`).",
+          "tppApplication": "TPP Topic 26 (Balancing Resources): whoever acquires a lease must pair it with finite TTL + explicit cleanup/release, while downstream resources strictly guard state transitions using atomic CAS / fencing epochs.",
+          "keyMetricsOrFormulas": [
+            "Monotonic Clocks (`CLOCK_MONOTONIC`) measure intervals; Time-of-Day Clocks (`NTP`) MUST NOT determine distributed lock expiry or ordering",
+            "Redlock relies on bounded wall-clock assumptions; etcd/ZooKeeper leases provide consensus-backed monotonic revision/zxid fencing tokens"
+          ]
+        },
+        {
+          "heading": "5.3 Two-Phase Commit (2PC) Bottlenecks vs. Raft/Paxos Consensus",
+          "corePrinciple": "2PC locks all participating databases during coordinator pauses (`in-doubt` blocked state), whereas Raft/Paxos consensus decouples availability via majority quorums.",
+          "mechanicsAndConstraints": "If the 2PC coordinator crashes after participants vote `YES` on `PREPARE`, participants must hold row locks indefinitely until the coordinator recovers—destroying availability across network partitions. Consensus protocols (Raft `RequestVote`/`AppendEntries`, Paxos, ZooKeeper ZAB) require only a strict majority quorum (`N/2 + 1`) to elect a single leader per term and commit an ordered replicated log safely even across minority outages.",
+          "tppApplication": "Use Raft/etcd strictly for coordination metadata, partition ownership, and fencing epochs—avoid putting high-volume user-row business data through cross-service 2PC.",
+          "keyMetricsOrFormulas": [
+            "Quorum Fault Tolerance: 2f + 1 nodes tolerate f node crashes (3 nodes -> 1 failure; 5 nodes -> 2 failures)",
+            "Raft Safety Invariant: at most one leader can be elected per term via majority intersection"
+          ]
+        }
+      ],
+      "tradeoffsMatrix": [
+        {
+          "option": "Single-Threaded In-Memory Partition Loop (Redis Lua / LMAX Disruptor)",
+          "pros": "Zero lock contention, zero context-switch overhead, 100,000+ atomic operations/sec per core with deterministic serializability.",
+          "consBottlenecks": "Single-core throughput ceiling per shard; state must fit in RAM and replicate via WAL/AOF for durability.",
+          "idealWorkload": "Flash-sale seat holds, exchange matching engines, and real-time counters."
+        },
+        {
+          "option": "Optimistic Concurrency Control (CAS / SSI / Version Column)",
+          "pros": "Zero holding of locks across network/user think time; blazing read performance when conflict rate is < 10%.",
+          "consBottlenecks": "Degrades under high hot-spot contention (high retry/abort storm on the exact same row).",
+          "idealWorkload": "Low-to-medium contention inventory commits, optimistic document saves, ledger checks."
+        },
+        {
+          "option": "Pessimistic Locking (`SELECT FOR UPDATE` / 2PL)",
+          "pros": "Prevents wasted computation by serializing contending transactions immediately when conflict rates exceed ~30%.",
+          "consBottlenecks": "Deadlocks and connection-pool exhaustion if callers stall while holding DB locks.",
+          "idealWorkload": "Strict hot-row financial balance mutations inside a single local ACID database."
+        },
+        {
+          "option": "Consensus Leases + Monotonic Fencing (etcd / ZooKeeper)",
+          "pros": "Linearizable ownership leases + strictly increasing fencing tokens surviving node/coordinator crash via majority quorum.",
+          "consBottlenecks": "Cross-WAN quorum RTT adds ~50–150ms; unsuitable per individual user request on fast hot paths.",
+          "idealWorkload": "Cluster leader election, shard ownership leases, and distributed cron locking."
+        }
+      ],
+      "caseStudy": {
+        "systemName": "Flash-Sale Distributed Inventory Reservation (Preventing Double Booking at 500k Fans/s)",
+        "problemStatement": "Design a concert ticketing / airline seat reservation platform handling 500,000 concurrent fans hitting a 20,000-seat stadium drop simultaneously at 10:00:00 AM without overselling a single seat or collapsing under database lock contention.",
+        "functionalRequirements": [
+          "Display real-time interactive venue seat availability without melting the primary SQL database under 500k refresh spikes.",
+          "Allow a fan to hold selected seat(s) exclusively for 10 minutes during checkout, release expired holds automatically, and commit final ticket ownership atomically on payment."
+        ],
+        "nonFunctionalRequirements": [
+          "Zero double-booking invariant: even under Redis crash, GC pause, or simultaneous millisecond clicks, a seat maps to at most one paid order.",
+          "Waiting-room ingress absorbs 500k RPS -> shapes checkout arrival rate smoothly to 5,000–10,000 QPS.",
+          "Seat hold acquisition latency p99 < 40ms once admitted from virtual queue."
+        ],
+        "trafficSummary": "500,000 surge requests on seat map + Virtual Queue admission -> bounded 5,000 checkout hold attempts/sec -> 20,000 atomic seat conversions.",
+        "estimates": [
+          {
+            "label": "Static/Snapshot Seat Map Edge Bandwidth",
+            "calculation": "500,000 fans * 5 KB compressed bitmask delta every 3s -> ~830 MB/s served 100% by CDN/Edge snapshots",
+            "result": "Zero origin DB reads for browsing"
+          },
+          {
+            "label": "Atomic Redis Lua Hold Operations",
+            "calculation": "Bounded admission at 10,000 hold attempts/sec across sharded Redis cluster (single-thread Lua)",
+            "result": "< 1ms p99 lock-free CAS"
+          },
+          {
+            "label": "PostgreSQL Durable Ledger Finalizations",
+            "calculation": "Peak 2,000 final ticket orders/sec verified via `UNIQUE(event_id, seat_id)` + conditional CAS",
+            "result": "< 8% CPU on single primary shard"
+          }
+        ],
+        "architectureFlow": "500k Fans -> CDN Cached Venue Map -> Virtual Waiting Room Token Gate (FIFO / Randomized Redis Stream + HMAC Admission Token) -> Checkout Hold Service -> Redis Lua Atomic Hold (`SETNX + TTL + Hold Epoch`) -> Payment Settlement -> PostgreSQL Final Commit (`UNIQUE(event_id, seat_id)` + Fencing Epoch Check)",
+        "services": [
+          {
+            "name": "Virtual Waiting Room & Admission Token Gate",
+            "responsibility": "Queues excess fans gracefully in an edge waiting room and issues short-lived cryptographically signed HMAC admission tokens strictly capped to checkout downstream capacity.",
+            "technologyChoice": "Edge Worker + Redis Queue + HMAC JWT Admission Gate"
+          },
+          {
+            "name": "Single-Threaded Atomic Hold Engine (Redis Lua)",
+            "responsibility": "Checks availability bitmask and sets hold key + 10-min TTL + monotonic hold epoch atomically inside a non-preemptive Lua script—eliminating lock/check TOCTOU races.",
+            "technologyChoice": "Redis Cluster Sharded by `{event_id}:{section_id}`"
+          },
+          {
+            "name": "Durable PostgreSQL Ticket Finalizer (CAS Guard)",
+            "responsibility": "Validates the Redis hold epoch AND updates `seats SET status='SOLD', order_id=:oid WHERE event_id=:e AND seat_id=:s AND (status='AVAILABLE' OR (status='HELD' AND hold_token=:tok))`—guaranteeing safety even if Redis flushed early.",
+            "technologyChoice": "PostgreSQL Primary + Unique Constraint + Refund Saga on Expiry"
+          }
+        ],
+        "dataModelAndStorage": "Primary seat ledger partitioned by `event_id` with unbreakable uniqueness: `UNIQUE (event_id, seat_id)` on `tickets` table plus `hold_epoch BIGINT` column. Seat bitmasks (`1 bit per seat -> 20,000 seats = 2.5 KB total!`) replicated asynchronously every 500ms to CDN edge POPs for instant UI refresh.",
+        "deepDives": [
+          {
+            "title": "Hold Expiration Race Condition (GC Pause vs Payment Settlement)",
+            "failureScenario": "User A holds Seat 12F at t=0:00, pauses during external 3DS payment verification until t=10:02 (2 seconds after TTL expired), and User B grabs Seat 12F at t=10:01 while User A's payment webhook arrives late.",
+            "mitigationMechanics": "Never trust TTL cache expiration alone for final ticketing (TPP Topic 24: fail fast on stale invariants). Checkout assigns a monotonic `hold_token`/`fencing_epoch` stored on both Redis and Postgres; final commit runs atomic SQL CAS checking matching `hold_token`. If Seat 12F is already sold or held by B, Postgres updates 0 rows, fails cleanly, and immediately triggers an idempotent payment refund notification.",
+            "etcTradeoff": "Trades 0.1% rare late-payment refunds for mathematical impossibility of double-booked physical seats."
+          },
+          {
+            "title": "Eliminating Hot-Row Lock Contention Across 20,000 Contending Clicks",
+            "failureScenario": "Running `SELECT ... FOR UPDATE` on a crowded venue causes PostgreSQL transaction lock queues and thread pool exhaustion across 200 microservice pods.",
+            "mitigationMechanics": "Bucket inventory by section/tier (`2.5 KB` bitmask in Redis Lua) paired with optimistic conditional SQL updates (`version = version + 1 WHERE version = :v`). Contending buyers fail fast in <1ms in Redis Lua without queueing DB threads.",
+            "etcTradeoff": "In-memory single-threaded Lua execution trades trivial persistence dependency on Postgres CAS for extreme lock-free throughput."
+          }
+        ]
+      },
+      "candidateRubric": {
+        "juniorMid": {
+          "summary": "Wraps basic SQL transactions across requests and misses distributed clock/GC races and global lock collapse.",
+          "signals": [
+            "Suggests holding `BEGIN; SELECT * FROM seats FOR UPDATE` across the 10-minute checkout window.",
+            "Relies solely on Redis `SET NX EX` without noticing GC pauses or storage-level validation.",
+            "Doesn't protect the relational database from 500k direct concurrent map refreshes."
+          ]
+        },
+        "senior": {
+          "summary": "Combines queuing backpressure, distributed locks with fencing tokens, and explicit isolation trade-offs.",
+          "signals": [
+            "Rejects cross-service 2PC due to blocking coordinator hazards; places a Virtual Waiting Room ahead of OLTP DB.",
+            "Explains MVCC Write Skew anomalies, SSI vs 2PL trade-offs, and enforces storage-level fencing tokens.",
+            "Uses database `UNIQUE` constraints + idempotent refund compensation on late webhook settlements."
+          ]
+        },
+        "staffPrincipal": {
+          "summary": "Designs lock-free single-threaded partition loops / CAS invariants with fail-fast crash recovery and clock independence.",
+          "signals": [
+            "Replaces multi-round locking with atomic CAS / optimistic version fencing or Redis Lua single-threaded partition serialization.",
+            "Explains physical NTP jumps vs monotonic clocks, unbounded GC pauses, and Raft `2f+1` quorum intersection guarantees.",
+            "Applies TPP 'Dead Programs Tell No Lies' + Resource Balancing: isolates failure domains cleanly and triggers deterministic compensating refunds rather than corrupting ledger invariants."
+          ]
+        }
+      }
+    },
+    {
+      "id": "module-6",
+      "moduleNumber": 6,
+      "title": "Streaming Architectures, Event Sourcing & Derived State",
+      "ddiaSources": [
+        "DDIA Chapter 10: Batch Processing",
+        "DDIA Chapter 11: Stream Processing"
+      ],
+      "tppSources": [
+        "Topic 29: Juggling the Real World",
+        "Topic 33: Breaking Temporal Coupling",
+        "Topic 35: Actors & Processes",
+        "Topic 36: Blackboards"
+      ],
+      "linkedLessonIds": [
+        "kafka-event-streaming",
+        "outbox-and-cdc",
+        "distributed-transactions-saga"
+      ],
+      "linkedCaseStudyIds": [
+        "realtime-fraud-pipeline",
+        "video-streaming"
+      ],
+      "deepDiveFoundations": [
+        {
+          "heading": "6.1 Log-Based Brokers vs. Batch Stores & Offset/Delivery Semantics",
+          "corePrinciple": "Partitioned append-only event logs (Kafka, Pulsar) turn mutable database history into durable, multi-consumer replayable streams.",
+          "mechanicsAndConstraints": "Traditional queues delete messages after consumer ACK; log brokers retain immutable ordered segments indexed by offset so independent consumer groups (Fraud Engine, Analytics Sink, Audit Trail) read at arbitrary paces and replay history cleanly. True distributed 'exactly-once delivery' over networks is impossible under crash/retry uncertainty; reliable pipelines combine **At-Least-Once Broker Delivery + Idempotent Sinks** (or transactional Kafka read-process-write commits inside bounded cluster boundaries).",
+          "tppApplication": "TPP Topic 33 (Breaking Temporal Coupling): replace synchronous point-to-point microservice chains with asynchronous event topics so sender and receiver don't need to be healthy at the exact same millisecond.",
+          "keyMetricsOrFormulas": [
+            "Partition Parallelism Upper Bound = Number of partitions in consumer group",
+            "Effective Reliability = Durable Append Log (`acks=all`, `min.insync.replicas=2`) + Consumer Idempotency Key"
+          ]
+        },
+        {
+          "heading": "6.2 Eliminating Dual Writes via Transactional Outbox & Log-Based CDC",
+          "corePrinciple": "Writing to PostgreSQL and publishing directly to Kafka in two separate calls ALWAYS creates partial-failure split-brain bugs.",
+          "mechanicsAndConstraints": "Whether you publish to Kafka before SQL `COMMIT` (phantom events if SQL rolls back) or after `COMMIT` (dropped events if pod crashes mid-call), states diverge. The **Transactional Outbox** commits domain changes and an `outbox_events` row atomically inside ONE local ACID transaction. A **Log-Based CDC Relay** (Debezium) tails the PostgreSQL WAL / MySQL binlog sequentially with zero OLTP polling overhead and streams every committed change reliably to Kafka.",
+          "tppApplication": "CQRS + Event Sourcing store the canonical sequence of domain events once and project clean derived materialized views (Elasticsearch, Redis Feed, ClickHouse) orthogonally—rebuilding any view cleanly by replaying the log.",
+          "keyMetricsOrFormulas": [
+            "Outbox Atomic Invariant: `(domain_row AND outbox_row)` share identical PostgreSQL WAL LSN transaction commit",
+            "Debezium CDC Latency: typically 5–25ms tail-read lag with zero read queries hitting OLTP indexes"
+          ]
+        },
+        {
+          "heading": "6.3 Event-Time Watermarks, Actors & Blackboard Coordination",
+          "corePrinciple": "Streaming metrics must separate Event Time (when transaction happened) from Processing Time (when stream engine observed it) while decoupling asynchronous actors.",
+          "mechanicsAndConstraints": "Network drops on mobile devices cause events to arrive minutes out-of-order. Tumbling/sliding window operators maintain **Event-Time Watermarks** tracking progress (`W(t)` = heuristic bound claiming all events `< t` have arrived) plus allowed-lateness side-outputs for late corrections. **Actors** (stateful isolated mailboxes partitioned by `account_id`) and **Blackboards** (shared rule/signal evaluation space) allow fraud classifiers, velocity counters, and ML scorers to react independently without centralized thread locks.",
+          "tppApplication": "TPP Topic 35 (Actors & Processes) & Topic 36 (Blackboards): partition stateful Flink actors strictly by entity key so each account state updates lock-free in memory while asynchronous anomaly detectors post risk signals onto a shared case blackboard.",
+          "keyMetricsOrFormulas": [
+            "Watermark = Max_Observed_Event_Time - Max_Expected_Out_of_Order_Delay",
+            "Sliding Window Memory = Key_Cardinality * (Window_Size / Slide_Step) * Aggregate_State_Bytes"
+          ]
+        }
+      ],
+      "tradeoffsMatrix": [
+        {
+          "option": "Synchronous REST Chaining Across Microservices",
+          "pros": "Simple trace stack; immediate caller response without async UX patterns.",
+          "consBottlenecks": "Extreme temporal coupling: unavailability of 1 downstream service breaks ingress; combined tail latency equals sum of chain p99s.",
+          "idealWorkload": "Strictly 1–2 hop synchronous authorization queries."
+        },
+        {
+          "option": "Transactional Outbox + Log-Based CDC (Debezium -> Kafka)",
+          "pros": "Zero dual-write divergence; zero OLTP polling query tax; preserves exact database commit ordering for derived read views.",
+          "consBottlenecks": "Relay restart replays uncheckpointed WAL LSNs, requiring idempotent sink deduplication by `event_id`.",
+          "idealWorkload": "Mission-critical Order/Ledger state propagation into search, billing, notifications, and CQRS views."
+        },
+        {
+          "option": "Kafka + Stateful Flink Stream Windows (Event-Time + Watermarks)",
+          "pros": "Sub-second sliding window aggregations over millions of events/sec; RocksDB-backed incremental checkpoints handle out-of-order delays.",
+          "consBottlenecks": "High memory/state checkpoint size on multi-day windows; careful handling of late-arriving triggers needed.",
+          "idealWorkload": "1M TPS fraud velocity rules, real-time personalization feeds, and operational anomaly pipelines."
+        },
+        {
+          "option": "CQRS + Event Sourcing (Immutable Log -> Materialized Views)",
+          "pros": "Complete historical audit log; ability to spin up brand-new search/AI read models by replaying past events.",
+          "consBottlenecks": "Eventual consistency lag between write commit and view visibility; schema versioning over multi-year immutable events.",
+          "idealWorkload": "Financial accounting workflows, collaborative timelines, and multi-channel enterprise systems."
+        }
+      ],
+      "caseStudy": {
+        "systemName": "1M TPS Real-Time Fraud Detection & Activity Feed Pipeline",
+        "problemStatement": "Design a real-time fraud scoring and customer activity feed pipeline ingesting 1,000,000 payment/login events per second across 100M accounts, evaluating multi-window velocity fraud rules within 40ms, and projecting real-time feeds reliably.",
+        "functionalRequirements": [
+          "Compute rolling velocity features (e.g., distinct cards/IPs per account in 5m / 1h sliding windows) in real time before authorizing high-risk settlements.",
+          "Project every settled transaction safely from the core Ledger DB to user Activity Feeds and Search indexes without dual-write inconsistencies."
+        ],
+        "nonFunctionalRequirements": [
+          "Sustained throughput: 1,000,000 events/sec (burst 2.5M/s) across partitioned streams.",
+          "Fraud scoring pipeline latency p99 < 40ms; CDC-to-Feed projection lag < 250ms.",
+          "Zero dropped or double-counted transactions even under Flink worker crashes or out-of-order mobile retries."
+        ],
+        "trafficSummary": "1,000,000 events/sec * 600 B = 600 MB/s raw stream -> 51.8 TB/day across 256 Kafka partitions.",
+        "estimates": [
+          {
+            "label": "Kafka Cluster Bandwidth & Partitioning",
+            "calculation": "600 MB/s ingress * RF 3 = 1.8 GB/s internal replication; 256 partitions (~4k msg/s & 2.3 MB/s per partition)",
+            "result": "256 Kafka partitions (~18–24 NVMe brokers)"
+          },
+          {
+            "label": "Flink Actor Window State Footprint",
+            "calculation": "20M daily active accounts in 1h window * 256 B compressed HyperLogLog/sketch state = ~5.1 GB state",
+            "result": "~5.1 GB local RocksDB incremental state"
+          },
+          {
+            "label": "Idempotent Sink Deduplication Cache",
+            "calculation": "1M events/sec * 15 min dedupe TTL * 24 B event_id hash (partitioned RocksDB / Redis)",
+            "result": "~21 GB hot dedupe index across 64 shards"
+          }
+        ],
+        "architectureFlow": "Ledger/Payments DB (+ Outbox Table) -> Debezium WAL CDC -> Kafka (`transactions` partitioned by `account_id`, `acks=all`) -> Flink Stateful Stream Engine (Keyed Actor Sliding Windows + Watermarks + Blackboard Signal Bus) -> [ML Risk Score / Block Action | Idempotent Activity Feed & Search Materialized Views]",
+        "services": [
+          {
+            "name": "Transactional Outbox + Debezium WAL CDC Relay",
+            "responsibility": "Captures atomic state + outbox commits directly from PostgreSQL/MySQL transaction logs, publishing ordered records keyed by `account_id` into Kafka.",
+            "technologyChoice": "PostgreSQL Outbox + Debezium + Kafka (`acks=all`)"
+          },
+          {
+            "name": "Keyed Actor Stream Processor (Apache Flink)",
+            "responsibility": "Assigns isolated per-account stateful actors computing sliding 5m/1h/24h velocity features with HyperLogLog distinct counts, tracking Event-Time watermarks and checkpointing incrementally to S3.",
+            "technologyChoice": "Apache Flink (RocksDB State Backend + Bounded Out-of-Order Watermarks)"
+          },
+          {
+            "name": "Blackboard Fraud Evaluator & Idempotent CQRS Sinks",
+            "responsibility": "Aggregates Flink velocity alerts + ML risk scores + device signals asynchronously on an evaluation blackboard; updates user Activity Feeds & Elasticsearch cleanly with `event_id` deduplication.",
+            "technologyChoice": "Flink CEP / Rules Actor + ClickHouse & ScyllaDB Feed Views"
+          }
+        ],
+        "dataModelAndStorage": "Kafka partition key strictly `account_id` (plus bounded salting `account_id#0..3` ONLY on whitelisted ultra-high-volume enterprise merchant accounts!). Flink checkpoints stored incrementally in S3 every 30s. Activity Feed CQRS sink keyed by `(account_id, reverse_event_time_uuid)` with unique `event_id` upsert guard guaranteeing idempotent replays.",
+        "deepDives": [
+          {
+            "title": "Handling Out-of-Order & Late-Arriving Mobile Transactions Safely",
+            "failureScenario": "Subway offline mobile clients submit transactions recorded 90 seconds earlier; naive processing-time windows miss velocity spikes spanning both delayed and live events.",
+            "mitigationMechanics": "Score sliding windows against `event_timestamp` using Bounded-Out-of-Orderness Watermarks (`allowedLateness = 120s`, emitting incremental late triggers + routing >120s anomalies to a side-output batch reconciliation job). Never rely on ingestion wall clock.",
+            "etcTradeoff": "Keeping window state active for `allowedLateness` adds modest state RAM overhead while preventing silent blind spots during mobile network drops."
+          },
+          {
+            "title": "Preventing Consumer Reprocessing Double Counts After Worker Crashes",
+            "failureScenario": "A Flink/Activity sink crashes cleanly after writing 500 feed items to ScyllaDB/Postgres but 20ms before committing its Kafka offset—triggering full replay of those 500 events on restart.",
+            "mitigationMechanics": "Combine at-least-once Kafka/Debezium delivery with deterministic sink idempotency (`INSERT INTO account_feed ... ON CONFLICT (event_id) DO NOTHING`, or Flink Two-Phase-Commit Kafka transactional sinks for downstream Kafka topics).",
+            "etcTradeoff": "Avoids brittle global XA coordination across DB + Kafka while ensuring exactly-once visible state (CQRS derived view consistency)."
+          }
+        ]
+      },
+      "candidateRubric": {
+        "juniorMid": {
+          "summary": "Builds fragile synchronous RPC chains and periodic database polling cron jobs that collapse at 1M TPS.",
+          "signals": [
+            "Calls fraud engine, feed update, and search index synchronously inline during checkout HTTP calls.",
+            "Runs `SELECT * FROM transactions WHERE updated_at > last_run` cron queries on production OLTP databases.",
+            "Assumes network messages arrive once in strict order without duplicates or delays."
+          ]
+        },
+        "senior": {
+          "summary": "Adopts Kafka partitioned logs, Debezium CDC, sliding stream windows, and consumer idempotency.",
+          "signals": [
+            "Partitions Kafka streams by `account_id`, selects `acks=all` + ISR durability, and synchronizes CQRS read views via CDC.",
+            "Distinguishes stream brokers from simple task queues and handles duplicate deliveries using consumer deduplication.",
+            "Designs tumbling/sliding Flink aggregations rather than scanning SQL tables for fraud velocity checks."
+          ]
+        },
+        "staffPrincipal": {
+          "summary": "Architects decoupled Outbox + CDC + Actor/Blackboard stream pipelines with rigorous Event-Time Watermarks.",
+          "signals": [
+            "Eliminates dual-write race conditions structurally with Transactional Outbox + WAL CDC (`LSN`-ordered) and reconciles exactly-once effects via idempotent sinks.",
+            "Applies TPP Breaking Temporal Coupling, Actors & Blackboards so fraud rules, ML classifiers, and derived views evolve orthogonally.",
+            "Specifies Event-Time vs Processing-Time watermarks, allowed-lateness side outputs, checkpoint alignment, and key salting strategies for mega-merchant skew."
+          ]
+        }
+      }
+    }
+  ]
+}

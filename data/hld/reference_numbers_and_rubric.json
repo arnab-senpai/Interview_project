@@ -1,0 +1,166 @@
+{
+  "version": "1.0.0",
+  "interviewDeliveryFramework": [
+    {
+      "step": 1,
+      "phase": "Clarify Functional & Non-Functional Requirements",
+      "targetMinutes": "0–5 min",
+      "checklist": [
+        "Confirm core user flows and explicitly scope out secondary features.",
+        "Pin down Non-Functional Requirements: scale (DAU/QPS), p99 latency budget, availability target (e.g., 99.9% vs 99.999%), consistency model (strong vs eventual), and data retention."
+      ],
+      "antiPattern": "Jumping straight into drawing boxes without knowing whether the system is read-heavy, write-heavy, or consistency-critical."
+    },
+    {
+      "step": 2,
+      "phase": "Back-of-the-Envelope Estimations",
+      "targetMinutes": "5–10 min",
+      "checklist": [
+        "Convert DAU × actions/day ÷ 10^5 seconds/day into Average QPS.",
+        "Apply 2x–5x multiplier for Peak QPS.",
+        "Estimate read/write QPS split, ingress/egress bandwidth, and 5-year storage footprint."
+      ],
+      "antiPattern": "Calculating arbitrary 6-digit numbers with fake precision instead of driving design decisions from orders of magnitude."
+    },
+    {
+      "step": 3,
+      "phase": "Core Entities & API Contracts",
+      "targetMinutes": "10–15 min",
+      "checklist": [
+        "Name primary entities and access patterns before picking a database engine.",
+        "Define clean REST, gRPC, WebSocket, or SSE endpoints including pagination cursors and idempotency keys."
+      ],
+      "antiPattern": "Designing normalized SQL tables before verifying query patterns or sharding keys."
+    },
+    {
+      "step": 4,
+      "phase": "High-Level Design (Read & Write Data Flows)",
+      "targetMinutes": "15–27 min",
+      "checklist": [
+        "Trace the end-to-end write path and read path across Client, Edge/CDN, LB/Gateway, Services, Cache, and Storage.",
+        "Explain how every arrow carries synchronous vs asynchronous calls."
+      ],
+      "antiPattern": "Drawing disconnected components without walking through request/response lifecycles."
+    },
+    {
+      "step": 5,
+      "phase": "Deep Dives & Bottleneck Resolution",
+      "targetMinutes": "27–40 min",
+      "checklist": [
+        "Stress-test the design at 10x–100x load: find single points of failure, hot partitions, cache stampedes, and connection limits.",
+        "Justify concrete trade-offs (e.g., fan-out on write vs read, Raft vs eventual quorum, Kafka vs SQS)."
+      ],
+      "antiPattern": "Naming buzzwords ('just add Kafka/Redis') without explaining partitioning, failure recovery, or backpressure."
+    },
+    {
+      "step": 6,
+      "phase": "Operational Maturity & Wrap-Up",
+      "targetMinutes": "40–45 min",
+      "checklist": [
+        "Cover observability (RED metrics, distributed tracing, p99 alerts), graceful degradation, multi-region failover, and cost levers."
+      ],
+      "antiPattern": "Leaving out monitoring, rollback, or cost implications at Senior/Staff levels."
+    }
+  ],
+  "levelRubrics": [
+    {
+      "level": "L3-L4",
+      "roleTitle": "Mid-Level Engineer (SDE-1 / SDE-2)",
+      "bar": [
+        "Drives a coherent end-to-end architecture covering functional requirements.",
+        "Applies basic caching, load balancing, and SQL vs NoSQL distinctions accurately.",
+        "Completes basic QPS and storage math cleanly."
+      ]
+    },
+    {
+      "level": "L5-L6",
+      "roleTitle": "Senior Engineer",
+      "bar": [
+        "Proactively identifies NFRs and leads the conversation without interviewer prompting.",
+        "Diagnoses scaling bottlenecks (hot keys, stampedes, replication lag, async decoupling).",
+        "Explicitly compares architectural alternatives with concrete trade-offs."
+      ]
+    },
+    {
+      "level": "L6-L7",
+      "roleTitle": "Staff / Principal Engineer",
+      "bar": [
+        "Demonstrates deep storage/consensus intuition (LSM vs B-Tree, Raft/fencing, multi-region consistency).",
+        "Designs for operational realism: graceful degradation, blast radius containment, cost-to-serve (including GPU/VRAM & token economics for AI), and incremental migration."
+      ]
+    }
+  ],
+  "latencyBenchmarks": [
+    { "id": "l1-cache", "operation": "L1 Cache Reference", "latency": "~0.5 ns", "latencyMs": 0.0000005, "tier": "CPU" },
+    { "id": "l2-cache", "operation": "Branch Mispredict / L2 Cache Reference", "latency": "5 ns – 7 ns", "latencyMs": 0.000006, "tier": "CPU" },
+    { "id": "mutex-lock", "operation": "Mutex Lock / Unlock", "latency": "~100 ns", "latencyMs": 0.0001, "tier": "Memory" },
+    { "id": "ram-read", "operation": "Main Memory (RAM) Reference", "latency": "~100 ns", "latencyMs": 0.0001, "tier": "Memory" },
+    { "id": "nvme-read", "operation": "NVMe / SSD Random Read", "latency": "~100 µs", "latencyMs": 0.1, "tier": "Storage" },
+    { "id": "seq-1mb", "operation": "Compressed Packet / Read 1 MB Sequentially", "latency": "10 µs – 250 µs", "latencyMs": 0.25, "tier": "Storage" },
+    { "id": "same-dc-rtt", "operation": "Same-Datacenter Network Round Trip", "latency": "~500 µs (0.5 ms)", "latencyMs": 0.5, "tier": "Network" },
+    { "id": "hdd-seek", "operation": "Disk Seek (HDD)", "latency": "~10 ms", "latencyMs": 10.0, "tier": "Storage" },
+    { "id": "cross-region-rtt", "operation": "Cross-Region DC Round Trip (US-East ↔ US-West)", "latency": "50 ms – 70 ms", "latencyMs": 60.0, "tier": "Network" },
+    { "id": "global-rtt", "operation": "Cross-Continent / Global Round Trip (US ↔ Europe)", "latency": "100 ms – 250 ms", "latencyMs": 150.0, "tier": "Network" }
+  ],
+  "availabilityNines": [
+    { "nines": "99%", "availability": "Two Nines", "downtimePerYear": "3.65 days", "downtimePerMonth": "7.31 hours", "typicalUse": "Internal batch / dev tools" },
+    { "nines": "99.9%", "availability": "Three Nines", "downtimePerYear": "8.77 hours", "downtimePerMonth": "43.8 minutes", "typicalUse": "Standard SaaS web applications" },
+    { "nines": "99.95%", "availability": "Three and a Half Nines", "downtimePerYear": "4.38 hours", "downtimePerMonth": "21.9 minutes", "typicalUse": "High-traffic consumer services" },
+    { "nines": "99.99%", "availability": "Four Nines", "downtimePerYear": "52.6 minutes", "downtimePerMonth": "4.38 minutes", "typicalUse": "E-commerce, messaging, ride-sharing" },
+    { "nines": "99.999%", "availability": "Five Nines", "downtimePerYear": "5.26 minutes", "downtimePerMonth": "26.3 seconds", "typicalUse": "Payments, telecom, cloud control planes" }
+  ],
+  "estimationFormulas": [
+    {
+      "id": "avg-qps",
+      "name": "Average QPS",
+      "formula": "(DAU × Actions_Per_User_Per_Day) / 100,000",
+      "notes": "Uses 10^5 seconds/day (86,400 rounded) for rapid mental math."
+    },
+    {
+      "id": "peak-qps",
+      "name": "Peak QPS",
+      "formula": "Average_QPS × Peak_Multiplier (2x to 5x)",
+      "notes": "Use 2x–3x for smooth global traffic; 5x+ for regional commute spikes or flash sales."
+    },
+    {
+      "id": "bandwidth",
+      "name": "Network Bandwidth (Bytes/sec)",
+      "formula": "Peak_QPS × Average_Payload_Bytes",
+      "notes": "Multiply Bytes/sec by 8 to compare against NIC/link capacity in Mbps or Gbps."
+    },
+    {
+      "id": "total-storage",
+      "name": "Multi-Year Storage Footprint",
+      "formula": "Write_QPS × 86,400 × 365 × Retention_Years × Record_Bytes × Replication_Factor",
+      "notes": "Account for replication factor (typically 3x) and index overhead (1.2x–1.5x)."
+    },
+    {
+      "id": "cache-memory",
+      "name": "80/20 Hot Cache RAM Sizing",
+      "formula": "Daily_Active_Working_Set_Reads × 0.20 × Record_Bytes",
+      "notes": "Cache top 20% hot items responsible for ~80% of read volume."
+    }
+  ],
+  "genaiSizingMetrics": [
+    {
+      "metric": "TTFT (Time To First Token)",
+      "target": "< 300–500 ms for interactive chat",
+      "levers": "Semantic cache, prompt prefix caching, smaller router/SLM, lower prefill queue depth."
+    },
+    {
+      "metric": "TPS / ITL (Tokens Per Second / Inter-Token Latency)",
+      "target": "> 30–60 tokens/sec per stream (< 30 ms ITL)",
+      "levers": "Continuous batching, speculative decoding, tensor parallelism, FP8/INT8 quantization."
+    },
+    {
+      "metric": "KV-Cache VRAM Budget",
+      "target": "Must fit concurrent sequence contexts inside HBM without OOM preemption",
+      "levers": "PagedAttention block sharing, GQA/MQA attention, sliding-window or context compaction."
+    },
+    {
+      "metric": "TPM / RPM Quotas (Tokens Per Minute)",
+      "target": "Dual-bucket rate limiting (Request Count + Token Budget)",
+      "levers": "Estimated prompt tokens reserved upfront, reconciled with actual completion tokens on stream close."
+    }
+  ]
+}

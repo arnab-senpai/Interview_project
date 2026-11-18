@@ -1,0 +1,201 @@
+{
+  "id": "distributed-transactions-saga",
+  "track": "hld",
+  "category": "patterns",
+  "layer": 6,
+  "title": "Distributed Transactions: 2PC vs Saga Pattern",
+  "subtitle": "Orchestration vs choreography with compensating actions",
+  "difficulty": "L5-L6",
+  "estimatedMinutes": 18,
+  "overview": "Once an Order, Payment, and Inventory live in separate microservice databases, a single SQL transaction cannot span all three. Two-Phase Commit (2PC) enforces atomic locking across participants—yet stalls every lock if the coordinator crashes. Sagas replace distributed locks with sequential local transactions paired with compensating rollback actions.",
+  "firstPrinciplesStory": "You use classic Two-Phase Commit (XA/2PC) across Payment DB and Inventory DB. On Phase 1, both databases lock the customer's wallet row and flight seat row and reply 'Prepared YES'. Right before Phase 2 'Commit', the Coordinator node panics and dies! Now Payment DB and Inventory DB sit indefinitely holding row locks—unable to commit or abort without risking split outcome—freezing every subsequent customer booking the same flight! That blocking hazard (DDIA Ch. 9) is why web-scale microservices choose Sagas.",
+  "adaptiveLenses": {
+    "intuition": "2PC is a synchronized wedding vow where everyone freezes holding hands waiting for the officiant to yell 'DONE'—if the officiant faints right before yelling, nobody can move. A **Saga** is booking a trip in steps: 1) Reserve Flight, 2) Reserve Hotel, 3) Charge Card. If step 3 declines, you run explicit undo steps: Cancel Hotel, Cancel Flight!",
+    "mechanics": "In **Orchestrated Saga**, a durable state machine (Temporal / Step Functions / Saga Orchestrator) invokes Step 1→2→3 via commands/replies and invokes semantic **Compensating Transactions** (`RefundPayment`, `ReleaseSeat`) in reverse order on failure. Every forward & compensating action MUST be idempotent and retriable.",
+    "staffTradeoffs": "Beware the **Isolation Gap** in Sagas: because each step commits locally before the whole Saga ends, concurrent users can observe intermediate states (Dirty Reads across steps!). Mitigate via semantic pending states (`status = PENDING_PAYMENT`), reserving inventory via short TTL holds, and applying the **Pivot Transaction** rule (no rollback after the irreversible external bank settlement; retry forward instead!)."
+  },
+  "ddiaAnchors": [
+    {
+      "chapter": "DDIA Ch. 9 · Atomic Commit & Two-Phase Commit",
+      "concept": "2PC Coordinator Failure Blocking vs Saga Compensation",
+      "whyItMatters": "Shows why cross-service 2PC locks cripple availability under partial failures and how Sagas maintain progress."
+    }
+  ],
+  "pragmaticTips": [
+    {
+      "principle": "Prefer Orchestration for Complex Multi-Step Flows",
+      "tip": "Pure event choreography across 5+ services turns into spaghetti where nobody knows the global workflow state.",
+      "application": "Use a lightweight durable Orchestrator for multi-step checkouts (`Reserve -> Charge -> Confirm`) with explicit retry & compensation state."
+    }
+  ],
+  "keyTakeaways": [
+    "2PC blocks participant locks indefinitely if the coordinator fails in-doubt after Phase 1 Prepare.",
+    "Sagas chain local ACID steps + reverse idempotent compensating actions—never holding cross-service locks.",
+    "Always mark intermediate records `PENDING` and design compensating actions to be commutative & idempotent."
+  ],
+  "nodes": [
+    {
+      "id": "orchestrator",
+      "label": "Saga Orchestrator",
+      "sublabel": "Durable State Machine",
+      "kind": "compute",
+      "layer": 6,
+      "gridPos": { "gx": 1, "gy": 5 },
+      "specs": { "protocol": "gRPC / Queue", "port": "8080", "maxQpsPerNode": 15000, "baseLatencyMs": 2.0, "capProfile": "CP", "scalingAxis": "Partition by saga_id" },
+      "summary": "Persists step transitions and drives forward commands or reverse compensations.",
+      "whenToUse": ["Multi-service checkout, travel booking, onboarding"],
+      "failureModes": ["Non-idempotent compensation retries double-refund or double-release"]
+    },
+    {
+      "id": "inventory-svc",
+      "label": "Inventory Service",
+      "sublabel": "ReserveSeat / ReleaseSeat",
+      "kind": "db_sql",
+      "layer": 4,
+      "gridPos": { "gx": 6, "gy": 2 },
+      "specs": { "protocol": "gRPC / SQL", "port": "5432", "maxQpsPerNode": 12000, "baseLatencyMs": 4.0, "capProfile": "CP", "scalingAxis": "Shard by event_id" },
+      "summary": "Performs local ACID seat hold (`PENDING`) and idempotent compensating release.",
+      "whenToUse": ["Stock/seat reservation step"],
+      "failureModes": ["Exposing unconfirmed PENDING state as finalized to external readers"]
+    },
+    {
+      "id": "payment-svc",
+      "label": "Payment Service",
+      "sublabel": "Authorize / Refund",
+      "kind": "db_sql",
+      "layer": 4,
+      "gridPos": { "gx": 6, "gy": 8 },
+      "specs": { "protocol": "gRPC / PSP", "port": "5432", "maxQpsPerNode": 10000, "baseLatencyMs": 25.0, "capProfile": "CP", "scalingAxis": "Idempotent ledger" },
+      "summary": "Pivot step charging customer card; returns Declined or Success.",
+      "whenToUse": ["Payment authorization step"],
+      "failureModes": ["Bank timeout requires querying charge status rather than blind abort"]
+    },
+    {
+      "id": "shipping-svc",
+      "label": "Fulfillment Service",
+      "sublabel": "ConfirmTicket / Dispatch",
+      "kind": "compute",
+      "layer": 3,
+      "gridPos": { "gx": 10, "gy": 5 },
+      "specs": { "protocol": "gRPC", "port": "8082", "maxQpsPerNode": 15000, "baseLatencyMs": 5.0, "capProfile": "AP", "scalingAxis": "Horizontal workers" },
+      "summary": "Completes post-pivot confirmation and sends ticket/shipping label.",
+      "whenToUse": ["Post-payment retriable steps"],
+      "failureModes": ["Must retry forward until success once Payment commits (past Pivot)"]
+    }
+  ],
+  "edges": [
+    { "id": "e-o-inv", "from": "orchestrator", "to": "inventory-svc", "protocol": "gRPC", "transport": "sync", "label": "T1: Reserve / C1: Release" },
+    { "id": "e-o-pay", "from": "orchestrator", "to": "payment-svc", "protocol": "gRPC", "transport": "sync", "label": "T2: Charge Card" },
+    { "id": "e-o-ship", "from": "orchestrator", "to": "shipping-svc", "protocol": "gRPC", "transport": "async", "label": "T3: Issue Ticket" }
+  ],
+  "steps": [
+    {
+      "stepNo": 1,
+      "phaseTitle": "1. T1: RESERVE INVENTORY (PENDING)",
+      "timestampMs": 0.0,
+      "sourceNodeId": "orchestrator",
+      "targetNodeId": "inventory-svc",
+      "edgeId": "e-o-inv",
+      "category": "write",
+      "protocol": "gRPC",
+      "info": "ReserveSeat(saga_id=s_91, seat=A12) -> Local ACID commit (status=HELD)",
+      "payloadSize": "210 B",
+      "payloadInspector": "SagaLog: STEP_1_RESERVE_OK | Seat A12 locked locally with 5m semantic hold",
+      "latencyDeltaMs": 4.0,
+      "inspectorNote": "Local SQL lock is released immediately after marking `status=HELD`—no blocking across services."
+    },
+    {
+      "stepNo": 2,
+      "phaseTitle": "2. T2: CHARGE PAYMENT (PIVOT)",
+      "timestampMs": 4.0,
+      "sourceNodeId": "orchestrator",
+      "targetNodeId": "payment-svc",
+      "edgeId": "e-o-pay",
+      "category": "write",
+      "protocol": "gRPC",
+      "info": "ChargeCard(idempotencyKey=s_91_pay, $120) -> AUTHORIZED",
+      "payloadSize": "340 B",
+      "payloadInspector": "SagaLog: STEP_2_PAYMENT_OK (Pivot passed -> Saga will now retry forward to completion)",
+      "latencyDeltaMs": 25.0,
+      "inspectorNote": "Once the Pivot Transaction (Payment) succeeds, the Saga never rolls backward unless explicitly refunded.",
+      "predictPrompt": {
+        "prompt": "If Fulfillment Service (Step 3) temporarily crashes right after Payment succeeds in Step 2, should the Saga compensate by refunding the customer immediately or retry Step 3 forward?",
+        "hint": "Payment is the 'Pivot Transaction'—meaning the user wants the ticket and paid cleanly.",
+        "reveal": "Retry Step 3 forward with exponential backoff (and idempotent ticket issuance)! Past the Pivot step, retrying forward avoids surprising the customer with an unexplained refund on a valid order."
+      }
+    },
+    {
+      "stepNo": 3,
+      "phaseTitle": "3. T3: ISSUE TICKET & COMPLETE",
+      "timestampMs": 29.0,
+      "sourceNodeId": "orchestrator",
+      "targetNodeId": "shipping-svc",
+      "edgeId": "e-o-ship",
+      "category": "async",
+      "protocol": "gRPC",
+      "info": "ConfirmTicket(saga_id=s_91) -> Ticket issued; Saga marked COMPLETED",
+      "payloadSize": "290 B",
+      "payloadInspector": "SagaLog: COMPLETED | Total duration: 34ms without any cross-DB 2PC lock",
+      "latencyDeltaMs": 5.0,
+      "inspectorNote": "All local ACID stores stay fast and independent."
+    }
+  ],
+  "chaosScenarios": [
+    {
+      "id": "payment-declined-compensate",
+      "title": "Payment Declined -> Idempotent Reverse Compensation (ReleaseSeat)",
+      "faultType": "node_down",
+      "targetNodeId": "payment-svc",
+      "triggerSummary": "Step 1 reserved Seat A12, then Step 2 returns Card Declined (insufficient funds).",
+      "mitigationSummary": "Orchestrator transitions to `COMPENSATING` and invokes `ReleaseSeat(saga_id=s_91)` with retries until Seat A12 returns to `AVAILABLE`.",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. T2 DECLINED -> ENTER COMPENSATING",
+          "timestampMs": 0.0,
+          "sourceNodeId": "orchestrator",
+          "targetNodeId": "payment-svc",
+          "edgeId": "e-o-pay",
+          "category": "failover",
+          "protocol": "gRPC",
+          "info": "ChargeCard returned 402 Card Declined -> Saga transitions to COMPENSATING",
+          "payloadSize": "180 B",
+          "payloadInspector": "SagaLog: STEP_2_FAILED -> Executing reverse compensation [C1: ReleaseSeat]",
+          "latencyDeltaMs": 18.0,
+          "inspectorNote": "Instead of leaving Seat A12 orphaned in HELD state, Saga invokes C1 explicitly."
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "2. C1: COMPENSATE RELEASE SEAT",
+          "timestampMs": 18.0,
+          "sourceNodeId": "orchestrator",
+          "targetNodeId": "inventory-svc",
+          "edgeId": "e-o-inv",
+          "category": "write",
+          "protocol": "gRPC",
+          "info": "ReleaseSeat(saga_id=s_91) idempotently restores Seat A12 -> Saga ABORTED cleanly",
+          "payloadSize": "190 B",
+          "payloadInspector": "UPDATE seats SET status='AVAILABLE' WHERE hold_saga_id='s_91' -> Safe under retries!",
+          "latencyDeltaMs": 4.0,
+          "inspectorNote": "Keying the release by `hold_saga_id` ensures duplicate compensation retries never release someone else's hold."
+        }
+      ]
+    }
+  ],
+  "tradeoffs": [
+    {
+      "option": "Saga Pattern (Orchestration)",
+      "pros": ["Zero cross-service distributed locks (high availability)", "Centralized visibility of multi-step state & retries"],
+      "cons": ["Eventual consistency (no isolation across uncommitted intermediate steps)", "Must write explicit compensating actions"],
+      "bestFor": "Microservice orders, travel bookings, multi-step financial workflows"
+    },
+    {
+      "option": "Two-Phase Commit (2PC / XA)",
+      "pros": ["True cross-participant atomic isolation"],
+      "cons": ["Coordinator crash leaves locks stalled indefinitely", "Poor latency & fragile across heterogeneous cloud APIs"],
+      "bestFor": "Tightly coupled single-vendor distributed SQL shards (e.g. Spanner Paxos-backed 2PC)"
+    }
+  ],
+  "quizQuestionIds": ["q-saga-1", "q-saga-2"],
+  "flashcardIds": ["fc-saga-1", "fc-saga-2"]
+}

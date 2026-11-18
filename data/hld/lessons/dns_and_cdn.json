@@ -1,0 +1,272 @@
+{
+  "id": "dns-and-cdn",
+  "track": "hld",
+  "category": "foundations",
+  "layer": 1,
+  "title": "DNS, GeoDNS & Pull/Push CDN",
+  "subtitle": "Anycast routing, recursive resolution, edge caching & origin shield",
+  "difficulty": "L3-L4",
+  "estimatedMinutes": 15,
+  "overview": "Before a single API microservice runs, DNS steers the client to the closest healthy datacenter and a Content Delivery Network (CDN) absorbs static and cacheable dynamic reads at global edge PoPs—cutting global round-trip latency from ~150ms down to ~15ms.",
+  "firstPrinciplesStory": "Imagine you launch an app from a single US-East server. Users in Virginia love the 25ms feel, while users in Mumbai experience sluggish 240ms TCP handshakes and timeouts on every image. Worse, when your post goes viral, 100,000 browsers hammer your single origin for the exact same 2 MB bundle. Physics (speed of light in fiber) forbids shrinking cross-continent RTT—so you move bytes closer to users via GeoDNS + Pull CDN Edge PoPs, and shield your origin from cold-miss floods.",
+  "adaptiveLenses": {
+    "intuition": "DNS is the global phonebook that hands you the phone number of the branch office nearest your neighborhood; a CDN is a local convenience store stocking popular items down the street so you don't fly to the central factory for every bottle of water.",
+    "mechanics": "Recursive resolvers respect authoritative TTLs and pass anonymized EDNS client subnets so GeoDNS chooses the nearest healthy VIP. At the Edge PoP, TLS 1.3 terminates locally and cache hits serve from RAM/NVMe; cache misses collapse through a regional Origin Shield via HTTP/2 before touching Origin S3.",
+    "staffTradeoffs": "DNS TTL trades failover speed against resolver query volume (low 30–60s TTL enables fast regional failover; BGP Anycast heals PoP failures even faster without waiting for DNS caches). Cache keys must strip unused query params/cookies or hit ratios collapse silently."
+  },
+  "ddiaAnchors": [
+    {
+      "chapter": "DDIA Ch. 1 · Latency Percentiles & Scalability",
+      "concept": "Speed-of-Light RTT vs Edge Proximity",
+      "whyItMatters": "Cross-continent network RTT (100–250ms) dominates p99 unless TLS termination and read caches move to the edge."
+    }
+  ],
+  "pragmaticTips": [
+    {
+      "principle": "Reversibility (Keep TTLs Honest)",
+      "tip": "Hardcoding long 24-hour DNS TTLs turns a simple IP migration or regional failover into a multi-hour outage.",
+      "application": "Lower DNS TTLs days before a planned migration, or keep failover records at 30–60s."
+    }
+  ],
+  "keyTakeaways": [
+    "GeoDNS + BGP Anycast route users to the closest Edge PoP while respecting TTL caching limits.",
+    "Pull CDNs cache lazily on first miss using Cache-Control headers; Push CDNs pre-warm rarely changing large blobs.",
+    "An Origin Shield collapses regional cache misses so an edge miss storm does not stampede the origin S3/Web tier."
+  ],
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Client Browser",
+      "sublabel": "Mumbai · 49.36.12.8",
+      "kind": "client",
+      "layer": 1,
+      "gridPos": { "gx": 1, "gy": 6 },
+      "specs": { "protocol": "HTTPS / DNS", "port": "443", "maxQpsPerNode": 50, "baseLatencyMs": 1.0, "capProfile": "N/A", "scalingAxis": "Global users" },
+      "summary": "User device initiating DNS lookup and HTTPS media/API request.",
+      "whenToUse": ["All web and mobile edge interactions"],
+      "failureModes": ["Stale local OS DNS cache", "Lossy mobile last-mile"]
+    },
+    {
+      "id": "resolver",
+      "label": "Recursive DNS",
+      "sublabel": "ISP / 1.1.1.1",
+      "kind": "dns",
+      "layer": 1,
+      "gridPos": { "gx": 1, "gy": 2 },
+      "specs": { "protocol": "UDP/53 · DoH", "port": "53", "maxQpsPerNode": 250000, "baseLatencyMs": 8.0, "capProfile": "AP", "scalingAxis": "Anycast PoPs" },
+      "summary": "Caches DNS records up to TTL and walks Root → TLD → Authoritative GeoDNS on miss.",
+      "whenToUse": ["Client-side name-to-IP resolution"],
+      "failureModes": ["High TTL delays DNS failover when an IP dies"]
+    },
+    {
+      "id": "geodns",
+      "label": "Authoritative GeoDNS",
+      "sublabel": "Route53 / NS1",
+      "kind": "dns",
+      "layer": 1,
+      "gridPos": { "gx": 4, "gy": 1 },
+      "specs": { "protocol": "DNS + Health Check", "port": "53", "maxQpsPerNode": 500000, "baseLatencyMs": 12.0, "capProfile": "AP", "scalingAxis": "Global anycast" },
+      "summary": "Maps user IP/EDNS subnet to the lowest-latency healthy Edge CDN or regional VIP.",
+      "whenToUse": ["Multi-region active-active traffic steering", "Automated regional failover"],
+      "failureModes": ["EDNS Client Subnet disabled causes suboptimal region mapping"]
+    },
+    {
+      "id": "cdn-edge",
+      "label": "CDN Edge PoP",
+      "sublabel": "Anycast · BOM PoP",
+      "kind": "cdn",
+      "layer": 1,
+      "gridPos": { "gx": 5, "gy": 5 },
+      "specs": { "protocol": "HTTP/3 · TLS 1.3", "port": "443", "maxQpsPerNode": 150000, "baseLatencyMs": 10.0, "capProfile": "AP", "scalingAxis": "Edge PoP count" },
+      "summary": "Terminates TLS near the user and serves cached assets from NVMe/RAM in ~10–15ms.",
+      "whenToUse": ["Images, JS bundles, HLS video segments, cacheable public APIs"],
+      "failureModes": ["Low cache hit ratio if query strings/cookies bust cache keys"]
+    },
+    {
+      "id": "origin-shield",
+      "label": "Origin Shield",
+      "sublabel": "Regional L2 Cache",
+      "kind": "cache",
+      "layer": 1,
+      "gridPos": { "gx": 8, "gy": 4 },
+      "specs": { "protocol": "HTTPS Persistent", "port": "443", "maxQpsPerNode": 80000, "baseLatencyMs": 18.0, "capProfile": "AP", "scalingAxis": "Shield tiers" },
+      "summary": "Consolidates misses from dozens of edge PoPs so origin sees at most 1 request per cold object.",
+      "whenToUse": ["Global CDNs fronting expensive dynamic origins or S3"],
+      "failureModes": ["Single-region shield adds +1 hop latency if misconfigured"]
+    },
+    {
+      "id": "origin-s3",
+      "label": "Origin / S3 Bucket",
+      "sublabel": "us-east-1 · Origin",
+      "kind": "object_store",
+      "layer": 4,
+      "gridPos": { "gx": 10, "gy": 2 },
+      "specs": { "protocol": "HTTPS / S3 API", "port": "443", "maxQpsPerNode": 20000, "baseLatencyMs": 65.0, "capProfile": "CP", "scalingAxis": "Prefix partitioning" },
+      "summary": "Authoritative object/media store holding canonical assets and Cache-Control directives.",
+      "whenToUse": ["Durable media, binaries, static assets"],
+      "failureModes": ["Egress cost spikes if CDN hit ratio drops below 90%"]
+    }
+  ],
+  "edges": [
+    { "id": "e-client-resolver", "from": "client", "to": "resolver", "protocol": "DNS", "transport": "sync", "label": "Query cdn.app.io" },
+    { "id": "e-resolver-geodns", "from": "resolver", "to": "geodns", "protocol": "DNS", "transport": "sync", "label": "EDNS Geo lookup" },
+    { "id": "e-client-cdn", "from": "client", "to": "cdn-edge", "protocol": "HTTP/3", "transport": "sync", "label": "TLS + GET asset" },
+    { "id": "e-cdn-shield", "from": "cdn-edge", "to": "origin-shield", "protocol": "HTTP/2", "transport": "sync", "label": "Edge Cache Miss" },
+    { "id": "e-shield-origin", "from": "origin-shield", "to": "origin-s3", "protocol": "HTTPS", "transport": "sync", "label": "Collapsed Origin Fetch" }
+  ],
+  "steps": [
+    {
+      "stepNo": 1,
+      "phaseTitle": "1. CLIENT DNS QUERY",
+      "timestampMs": 0.0,
+      "sourceNodeId": "client",
+      "targetNodeId": "resolver",
+      "edgeId": "e-client-resolver",
+      "category": "network",
+      "protocol": "DNS",
+      "info": "Standard query A cdn.systemcraft.dev (cache cold)",
+      "payloadSize": "72 B",
+      "payloadInspector": "DNS Query: cdn.systemcraft.dev | Type: A | EDNS0 Subnet: 49.36.0.0/16",
+      "latencyDeltaMs": 8.0,
+      "inspectorNote": "Browser checks OS and local resolver cache. On miss, recursive resolver forwards with anonymized EDNS client subnet."
+    },
+    {
+      "stepNo": 2,
+      "phaseTitle": "2. GEODNS STEERING",
+      "timestampMs": 8.0,
+      "sourceNodeId": "resolver",
+      "targetNodeId": "geodns",
+      "edgeId": "e-resolver-geodns",
+      "category": "network",
+      "protocol": "DNS",
+      "info": "GeoDNS returns nearest PoP VIP (TTL=60s)",
+      "payloadSize": "116 B",
+      "payloadInspector": "ANSWER: cdn.systemcraft.dev -> 198.51.100.24 (BOM PoP) | TTL: 60s",
+      "latencyDeltaMs": 12.0,
+      "inspectorNote": "Authoritative GeoDNS evaluates user geography and real-time health probes, keeping TTL low (60s) for rapid failover."
+    },
+    {
+      "stepNo": 3,
+      "phaseTitle": "3. EDGE POP MISS",
+      "timestampMs": 20.0,
+      "sourceNodeId": "client",
+      "targetNodeId": "cdn-edge",
+      "edgeId": "e-client-cdn",
+      "category": "cache_miss",
+      "protocol": "HTTP/3",
+      "info": "GET /video/seg_042.m4s -> X-Cache: MISS",
+      "payloadSize": "412 B",
+      "payloadInspector": "GET /video/seg_042.m4s HTTP/3\nHost: cdn.systemcraft.dev\nX-Cache: MISS from bom-edge-04",
+      "latencyDeltaMs": 10.0,
+      "inspectorNote": "TLS 1.3 terminates locally in ~10ms (0-RTT on repeat visits). Object is not yet in Mumbai edge NVMe cache."
+    },
+    {
+      "stepNo": 4,
+      "phaseTitle": "4. ORIGIN SHIELD COLLAPSE",
+      "timestampMs": 30.0,
+      "sourceNodeId": "cdn-edge",
+      "targetNodeId": "origin-shield",
+      "edgeId": "e-cdn-shield",
+      "category": "read",
+      "protocol": "HTTP/2",
+      "info": "Request collapsing checks regional shield cache",
+      "payloadSize": "460 B",
+      "payloadInspector": "X-Forwarded-For: 49.36.12.8 | Request-Coalesce: active (12 waiters)",
+      "latencyDeltaMs": 18.0,
+      "inspectorNote": "Origin Shield deduplicates concurrent misses from multiple edge nodes so only one request crosses to the origin.",
+      "predictPrompt": {
+        "prompt": "If 60 global CDN PoPs simultaneously cache-miss on a newly released 5 MB video segment without an Origin Shield, what hits your origin?",
+        "hint": "Each edge PoP acts independently when it misses local cache.",
+        "reveal": "All 60 PoPs immediately send 60 concurrent 5 MB fetches straight to origin—an Origin Shield collapses those 60 misses into 1 origin request."
+      }
+    },
+    {
+      "stepNo": 5,
+      "phaseTitle": "5. ORIGIN FETCH & CACHE FILL",
+      "timestampMs": 48.0,
+      "sourceNodeId": "origin-shield",
+      "targetNodeId": "origin-s3",
+      "edgeId": "e-shield-origin",
+      "category": "read",
+      "protocol": "HTTPS",
+      "info": "200 OK (1.8 MB) · Cache-Control: public, max-age=31536000, immutable",
+      "payloadSize": "1.8 MB",
+      "payloadInspector": "HTTP/1.1 200 OK\nCache-Control: public, max-age=31536000, immutable\nETag: \"9f82c1a0\"\nContent-Length: 1887436",
+      "latencyDeltaMs": 65.0,
+      "inspectorNote": "Immutable content-hashed filenames allow 1-year TTL caching; subsequent regional requests finish in ~10ms directly at the Edge."
+    }
+  ],
+  "chaosScenarios": [
+    {
+      "id": "origin-outage-stale",
+      "title": "Origin S3 Regional Outage (Serve Stale)",
+      "faultType": "node_down",
+      "targetNodeId": "origin-s3",
+      "triggerSummary": "us-east-1 origin returns HTTP 503 during a regional outage while cached TTL just expired.",
+      "mitigationSummary": "CDN evaluates stale-if-error=86400 and serves slightly stale cached object with warning header, keeping availability at 100%.",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. EXPIRED EDGE ENTRY",
+          "timestampMs": 0.0,
+          "sourceNodeId": "client",
+          "targetNodeId": "cdn-edge",
+          "edgeId": "e-client-cdn",
+          "category": "cache_miss",
+          "protocol": "HTTP/3",
+          "info": "GET /config/manifest.json -> stale object revalidation",
+          "payloadSize": "380 B",
+          "payloadInspector": "Cache-Control: max-age=60, stale-while-revalidate=300, stale-if-error=86400",
+          "latencyDeltaMs": 10.0,
+          "inspectorNote": "TTL expired 5s ago; edge attempts async/sync revalidation via Origin Shield."
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "2. ORIGIN 503 FAILURE",
+          "timestampMs": 10.0,
+          "sourceNodeId": "origin-shield",
+          "targetNodeId": "origin-s3",
+          "edgeId": "e-shield-origin",
+          "category": "failover",
+          "protocol": "HTTPS",
+          "info": "HTTP 503 Service Unavailable from us-east-1 origin",
+          "payloadSize": "240 B",
+          "payloadInspector": "HTTP/1.1 503 SlowDown / UpstreamUnavailable",
+          "latencyDeltaMs": 45.0,
+          "inspectorNote": "Origin tier is unreachable or failing health checks."
+        },
+        {
+          "stepNo": 3,
+          "phaseTitle": "3. STALE-IF-ERROR RECOVERY",
+          "timestampMs": 55.0,
+          "sourceNodeId": "cdn-edge",
+          "targetNodeId": "client",
+          "edgeId": "e-client-cdn",
+          "category": "cache_hit",
+          "protocol": "HTTP/3",
+          "info": "200 OK · X-Cache: STALE (served from stale-if-error)",
+          "payloadSize": "14.2 KB",
+          "payloadInspector": "HTTP/3 200 OK\nX-Cache: STALE\nAge: 65",
+          "latencyDeltaMs": 10.0,
+          "inspectorNote": "Graceful degradation: client receives a valid response instead of an outage cascade."
+        }
+      ]
+    }
+  ],
+  "tradeoffs": [
+    {
+      "option": "Pull CDN",
+      "pros": ["Zero manual upload pipeline", "Only stores actively requested content", "Simple origin integration via Cache-Control"],
+      "cons": ["First request per PoP suffers cold miss penalty", "Requires Origin Shield to avoid origin stampedes"],
+      "bestFor": "User-generated photos, web assets, dynamic API caching"
+    },
+    {
+      "option": "Push CDN",
+      "pros": ["100% warm hit rate from second zero", "Origin doesn't need public exposure or high burst capacity"],
+      "cons": ["Higher storage cost for cold content", "Requires explicit upload/invalidation orchestration"],
+      "bestFor": "OS updates, game patches, curated movie catalogs"
+    }
+  ],
+  "quizQuestionIds": ["q-dns-1", "q-cdn-2"],
+  "flashcardIds": ["fc-dns-1", "fc-cdn-2"]
+}

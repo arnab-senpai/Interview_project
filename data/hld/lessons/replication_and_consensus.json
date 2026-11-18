@@ -1,0 +1,207 @@
+{
+  "id": "replication-and-consensus",
+  "track": "hld",
+  "category": "building-blocks",
+  "layer": 5,
+  "title": "Replication Quorums & Raft Consensus",
+  "subtitle": "Leader election, AppendEntries log replication, W+R>N & split-brain prevention",
+  "difficulty": "L5-L6",
+  "estimatedMinutes": 22,
+  "overview": "Replicating data across machines provides durability and read scaling—but introduces split-brain and stale-read risks under network partitions. Raft guarantees linearizable state machine replication by electing one leader per monotonic Term and committing entries only after a majority quorum (`floor(N/2) + 1`) persists the log.",
+  "firstPrinciplesStory": "Two servers run in active-passive mode. One afternoon, a switch glitch cuts the heartbeat link between Primary and Standby for 20 seconds—yet clients can still reach BOTH machines! Standby assumes Primary died and promotes itself, while Primary keeps accepting writes. Both accept conflicting account debits—classic split-brain! Worse, when Primary unfreezes after a 15-second JVM GC pause (DDIA Ch. 8), it tries to write with an old lock lease. Raft and monotonic Term fencing exist precisely because timeouts cannot distinguish a dead node from a slow network.",
+  "adaptiveLenses": {
+    "intuition": "Consensus is a parliament voting on laws: a bill only passes when more than half the seats (`2 of 3` or `3 of 5`) sign it, and every election bumps the Session/Term number higher (`Term 4 -> Term 5`). If an exiled old prime minister walks back in waving Term 4 stationery, the guards show Term 5 and ignore them.",
+    "mechanics": "Leader appends commands to local WAL and fans `AppendEntries` to followers. Entry commits once majority quorum persists it. If heartbeats time out, randomized election timers (`150–300ms`) elect a candidate whose log is at least as up-to-date as a majority, incrementing `Term`. Leaderless stores instead rely on client/coordinator `W + R > N` quorum overlap.",
+    "staffTradeoffs": "Never deploy an even number of Raft voters (e.g., 2 or 4)—a 4-node cluster still needs 3 votes for majority, tolerating only 1 failure just like 3 nodes! Also remember DDIA Ch. 8/9: cross-continent Raft commits pay WAN RTT (60–150ms) on every write, motivating regional Raft groups (Multi-Raft / Spanner) or asynchronous multi-region replication."
+  },
+  "ddiaAnchors": [
+    {
+      "chapter": "DDIA Ch. 5 & 9 · Replication & Consensus",
+      "concept": "Quorum Intersection (W+R>N) & Raft Terms",
+      "whyItMatters": "Shows how majority quorums prevent split-brain while monotonic epochs fence off stale leaders."
+    },
+    {
+      "chapter": "DDIA Ch. 8 · Unreliable Clocks & Process Pauses",
+      "concept": "Why Stop-the-World GC Breaks Naive Leases",
+      "whyItMatters": "A thread paused for 10 seconds believes its lease is still valid unless storage enforces monotonic fencing tokens."
+    }
+  ],
+  "pragmaticTips": [
+    {
+      "principle": "Dead Programs Tell No Lies (Fencing Over Faith)",
+      "tip": "Never assume a client checking 'my lock is still valid' before writing guarantees safety—the target DB itself must validate the monotonic token.",
+      "application": "Pass etcd/Raft revision or Term numbers directly into downstream storage CAS checks."
+    }
+  ],
+  "keyTakeaways": [
+    "Quorum intersection `W + R > N` ensures every read sees at least one replica holding the latest write.",
+    "Raft decomposes consensus into Leader Election (randomized timers + monotonic Terms) and Log Replication.",
+    "Fencing tokens / Term checks reject stale writes from an isolated deposed leader after a network partition heals."
+  ],
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Coordinator Client",
+      "sublabel": "CP Write · Linearizable",
+      "kind": "client",
+      "layer": 1,
+      "gridPos": { "gx": 1, "gy": 5 },
+      "specs": { "protocol": "gRPC / etcd", "port": "2379", "maxQpsPerNode": 1000, "baseLatencyMs": 1.0, "capProfile": "CP", "scalingAxis": "Clients" },
+      "summary": "Submits strongly consistent state transitions (locks, metadata, configs).",
+      "whenToUse": ["Leader-based configuration, distributed locks, financial state"],
+      "failureModes": ["Client retries without idempotency can re-apply commands unless Raft deduplicates session IDs"]
+    },
+    {
+      "id": "raft-leader",
+      "label": "Node 1 (Leader · Term 4)",
+      "sublabel": "10.0.5.1 · Quorum Primary",
+      "kind": "db_sql",
+      "layer": 5,
+      "gridPos": { "gx": 5, "gy": 5 },
+      "specs": { "protocol": "Raft RPC", "port": "2380", "maxQpsPerNode": 15000, "baseLatencyMs": 2.0, "capProfile": "CP", "scalingAxis": "Raft groups (Multi-Raft)" },
+      "summary": "Appends command to local WAL, broadcasts AppendEntries to followers, and commits once 2/3 ack.",
+      "whenToUse": ["Strict ordering and single-leader linearizability"],
+      "failureModes": ["Network partition isolates leader; heartbeats fail to reach majority"]
+    },
+    {
+      "id": "raft-f1",
+      "label": "Node 2 (Follower)",
+      "sublabel": "10.0.5.2 · Log Index 42",
+      "kind": "db_sql",
+      "layer": 5,
+      "gridPos": { "gx": 9, "gy": 2 },
+      "specs": { "protocol": "Raft RPC", "port": "2380", "maxQpsPerNode": 15000, "baseLatencyMs": 2.0, "capProfile": "CP", "scalingAxis": "Odd cluster size (3 or 5)" },
+      "summary": "Persists replicated WAL entries and responds to Leader heartbeats.",
+      "whenToUse": ["Majority voting member in 3-node or 5-node consensus group"],
+      "failureModes": ["Disk stall delays WAL fsync"]
+    },
+    {
+      "id": "raft-f2",
+      "label": "Node 3 (Follower)",
+      "sublabel": "10.0.5.3 · Log Index 42",
+      "kind": "db_sql",
+      "layer": 5,
+      "gridPos": { "gx": 9, "gy": 8 },
+      "specs": { "protocol": "Raft RPC", "port": "2380", "maxQpsPerNode": 15000, "baseLatencyMs": 2.0, "capProfile": "CP", "scalingAxis": "Odd cluster size (3 or 5)" },
+      "summary": "Third cluster voter; can survive 1 node failure while maintaining 2/3 quorum.",
+      "whenToUse": ["Cross-AZ fault tolerance"],
+      "failureModes": ["Cross-region WAN RTT inflates consensus commit latency"]
+    }
+  ],
+  "edges": [
+    { "id": "e-c-leader", "from": "client", "to": "raft-leader", "protocol": "gRPC", "transport": "sync", "label": "Put(key, val)" },
+    { "id": "e-l-f1", "from": "raft-leader", "to": "raft-f1", "protocol": "Raft RPC", "transport": "sync", "label": "AppendEntries / Vote" },
+    { "id": "e-l-f2", "from": "raft-leader", "to": "raft-f2", "protocol": "Raft RPC", "transport": "sync", "label": "AppendEntries / Vote" },
+    { "id": "e-f1-f2", "from": "raft-f1", "to": "raft-f2", "protocol": "Raft RPC", "transport": "sync", "label": "Election RequestVote" }
+  ],
+  "steps": [
+    {
+      "stepNo": 1,
+      "phaseTitle": "1. CLIENT PROPOSAL",
+      "timestampMs": 0.0,
+      "sourceNodeId": "client",
+      "targetNodeId": "raft-leader",
+      "edgeId": "e-c-leader",
+      "category": "consensus",
+      "protocol": "gRPC",
+      "info": "PUT /lease/worker_7 = active -> appended to Leader WAL (index=43, term=4)",
+      "payloadSize": "144 B",
+      "payloadInspector": "RaftLogEntry { term: 4, index: 43, cmd: \"SET lease:worker_7 active\" }",
+      "latencyDeltaMs": 1.0,
+      "inspectorNote": "Entry is written uncommitted to Leader disk; client is NOT acked yet."
+    },
+    {
+      "stepNo": 2,
+      "phaseTitle": "2. PARALLEL APPENDENTRIES",
+      "timestampMs": 1.0,
+      "sourceNodeId": "raft-leader",
+      "targetNodeId": "raft-f1",
+      "edgeId": "e-l-f1",
+      "category": "consensus",
+      "protocol": "Raft RPC",
+      "info": "AppendEntries(term=4, prevIdx=42, entry=43) replicated to Node 2 & Node 3",
+      "payloadSize": "180 B",
+      "payloadInspector": "AppendEntriesRPC { term: 4, leaderId: 1, prevLogIndex: 42, prevLogTerm: 4, entries: [43] }",
+      "latencyDeltaMs": 2.0,
+      "inspectorNote": "Both followers verify prevLogIndex/prevLogTerm continuity and fsync entry 43."
+    },
+    {
+      "stepNo": 3,
+      "phaseTitle": "3. MAJORITY QUORUM COMMIT",
+      "timestampMs": 3.0,
+      "sourceNodeId": "raft-leader",
+      "targetNodeId": "client",
+      "edgeId": "e-c-leader",
+      "category": "consensus",
+      "protocol": "gRPC",
+      "info": "2/3 majority achieved (Node 1 + Node 2) -> commitIndex=43 -> Client ACK",
+      "payloadSize": "64 B",
+      "payloadInspector": "Quorum=2/3 reached -> StateMachine.apply(43) -> return COMMITTED (Term 4)",
+      "latencyDeltaMs": 0.5,
+      "inspectorNote": "Notice Node 3 doesn't even need to be fast; the faster 2-of-3 quorum commits immediately.",
+      "predictPrompt": {
+        "prompt": "Why does Raft forbid an isolated minority partition (e.g. old Leader Node 1 cut off from Nodes 2 & 3) from accepting writes even if clients can still reach Node 1?",
+        "hint": "Think about what happens on the majority side `{Node 2, Node 3}` at the same time.",
+        "reveal": "Nodes 2 and 3 form a 2/3 majority and elect a new Leader in Term 5. If Node 1 kept committing writes locally without 2/3 acks, both sides would accept conflicting transactions—violating linearizability and causing split-brain data loss."
+      }
+    }
+  ],
+  "chaosScenarios": [
+    {
+      "id": "leader-partition-new-election",
+      "title": "Leader Partitioned -> Term 5 Election & Split-Brain Prevention",
+      "faultType": "partition",
+      "targetNodeId": "raft-leader",
+      "triggerSummary": "Network partition isolates Node 1 (Leader, Term 4) from Nodes 2 and 3.",
+      "mitigationSummary": "Node 2's randomized election timer fires first, wins RequestVote from Node 3, becomes Leader in Term 5, while isolated Node 1 can never reach quorum (CP safety preserved).",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. ELECTION TIMEOUT ON NODE 2",
+          "timestampMs": 0.0,
+          "sourceNodeId": "raft-f1",
+          "targetNodeId": "raft-f2",
+          "edgeId": "e-f1-f2",
+          "category": "failover",
+          "protocol": "Raft RPC",
+          "info": "Heartbeat timeout (180ms) -> Node 2 increments Term=5, requests vote from Node 3",
+          "payloadSize": "96 B",
+          "payloadInspector": "RequestVoteRPC { term: 5, candidateId: 2, lastLogIndex: 43, lastLogTerm: 4 }",
+          "latencyDeltaMs": 2.0,
+          "inspectorNote": "Randomized timeouts (150–300ms) prevent Nodes 2 & 3 from splitting votes repeatedly."
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "2. STALE LEADER REJECTED",
+          "timestampMs": 2.0,
+          "sourceNodeId": "raft-leader",
+          "targetNodeId": "raft-f1",
+          "edgeId": "e-l-f1",
+          "category": "failover",
+          "protocol": "Raft RPC",
+          "info": "Partition heals -> Node 1 sends Term 4 heartbeat -> sees Term 5 -> steps down to Follower",
+          "payloadSize": "72 B",
+          "payloadInspector": "AppendEntriesReply { term: 5, success: false } -> Old Leader reverts immediately; uncommitted writes dropped",
+          "latencyDeltaMs": 1.0,
+          "inspectorNote": "Node 1 could never commit writes while isolated because it only had 1/3 votes—zero split-brain data divergence."
+        }
+      ]
+    }
+  ],
+  "tradeoffs": [
+    {
+      "option": "Consensus (Raft / Paxos — CP)",
+      "pros": ["Strong linearizable consistency", "Automated leader election & zero split-brain"],
+      "cons": ["Writes stall during minority partition", "Latency bound by majority WAN RTT in cross-region clusters"],
+      "bestFor": "Distributed locks (etcd/ZooKeeper), metadata catalogs, financial consensus (CockroachDB/Spanner)"
+    },
+    {
+      "option": "Leaderless Quorum (Dynamo / Cassandra — Tunable AP/CP)",
+      "pros": ["High write availability even during partial failures", "No single leader bottleneck"],
+      "cons": ["Concurrent writes create conflicts requiring Last-Write-Wins or Vector Clocks + Read Repair"],
+      "bestFor": "Shopping carts, telemetry, high-availability key-value workloads"
+    }
+  ],
+  "quizQuestionIds": ["q-raft-1", "q-quorum-2"],
+  "flashcardIds": ["fc-raft-1", "fc-quorum-2"]
+}

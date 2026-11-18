@@ -1,0 +1,216 @@
+{
+  "id": "caching-and-stampede",
+  "track": "hld",
+  "category": "building-blocks",
+  "layer": 3,
+  "title": "Caching Strategies & Thundering Herd Defense",
+  "subtitle": "Cache-Aside, Write-Through/Behind, Singleflight & Bloom Filters",
+  "difficulty": "L4-L5",
+  "estimatedMinutes": 20,
+  "overview": "RAM lookups take ~100ns while disk-backed database queries over the network take milliseconds. Yet caching introduces three classic failure modes: Cache Penetration (missing keys bypassing cache), Cache Stampede / Thundering Herd (hot key expiration), and Cache Avalanche (mass simultaneous TTL expiry).",
+  "firstPrinciplesStory": "You add Redis in front of Postgres, and p99 read latency drops gloriously from 45ms to 2ms—until Friday night when a hot homepage SKU TTL expires at 8:00:00 PM sharp. Within 50 milliseconds, 8,000 requests all miss Redis simultaneously, stampede straight into Postgres, exhaust all 200 database connections, and keep retrying—even after Redis comes back empty! Caching solves steady-state speed, yet creates nonlinear cliff failures unless you engineer stampede, penetration, and avalanche defenses.",
+  "adaptiveLenses": {
+    "intuition": "Cache-Aside is checking your kitchen counter (Redis) before driving to the grocery store (Postgres). If 50 roommates walk into the kitchen at the exact moment the milk expires, Singleflight tells 49 of them: 'Wait 10 seconds at the door—one of us is already driving to the store and will share the gallon with everyone.'",
+    "mechanics": "Lookups check a compact in-process Bloom Filter first (eliminating non-existent key scans), query Redis via `GET`, and on miss collapse concurrent duplicate in-flight fetches inside a Singleflight leader promise before issuing one parameterized SQL query and writing back with jittered TTL (`base + rand`).",
+    "staffTradeoffs": "Keeping Redis and Postgres synchronized is a classic dual-write hazard: updating DB and deleting cache can still race with a concurrent stale reader! Use short TTL safety nets, monotonic version checks, or CDC-driven cache invalidation (DDIA Ch. 11/12) when strong freshness matters."
+  },
+  "ddiaAnchors": [
+    {
+      "chapter": "DDIA Ch. 12 · Derived Data Consistency",
+      "concept": "Caches as Derived Projections",
+      "whyItMatters": "A cache is derived state—treat the database/log as the single truth and build bounded staleness + safe invalidation."
+    }
+  ],
+  "pragmaticTips": [
+    {
+      "principle": "DRY (Single Authoritative Truth)",
+      "tip": "Never treat a mutable LRU cache as durable truth; design every request path assuming any cache key can vanish at any millisecond.",
+      "application": "Pair Cache-Aside with Singleflight + Bloom Filter + random TTL jitter."
+    }
+  ],
+  "keyTakeaways": [
+    "Cache-Aside keeps the database authoritative and lazily populates Redis on miss.",
+    "A Bloom Filter in front of cache/DB blocks 99%+ of non-existent key lookups (Cache Penetration).",
+    "Request coalescing (Singleflight) + jittered TTLs prevent 10,000 concurrent misses from hitting Postgres simultaneously."
+  ],
+  "nodes": [
+    {
+      "id": "app",
+      "label": "App Server (Singleflight)",
+      "sublabel": "Coalescer · Port 8080",
+      "kind": "compute",
+      "layer": 3,
+      "gridPos": { "gx": 1, "gy": 5 },
+      "specs": { "protocol": "HTTP / gRPC", "port": "8080", "maxQpsPerNode": 12000, "baseLatencyMs": 1.0, "capProfile": "N/A", "scalingAxis": "Horizontal pods" },
+      "summary": "Orchestrates Bloom check, Cache-Aside lookup, and Singleflight lock coalescing.",
+      "whenToUse": ["Read-heavy APIs (10:1 to 100:1 read/write ratios)"],
+      "failureModes": ["Stale read anomalies during concurrent DB update + cache delete"]
+    },
+    {
+      "id": "bloom",
+      "label": "Bloom Filter",
+      "sublabel": "In-Mem Bitset · 1% FP",
+      "kind": "cache",
+      "layer": 3,
+      "gridPos": { "gx": 4, "gy": 2 },
+      "specs": { "protocol": "In-Process / RedisBloom", "port": "6379", "maxQpsPerNode": 500000, "baseLatencyMs": 0.05, "capProfile": "N/A", "scalingAxis": "Bit array sizing" },
+      "summary": "Probabilistic structure that guarantees zero false negatives for known existing keys.",
+      "whenToUse": ["Defending against malicious or random non-existent ID scans"],
+      "failureModes": ["Cannot easily delete keys without Counting Bloom Filter or rebuild"]
+    },
+    {
+      "id": "redis",
+      "label": "Redis Cache Cluster",
+      "sublabel": "Port 6379 · LRU + Jitter",
+      "kind": "cache",
+      "layer": 3,
+      "gridPos": { "gx": 6, "gy": 5 },
+      "specs": { "protocol": "RESP3", "port": "6379", "maxQpsPerNode": 150000, "baseLatencyMs": 0.5, "capProfile": "AP", "scalingAxis": "Memory shards" },
+      "summary": "Stores hot serialized objects with randomized TTL jitter (`base + rand(0, 20%)`).",
+      "whenToUse": ["Sub-millisecond hot-key reads"],
+      "failureModes": ["Cache avalanche if all keys expire at midnight simultaneously"]
+    },
+    {
+      "id": "postgres",
+      "label": "Primary Postgres",
+      "sublabel": "Port 5432 · Source of Truth",
+      "kind": "db_sql",
+      "layer": 4,
+      "gridPos": { "gx": 10, "gy": 5 },
+      "specs": { "protocol": "PostgreSQL Wire", "port": "5432", "maxQpsPerNode": 6000, "baseLatencyMs": 8.0, "capProfile": "CP", "scalingAxis": "Read replicas / shards" },
+      "summary": "Durable ACID relational database protected from unnecessary read load.",
+      "whenToUse": ["Authoritative transactional records"],
+      "failureModes": ["Connection pool saturation under cache miss storms"]
+    }
+  ],
+  "edges": [
+    { "id": "e-app-bloom", "from": "app", "to": "bloom", "protocol": "Local/RESP", "transport": "sync", "label": "Check key exists" },
+    { "id": "e-app-redis", "from": "app", "to": "redis", "protocol": "RESP3", "transport": "sync", "label": "GET / SETEX" },
+    { "id": "e-app-pg", "from": "app", "to": "postgres", "protocol": "SQL", "transport": "sync", "label": "SELECT on miss" }
+  ],
+  "steps": [
+    {
+      "stepNo": 1,
+      "phaseTitle": "1. BLOOM PENETRATION CHECK",
+      "timestampMs": 0.0,
+      "sourceNodeId": "app",
+      "targetNodeId": "bloom",
+      "edgeId": "e-app-bloom",
+      "category": "read",
+      "protocol": "Bitset",
+      "info": "BF.EXISTS products_filter item_9012 -> TRUE (key may exist)",
+      "payloadSize": "32 B",
+      "payloadInspector": "BloomFilter check k=7 hashes -> all bits 1 (proceed to Redis)",
+      "latencyDeltaMs": 0.05,
+      "inspectorNote": "If Bloom returns FALSE, we short-circuit immediately with 404—zero wasted calls to Redis or Postgres."
+    },
+    {
+      "stepNo": 2,
+      "phaseTitle": "2. CACHE-ASIDE MISS",
+      "timestampMs": 0.05,
+      "sourceNodeId": "app",
+      "targetNodeId": "redis",
+      "edgeId": "e-app-redis",
+      "category": "cache_miss",
+      "protocol": "RESP3",
+      "info": "GET product:9012 -> (nil) Cache Miss",
+      "payloadSize": "48 B",
+      "payloadInspector": "GET product:9012 -> $-1 (nil)",
+      "latencyDeltaMs": 0.5,
+      "inspectorNote": "Key expired or was evicted by LRU; app acquires local/distributed Singleflight lock before hitting DB."
+    },
+    {
+      "stepNo": 3,
+      "phaseTitle": "3. ORIGIN QUERY (SINGLEFLIGHT)",
+      "timestampMs": 0.55,
+      "sourceNodeId": "app",
+      "targetNodeId": "postgres",
+      "edgeId": "e-app-pg",
+      "category": "read",
+      "protocol": "SQL",
+      "info": "SELECT * FROM products WHERE id=9012 -> 1 row returned",
+      "payloadSize": "2.4 KB",
+      "payloadInspector": "SELECT id, title, price_cents, stock FROM products WHERE id = $1;",
+      "latencyDeltaMs": 8.0,
+      "inspectorNote": "Only the Singleflight leader executes SQL while concurrent duplicate callers await the shared future.",
+      "predictPrompt": {
+        "prompt": "Why does setting `TTL = 3600` (exactly 1 hour) for 200,000 cache entries warmed together at startup risk a severe midnight outage?",
+        "hint": "Think about what happens 3,600 seconds later to all 200,000 keys at once.",
+        "reveal": "All 200,000 keys expire simultaneously—a Cache Avalanche. Adding random jitter (`3600 + random(0, 600)`) spreads cache refills smoothly across 10 minutes."
+      }
+    },
+    {
+      "stepNo": 4,
+      "phaseTitle": "4. JITTERED CACHE POPULATE",
+      "timestampMs": 8.55,
+      "sourceNodeId": "app",
+      "targetNodeId": "redis",
+      "edgeId": "e-app-redis",
+      "category": "write",
+      "protocol": "RESP3",
+      "info": "SETEX product:9012 ttl=342s (300s + 42s random jitter)",
+      "payloadSize": "2.5 KB",
+      "payloadInspector": "SET product:9012 <json> EX 342",
+      "latencyDeltaMs": 0.5,
+      "inspectorNote": "Adding random jitter spreads expirations smoothly over time to prevent a Cache Avalanche."
+    }
+  ],
+  "chaosScenarios": [
+    {
+      "id": "hot-key-stampede",
+      "title": "Thundering Herd on Expired Hot Key",
+      "faultType": "cache_expiry",
+      "targetNodeId": "redis",
+      "triggerSummary": "Flash-sale SKU key expires while 8,000 concurrent req/s arrive for the exact same product ID.",
+      "mitigationSummary": "Singleflight coalescing collapses 8,000 duplicate fetches into 1 DB query (or distributed SET NX lock + logical soft-TTL refresh).",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. 8,000 SIMULTANEOUS MISSES",
+          "timestampMs": 0.0,
+          "sourceNodeId": "app",
+          "targetNodeId": "redis",
+          "edgeId": "e-app-redis",
+          "category": "cache_miss",
+          "protocol": "RESP3",
+          "info": "Hot key product:flash_1 expired -> 8,000 concurrent misses",
+          "payloadSize": "48 B",
+          "payloadInspector": "Singleflight group['product:flash_1']: 1 leader elected, 7,999 callers blocked on in-memory channel",
+          "latencyDeltaMs": 0.6,
+          "inspectorNote": "Without coalescing, all 8,000 requests would saturate Postgres's max_connections=200 in milliseconds."
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "2. SINGLE DB READ SHARED",
+          "timestampMs": 0.6,
+          "sourceNodeId": "app",
+          "targetNodeId": "postgres",
+          "edgeId": "e-app-pg",
+          "category": "failover",
+          "protocol": "SQL",
+          "info": "1 SQL query fills Redis; 8,000 waiters receive shared result",
+          "payloadSize": "2.4 KB",
+          "payloadInspector": "DB QPS stayed at 1 instead of 8,000; Redis refreshed with soft-TTL early recompute",
+          "latencyDeltaMs": 8.0,
+          "inspectorNote": "Leader populates Redis and fans out the response to every waiting coroutine."
+        }
+      ]
+    }
+  ],
+  "tradeoffs": [
+    {
+      "option": "Cache-Aside (Lazy Loading)",
+      "pros": ["Only caches actually requested keys", "Cache outage degrades gracefully to DB"],
+      "cons": ["Initial cold miss penalty", "Brief staleness window unless actively invalidated on write"],
+      "bestFor": "General read-heavy workloads (90% of HLD interviews)"
+    },
+    {
+      "option": "Write-Through vs Write-Behind",
+      "pros": ["Write-Through keeps cache warm & consistent; Write-Behind batches writes for huge write throughput"],
+      "cons": ["Write-Through adds write latency; Write-Behind risks data loss if cache node crashes pre-flush"],
+      "bestFor": "Write-Through for user profiles; Write-Behind for view counters / telemetry"
+    }
+  ],
+  "quizQuestionIds": ["q-cache-1", "q-cache-2"],
+  "flashcardIds": ["fc-cache-1", "fc-cache-2"]
+}

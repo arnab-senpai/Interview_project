@@ -1,0 +1,239 @@
+{
+  "id": "btrees-vs-lsm-trees",
+  "track": "hld",
+  "category": "foundations",
+  "layer": 4,
+  "title": "Storage Engines: B-Trees vs LSM-Trees",
+  "subtitle": "Write-Ahead Logs, MemTables, SSTable compaction vs in-place B-Tree page splits",
+  "difficulty": "L5-L6",
+  "estimatedMinutes": 22,
+  "overview": "Why do Cassandra and RocksDB ingest hundreds of thousands of writes per second while PostgreSQL shines on predictable point reads and complex indexes? The answer lies inside the storage engine on disk: append-only Log-Structured Merge-Trees (LSM-Trees) versus page-oriented B-Trees.",
+  "firstPrinciplesStory": "Imagine you are building an append-only audit log for 100,000 events/sec. You start with a single flat file—writes are blazingly fast sequential appends, until you realize searching for one key requires scanning gigabytes. Adding a sorted B-Tree solves lookups in O(log N) page hops, yet random writes now bounce disk heads/NVMe pages across 4 KB blocks, triggering write amplification and dirty-page splits. What if you keep writes purely sequential in RAM + WAL and merge sorted immutable segments asynchronously in the background? That tension—sequential writes vs predictable read latency—is the core story of DDIA Chapter 3.",
+  "adaptiveLenses": {
+    "intuition": "A B-Tree is like an alphabetically sorted filing cabinet: finding a folder is instant, but squeezing a new folder into a full drawer forces shifting folders and splitting drawers on the spot. An LSM-Tree is like dropping notes onto your desk pad in arrival order, then sorting stacks neatly into labeled boxes at night—instant drop-off, occasional cleanup tax, and searching might check 2–3 boxes unless you keep a sticky-note checklist (Bloom filter).",
+    "mechanics": "LSM engines append mutations to a disk WAL for durability and insert sorted keys into an in-memory Red-Black/SkipList MemTable. When full, the MemTable flushes sequentially as an immutable SSTable (Sorted String Table) with sparse index + per-SSTable Bloom filter. Background Leveled/Size-Tiered Compaction merges overlapping SSTables and drops tombstones. B-Trees mutate fixed 4–16 KB pages in place (buffered via Page Cache + WAL recovery), using latch crabbing for concurrent tree traversal.",
+    "staffTradeoffs": "Evaluate Write, Read, and Space Amplification together (the RUM Conjecture). LSM trees slash write amplification for random keys and compress tightly (often 50% smaller footprint), making them ideal for write-heavy time-series/messaging (RocksDB, Cassandra, ScyllaDB). Yet unbounded background compaction steals disk IOPS and causes p99 tail-latency spikes—whereas B-Trees offer tight p99 read bounds and clean range/lock semantics for OLTP."
+  },
+  "ddiaAnchors": [
+    {
+      "chapter": "DDIA Ch. 3 · Storage and Retrieval",
+      "concept": "Log-Structured vs Page-Oriented Engines",
+      "whyItMatters": "Explains why write-heavy workloads pick LSM engines while OLTP transactional stores rely on B-Tree indexes."
+    },
+    {
+      "chapter": "DDIA Ch. 1 · Tail Latency & Compaction",
+      "concept": "Background Compaction Interference",
+      "whyItMatters": "Explains why LSM p99 read latency can spike unpredictably during heavy SSTable merges."
+    }
+  ],
+  "pragmaticTips": [
+    {
+      "principle": "Measure Real Access Patterns (Tracer Bullets)",
+      "tip": "Never pick NoSQL/LSM or SQL/B-Tree on hype—benchmark your read:write ratio, key distribution, and p99 sensitivity first.",
+      "application": "If writes are <5k QPS and relational ACID matters, boring B-Tree Postgres beats operational complexity every time."
+    },
+    {
+      "principle": "Bound Background Work (Fail Fast / Backpressure)",
+      "tip": "Uncapped LSM compaction can starve foreground user queries of NVMe bandwidth.",
+      "application": "Rate-limit compaction throughput and monitor L0 SSTable stall thresholds proactively."
+    }
+  ],
+  "keyTakeaways": [
+    "LSM-Trees convert random application writes into fast sequential RAM + WAL appends and periodic SSTable flushes.",
+    "Per-SSTable Bloom filters prevent LSM point reads for non-existent keys from probing every L0–L3 SSTable on disk.",
+    "B-Trees store one authoritative copy of each key in fixed-size pages, avoiding multi-level read checks and compaction pauses."
+  ],
+  "nodes": [
+    {
+      "id": "writer",
+      "label": "Storage Write Client",
+      "sublabel": "PUT user:4812 -> 100k/s",
+      "kind": "compute",
+      "layer": 3,
+      "gridPos": { "gx": 1, "gy": 5 },
+      "specs": { "protocol": "Engine API", "port": "9042", "maxQpsPerNode": 100000, "baseLatencyMs": 0.2, "capProfile": "N/A", "scalingAxis": "Clients" },
+      "summary": "Issues high-rate random key mutations and point lookups.",
+      "whenToUse": ["Write-heavy telemetry, messaging, or KV stores"],
+      "failureModes": ["Random UUID keys destroy B-Tree cache locality under write load"]
+    },
+    {
+      "id": "wal",
+      "label": "Write-Ahead Log (WAL)",
+      "sublabel": "Sequential Disk Append",
+      "kind": "queue",
+      "layer": 4,
+      "gridPos": { "gx": 4, "gy": 2 },
+      "specs": { "protocol": "Append fsync", "port": "disk", "maxQpsPerNode": 250000, "baseLatencyMs": 0.3, "capProfile": "CP", "scalingAxis": "NVMe sequential I/O" },
+      "summary": "Append-only crash recovery log guaranteeing durability before acking MemTable writes.",
+      "whenToUse": ["Both B-Trees and LSM-Trees depend on WAL for crash safety"],
+      "failureModes": ["Unbounded WAL growth if MemTable flushes stall"]
+    },
+    {
+      "id": "memtable",
+      "label": "In-Memory MemTable",
+      "sublabel": "SkipList · 64 MB RAM",
+      "kind": "cache",
+      "layer": 4,
+      "gridPos": { "gx": 4, "gy": 6 },
+      "specs": { "protocol": "RAM SkipList", "port": "mem", "maxQpsPerNode": 500000, "baseLatencyMs": 0.01, "capProfile": "N/A", "scalingAxis": "RAM budget" },
+      "summary": "Maintains recent writes sorted in RAM and flips immutable once size threshold is hit.",
+      "whenToUse": ["Absorbing burst writes at memory speed"],
+      "failureModes": ["OOM or write stalls if flush thread falls behind"]
+    },
+    {
+      "id": "sstable-l0",
+      "label": "Immutable SSTables (L0–L2)",
+      "sublabel": "Sorted + Bloom Filter",
+      "kind": "db_nosql",
+      "layer": 4,
+      "gridPos": { "gx": 8, "gy": 4 },
+      "specs": { "protocol": "Sequential Block Read", "port": "disk", "maxQpsPerNode": 80000, "baseLatencyMs": 0.4, "capProfile": "AP", "scalingAxis": "Leveled compaction" },
+      "summary": "Sorted immutable disk segments paired with in-RAM Bloom filters and sparse key offsets.",
+      "whenToUse": ["Compressed high-ingest persistent storage"],
+      "failureModes": ["Too many overlapping L0 files degrade read latency rapidly"]
+    },
+    {
+      "id": "btree-ref",
+      "label": "B-Tree Engine (Comparison)",
+      "sublabel": "4–16 KB In-Place Pages",
+      "kind": "db_sql",
+      "layer": 4,
+      "gridPos": { "gx": 8, "gy": 8 },
+      "specs": { "protocol": "Random Page I/O + WAL", "port": "5432", "maxQpsPerNode": 15000, "baseLatencyMs": 1.2, "capProfile": "CP", "scalingAxis": "Buffer pool RAM" },
+      "summary": "Updates fixed pages in place; single authoritative key location makes reads & row locks clean.",
+      "whenToUse": ["OLTP transactional SQL, predictable point/range queries"],
+      "failureModes": ["Random key inserts dirty entire buffer pool causing write amplification"]
+    }
+  ],
+  "edges": [
+    { "id": "e-w-wal", "from": "writer", "to": "wal", "protocol": "Append", "transport": "sync", "label": "1. Append WAL" },
+    { "id": "e-w-mem", "from": "writer", "to": "memtable", "protocol": "RAM", "transport": "sync", "label": "2. Insert SkipList" },
+    { "id": "e-mem-sst", "from": "memtable", "to": "sstable-l0", "protocol": "Seq Flush", "transport": "async", "label": "3. Flush Sorted SSTable" },
+    { "id": "e-w-btree", "from": "writer", "to": "btree-ref", "protocol": "Page R/W", "transport": "sync", "label": "Contrast: B-Tree Split" }
+  ],
+  "steps": [
+    {
+      "stepNo": 1,
+      "phaseTitle": "1. DURABLE SEQUENTIAL WAL APPEND",
+      "timestampMs": 0.0,
+      "sourceNodeId": "writer",
+      "targetNodeId": "wal",
+      "edgeId": "e-w-wal",
+      "category": "write",
+      "protocol": "WAL Append",
+      "info": "PUT user:4812 appended sequentially to WAL (0 random disk seeks)",
+      "payloadSize": "128 B",
+      "payloadInspector": "LSN 994102: OP=PUT key=user:4812 val={...} crc32=0x8A12F",
+      "latencyDeltaMs": 0.3,
+      "inspectorNote": "Even in an LSM-Tree, every accepted write hits the append-only WAL first so a crash doesn't wipe the volatile MemTable."
+    },
+    {
+      "stepNo": 2,
+      "phaseTitle": "2. MEMTABLE SORTED INSERT",
+      "timestampMs": 0.3,
+      "sourceNodeId": "writer",
+      "targetNodeId": "memtable",
+      "edgeId": "e-w-mem",
+      "category": "write",
+      "protocol": "RAM SkipList",
+      "info": "Key inserted in O(log N) into RAM SkipList -> Write ACK returned!",
+      "payloadSize": "128 B",
+      "payloadInspector": "MemTable usage: 63.9 MB / 64.0 MB -> Write acknowledged in 0.31ms",
+      "latencyDeltaMs": 0.05,
+      "inspectorNote": "Notice how fast random writes complete—zero B-Tree page splitting or random 4 KB page dirties on disk."
+    },
+    {
+      "stepNo": 3,
+      "phaseTitle": "3. IMMUTABLE SSTABLE FLUSH",
+      "timestampMs": 0.35,
+      "sourceNodeId": "memtable",
+      "targetNodeId": "sstable-l0",
+      "edgeId": "e-mem-sst",
+      "category": "async",
+      "protocol": "Seq Flush",
+      "info": "MemTable freezes -> flushed sequentially as L0 SSTable + Bloom filter; WAL truncated",
+      "payloadSize": "64 MB",
+      "payloadInspector": "SSTable-L0-0084: keys=[a..z] | sparse_index=128KB | bloom_filter=8MB",
+      "latencyDeltaMs": 1.2,
+      "inspectorNote": "Because keys are already sorted in the MemTable, flushing to disk is one blazing sequential write.",
+      "predictPrompt": {
+        "prompt": "If a read requests a key `user:9999999` that does NOT exist in the database, what happens inside an LSM-Tree without a Bloom Filter?",
+        "hint": "Think about how many immutable L0..L3 SSTables might contain overlapping key ranges.",
+        "reveal": "Without per-SSTable Bloom filters, a lookup for a missing key must check MemTable AND probe every L0 file plus every deeper level (L1, L2, L3...) on disk—multiplying read latency by 5x–10x!"
+      }
+    },
+    {
+      "stepNo": 4,
+      "phaseTitle": "4. B-TREE COMPARISON (PAGE SPLIT)",
+      "timestampMs": 1.55,
+      "sourceNodeId": "writer",
+      "targetNodeId": "btree-ref",
+      "edgeId": "e-w-btree",
+      "category": "read",
+      "protocol": "Page I/O",
+      "info": "Contrast: random key on B-Tree forces 4 KB page read-modify-write & split",
+      "payloadSize": "16 KB",
+      "payloadInspector": "B-Tree Page #4012 full -> allocate Page #4013 -> rewrite 2 leaf pages + parent pointer",
+      "latencyDeltaMs": 1.2,
+      "inspectorNote": "B-Trees trade higher random-write amplification for single-place key lookup and predictable OLTP range/lock performance."
+    }
+  ],
+  "chaosScenarios": [
+    {
+      "id": "compaction-write-stall",
+      "title": "L0 SSTable Pileup & Compaction Tail-Latency Spike",
+      "faultType": "latency_injection",
+      "targetNodeId": "sstable-l0",
+      "triggerSummary": "Burst writes outpace background compaction, piling up 24 overlapping L0 SSTables and saturating NVMe disk I/O.",
+      "mitigationSummary": "Engine triggers intentional write backpressure (L0 stall) while prioritizing L0→L1 leveled compaction and isolating compaction IOPS.",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. L0 FILES PILE UP (>20 FILES)",
+          "timestampMs": 0.0,
+          "sourceNodeId": "memtable",
+          "targetNodeId": "sstable-l0",
+          "edgeId": "e-mem-sst",
+          "category": "failover",
+          "protocol": "Compaction",
+          "info": "L0 count=24 -> reads probe 24 overlapping files; compaction saturates NVMe queue",
+          "payloadSize": "1.5 GB",
+          "payloadInspector": "Read p99 jumps 1ms -> 48ms | Compaction I/O consuming 85% disk bandwidth",
+          "latencyDeltaMs": 45.0,
+          "inspectorNote": "DDIA Ch. 3 warns that background compaction steals disk bandwidth from user reads—causing silent p99 spikes."
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "2. THROTTLED COMPACTION + BACKPRESSURE",
+          "timestampMs": 45.0,
+          "sourceNodeId": "writer",
+          "targetNodeId": "memtable",
+          "edgeId": "e-w-mem",
+          "category": "write",
+          "protocol": "Backpressure",
+          "info": "Engine throttles foreground ingest briefly + caps compaction MB/s -> L0 drops to 4",
+          "payloadSize": "128 B",
+          "payloadInspector": "Rate-limited compaction preserves 40% NVMe headroom for foreground reads -> p99 recovers",
+          "latencyDeltaMs": 4.0,
+          "inspectorNote": "Bounding background work and applying early backpressure prevents cascading storage stalls."
+        }
+      ]
+    }
+  ],
+  "tradeoffs": [
+    {
+      "option": "LSM-Tree (RocksDB, Cassandra, ScyllaDB, Pebble)",
+      "pros": ["Blazing sequential write throughput", "Tighter compression (no half-empty B-Tree page fragmentation)"],
+      "cons": ["Reads check MemTable + multiple SSTable levels (Bloom filters required)", "Background compaction causes p99 I/O jitter"],
+      "bestFor": "Write-heavy messaging, time-series metrics, event logs, embedded KV engines"
+    },
+    {
+      "option": "B-Tree (PostgreSQL, MySQL InnoDB)",
+      "pros": ["Each key lives in exactly one page—predictable point/range reads", "Clean page/row locking for ACID transactions"],
+      "cons": ["Higher random write amplification on non-sequential keys (UUIDv4)", "Internal page fragmentation (~30% slack space)"],
+      "bestFor": "Relational OLTP workloads with complex queries, transactions, and mixed read/write"
+    }
+  ],
+  "quizQuestionIds": ["q-lsm-1", "q-lsm-2"],
+  "flashcardIds": ["fc-lsm-1", "fc-lsm-2"]
+}

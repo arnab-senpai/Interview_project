@@ -1,0 +1,121 @@
+{
+  "id": "multi-version-billing-api",
+  "tier": 3,
+  "title": "Design a Multi-Versioned Billing & Payment API",
+  "subtitle": "Zero-downtime rolling microservices, Protobuf/Avro schema evolution, Idempotency & Contract DLQs",
+  "levelTag": "L5-L6",
+  "estimatedMinutes": 45,
+  "tags": ["Protobuf", "Schema Registry", "Design by Contract", "Idempotency", "DLQ"],
+  "functionalReqs": [
+    "Serve external merchant REST APIs across pinned date versions (`2024-05-01` .. `2026-01-15`) seamlessly alongside canonical internal gRPC services.",
+    "Guarantee forward and backward wire compatibility across 200+ weekly independent microservice deployments.",
+    "Quarantine malformed payloads cleanly into Dead-Letter Queues (`DLQ`) while enforcing idempotent billing invariants (`Idempotency-Key` + SHA-256 fingerprint)."
+  ],
+  "nonFunctionalReqs": [
+    { "metric": "Rolling Safety", "target": "Zero deserialization failures during skew", "rationale": "CI enforces `FULL_TRANSITIVE` compatibility across Protobuf/Avro schema updates." },
+    { "metric": "Idempotency", "target": "Zero double billing across network retries", "rationale": "Unique `(merchant_id, key)` reservation checks request payload SHA-256 match." },
+    { "metric": "Edge Decoupling", "target": "Core engine reads only canonical schema", "rationale": "TPP Design by Contract isolates legacy JSON quirks strictly inside edge transformers." }
+  ],
+  "estimationPreset": {
+    "dau": 5000000,
+    "actionsPerUserPerDay": 777.6,
+    "peakMultiplier": 2.5,
+    "avgPayloadBytes": 320,
+    "readWriteRatio": "65:35",
+    "retentionYears": 5,
+    "workedSummary": {
+      "wireSavings": "180k internal calls/s JSON (1.4 KB) -> Protobuf (320 B) saves ~1.55 Gbps/region",
+      "idempotencyStore": "13.5k mutating POSTs/s × 86,400 × 512 B = ~597 GB hot 24h key window",
+      "registryCache": "Local pod schema cache hits 99.999% (<0.05ms lookup)"
+    }
+  },
+  "coreEntities": [
+    {
+      "name": "BillingIdempotencyRecord",
+      "storageEngine": "PostgreSQL Unique Constraint + Hot Redis Lookaside",
+      "partitionKey": "merchant_id",
+      "keyFields": ["merchant_id", "idempotency_key", "payload_sha256", "status", "response_blob", "expires_at"]
+    },
+    {
+      "name": "SchemaRegistryVersion",
+      "storageEngine": "Git-Backed CI Registry + Kafka Compacted Topic",
+      "partitionKey": "subject_name",
+      "keyFields": ["schema_id", "subject", "version", "compatibility_mode (FULL_TRANSITIVE)", "proto_descriptor"]
+    }
+  ],
+  "apiContracts": [
+    {
+      "method": "POST",
+      "path": "/v2/billing/charges",
+      "purpose": "Execute contract-verified charge translated from merchant's pinned `Billing-Version` header into internal Protobuf RPC",
+      "idempotent": true,
+      "samplePayload": "{\"invoiceId\":\"inv_101\",\"amountMinor\":4990,\"currency\":\"USD\"}"
+    },
+    {
+      "method": "gRPC",
+      "path": "BillingTaxService/ComputeLineTax",
+      "purpose": "Internal binary Protobuf RPC carrying optional forward-compatible tags and explicit `X-Deadline-Ms`"
+    }
+  ],
+  "explorerTopology": {
+    "id": "billing-versioned-flow",
+    "track": "hld",
+    "category": "patterns",
+    "layer": 6,
+    "title": "Contract-First Multi-Version Billing Pipeline",
+    "subtitle": "Date-Pinned Edge Adapter -> Canonical Protobuf gRPC -> Schema Registry -> DLQ",
+    "difficulty": "L5-L6",
+    "estimatedMinutes": 20,
+    "overview": "How Stripe-scale billing platforms decouple external legacy API versions from rapidly evolving internal Protobuf/Avro services.",
+    "keyTakeaways": [
+      "Edge version translators keep core billing code clean (`vCurrent`) regardless of legacy external merchant API pins.",
+      "Every Kafka event embeds a 5-byte Schema ID and routes malformed payloads to DLQ without stalling partitions."
+    ],
+    "nodes": [
+      { "id": "merchant", "label": "Merchant v1/v2 Client", "sublabel": "Billing-Version Header", "kind": "client", "layer": 1, "gridPos": { "gx": 1, "gy": 5 }, "specs": { "protocol": "HTTPS JSON", "port": "443", "maxQpsPerNode": null, "baseLatencyMs": 4.0, "capProfile": "N/A", "scalingAxis": "Merchants" }, "summary": "Sends JSON charge requests pinned to an older release date header plus `Idempotency-Key`.", "whenToUse": ["Public merchant APIs"], "failureModes": ["Unbounded retries without jitter stampede downstream gateways"] },
+      { "id": "edge-trans", "label": "Edge Contract Adapter", "sublabel": "Transform v1 -> vCurrent", "kind": "api_gateway", "layer": 2, "gridPos": { "gx": 4, "gy": 5 }, "specs": { "protocol": "Envoy + gRPC Transcode", "port": "443", "maxQpsPerNode": 30000, "baseLatencyMs": 2.0, "capProfile": "AP", "scalingAxis": "Edge pods" }, "summary": "Validates OpenAPI preconditions, transforms legacy fields into latest Protobuf RPC, and verifies payload digest.", "whenToUse": ["Stripe-style backward-compatible API evolution"], "failureModes": ["Embedding legacy if/else branches directly inside domain business services destroys maintainability"] },
+      { "id": "billing-core", "label": "Billing Core v2.1", "sublabel": "Canonical Protobuf", "kind": "compute", "layer": 3, "gridPos": { "gx": 7, "gy": 5 }, "specs": { "protocol": "gRPC + Protobuf v3", "port": "9090", "maxQpsPerNode": 35000, "baseLatencyMs": 4.0, "capProfile": "CP", "scalingAxis": "Service pods" }, "summary": "Executes billing logic purely on clean `vCurrent` contracts + atomic idempotency DB check.", "whenToUse": ["Rapid independent microservice releases"], "failureModes": ["Silent partial updates without Idempotency-Key digest checks"] },
+      { "id": "schema-bus", "label": "Avro + Kafka + Registry", "sublabel": "5-byte ID + Consumers", "kind": "queue", "layer": 6, "gridPos": { "gx": 10, "gy": 3 }, "specs": { "protocol": "Avro + Schema ID", "port": "9092", "maxQpsPerNode": 120000, "baseLatencyMs": 3.0, "capProfile": "CP", "scalingAxis": "Partitions" }, "summary": "Streams compact schema-validated invoice events across independent Tax/Analytics consumers.", "whenToUse": ["Zero-downtime rolling async architectures"], "failureModes": ["Schema incompatibility breaks historical replay if `FULL_TRANSITIVE` skipped"] },
+      { "id": "dlq", "label": "Contract DLQ Topic", "sublabel": "Quarantine Bad Frames", "kind": "external", "layer": 7, "gridPos": { "gx": 10, "gy": 7 }, "specs": { "protocol": "Kafka DLQ", "port": "9092", "maxQpsPerNode": 5000, "baseLatencyMs": 1.0, "capProfile": "AP", "scalingAxis": "Ops triage queue" }, "summary": "Captures corrupted schemas immediately with trace diagnostics so main partitions keep draining.", "whenToUse": ["Robust contract enforcement"], "failureModes": ["Retrying schema errors infinitely creates infinite poison-pill crash loops"] }
+    ],
+    "edges": [
+      { "id": "e1", "from": "merchant", "to": "edge-trans", "protocol": "HTTPS JSON", "transport": "sync", "label": "Date-Pinned Charge" },
+      { "id": "e2", "from": "edge-trans", "to": "billing-core", "protocol": "gRPC Protobuf", "transport": "sync", "label": "Canonical vCurrent" },
+      { "id": "e3", "from": "billing-core", "to": "schema-bus", "protocol": "Kafka Avro", "transport": "async", "label": "Emit Invoice Event" },
+      { "id": "e4", "from": "edge-trans", "to": "dlq", "protocol": "Contract Reject", "transport": "async", "label": "Audit Invalid Input" }
+    ],
+    "steps": [
+      { "stepNo": 1, "phaseTitle": "Edge Precondition & Version Transform", "timestampMs": 0, "sourceNodeId": "merchant", "targetNodeId": "edge-trans", "edgeId": "e1", "category": "network", "protocol": "HTTPS", "info": "Merchant hits API with `Billing-Version: 2024-05-01` and `Idempotency-Key: k-90`.", "payloadSize": "680 B", "payloadInspector": "Deprecated JSON field `amount_cents` normalized to canonical `amount_minor` + currency", "latencyDeltaMs": 4.0, "inspectorNote": "Declarative edge adapters isolate external version churn completely from core domain engineers." },
+      { "stepNo": 2, "phaseTitle": "Binary Protobuf RPC + Idempotency Lock", "timestampMs": 4, "sourceNodeId": "edge-trans", "targetNodeId": "billing-core", "edgeId": "e2", "category": "write", "protocol": "gRPC", "info": "Transcodes into 210 B Protobuf call; reserves `(merchant_id, key, sha256)` atomically.", "payloadSize": "210 B", "payloadInspector": "Proto tags: [1, 2, 14]\nIdempotency SHA match: INSERT PASS", "latencyDeltaMs": 4.0, "inspectorNote": "Payload SHA check returns `422 Unprocessable` if a client reuses an old key with altered dollar amounts!" },
+      { "stepNo": 3, "phaseTitle": "Avro Event Emitted with Schema ID", "timestampMs": 8, "sourceNodeId": "billing-core", "targetNodeId": "schema-bus", "edgeId": "e3", "category": "async", "protocol": "Avro+Kafka", "info": "Emits binary record (`0x00` + `schema_id=42`) safely readable by both older v2.0 and newer v2.1 consumers.", "payloadSize": "190 B", "payloadInspector": "Schema Check: FULL_TRANSITIVE\nZero downtime rolling compatibility", "latencyDeltaMs": 3.0, "inspectorNote": "Schema Registry decouples deployment schedules across all 40+ billing microservices." }
+    ],
+    "chaosScenarios": [
+      {
+        "id": "chaos-contract-breach",
+        "title": "Malformed Contract / Payload Reuse Attack",
+        "faultType": "partition",
+        "targetNodeId": "edge-trans",
+        "triggerSummary": "Merchant retries same `Idempotency-Key` with a DIFFERENT `amountMinor` or unparseable schema payload.",
+        "mitigationSummary": "Edge Contract Gate rejects mismatched key reuse (`422`), quarantines malformed webhook inputs to `billing.dlq`, and leaves ledger 100% intact.",
+        "steps": [
+          { "stepNo": 1, "phaseTitle": "Design-by-Contract Precondition Failure", "timestampMs": 0, "sourceNodeId": "edge-trans", "targetNodeId": "dlq", "edgeId": "e4", "category": "failover", "protocol": "HTTP 422 / DLQ", "info": "Rejects mutated idempotency body immediately with `422` and logs violation trace to audit queue.", "payloadSize": "310 B", "payloadInspector": "Error: IdempotencyPayloadMismatch\nExpected SHA: a81f... | Got: c209...", "latencyDeltaMs": 1.0, "inspectorNote": "Fail-fast contracts stop silent financial corruption at the boundary." }
+        ]
+      }
+    ],
+    "tradeoffs": [
+      { "option": "Date-Pinned Edge Transformers + Core Protobuf/Avro", "pros": ["Core services only maintain one canonical version", "Merchants upgrade safely over years"], "cons": ["Requires version transformer rules at edge"], "bestFor": "Developer-facing billing, payment & SaaS APIs" }
+    ]
+  },
+  "deepDives": [
+    { "title": "Expand-and-Contract Zero-Downtime Rollouts", "bottleneck": "Renaming or tightening schema constraints mid-deploy crashes pods on older/newer builds simultaneously.", "solution": "Add optional new tag `#14`, dual-write/dual-read across mixed rollout, backfill, then deprecate legacy field cleanly later.", "tradeoff": "Temporary schema verbosity replaces risky lockstep multi-service deployments." },
+    { "title": "Fallacies of Distributed RPCs (Jitter, Deadlines, Digest Idempotency)", "bottleneck": "Blind synchronous retries turn transient 50ms pauses into double-charged invoices or retry storms.", "solution": "Pair caller-propagated gRPC deadlines, full-jitter exponential backoff, and `(key + payload_sha256)` ledger checks.", "tradeoff": "Requires storing 24h key fingerprints in Postgres/Redis (~600 GB) cleanly." }
+  ],
+  "rubricChecklist": [
+    { "phase": "Wire Encodings & Compatibility", "weight": 25, "criteria": ["Contrasts JSON vs Protobuf/Avro and explains tag rules for forward/backward compatibility"] },
+    { "phase": "Edge Version Isolation", "weight": 25, "criteria": ["Isolates external version adapters cleanly so core billing runs one canonical schema"] },
+    { "phase": "Idempotency & RPC Hygiene", "weight": 25, "criteria": ["Enforces `(key + SHA-256 payload check)`, `409/422` status codes, deadlines & full jitter"] },
+    { "phase": "Contract Governance & DLQ", "weight": 25, "criteria": ["Automates CI `FULL_TRANSITIVE` registry checks and isolates malformed records to a DLQ"] }
+  ],
+  "quizQuestionIds": ["q-bill-1", "q-bill-2"],
+  "flashcardIds": ["fc-bill-1", "fc-bill-2"]
+}

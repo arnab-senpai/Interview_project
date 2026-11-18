@@ -1,0 +1,306 @@
+{
+  "id": "news-feed",
+  "tier": 2,
+  "title": "Design a Social News Feed (Twitter / X Timeline)",
+  "subtitle": "Hybrid fan-out (write vs read), celebrity skew mitigation & cursor pagination",
+  "levelTag": "L4-L5",
+  "estimatedMinutes": 40,
+  "tags": ["Hybrid Fan-Out", "Celebrity Skew", "Cursor Pagination", "Redis Sorted Set"],
+  "functionalReqs": [
+    "Users can publish posts containing text and optional image/video media.",
+    "Users can follow/unfollow other accounts.",
+    "Users load their Home Timeline sorted reverse-chronologically (or ranked) with <200ms p99 latency."
+  ],
+  "nonFunctionalReqs": [
+    { "metric": "Feed Read p99 Latency", "target": "< 200 ms", "rationale": "Instant scroll feel drives core user retention." },
+    { "metric": "Post Fan-Out Lag", "target": "< 5 seconds for regular accounts", "rationale": "Eventual consistency is acceptable for social timelines." },
+    { "metric": "Availability", "target": "99.99% (AP prioritized)", "rationale": "Users should always see a feed even if recent second posts lag slightly." }
+  ],
+  "estimationPreset": {
+    "dau": 200000000,
+    "actionsPerUserPerDay": 5.0,
+    "peakMultiplier": 3.0,
+    "avgPayloadBytes": 1024,
+    "readWriteRatio": "200:1",
+    "retentionYears": 5,
+    "workedSummary": {
+      "feedReadsPerSec": "~10,000 QPS avg, ~30,000 QPS peak (assuming 5 timeline opens/day)",
+      "postWritesPerSec": "~1,000–2,000 new posts/sec peak",
+      "celebrityFanoutProblem": "1 post from a 50M-follower celebrity = 50M Redis pushes under naive write fan-out!"
+    }
+  },
+  "coreEntities": [
+    {
+      "name": "Post",
+      "storageEngine": "Sharded Postgres / DynamoDB (partition by post_id or user_id)",
+      "partitionKey": "post_id (Snowflake ID)",
+      "keyFields": ["post_id (uint64 Snowflake)", "author_id", "body", "media_urls[]", "created_at"]
+    },
+    {
+      "name": "FollowGraph",
+      "storageEngine": "Sharded Graph/KV Store (partition by follower_id + reverse index)",
+      "partitionKey": "followee_id",
+      "keyFields": ["follower_id", "followee_id", "is_celebrity_flag"]
+    },
+    {
+      "name": "UserTimelineCache",
+      "storageEngine": "Redis Sorted Set (ZSET: score=timestamp, member=post_id)",
+      "partitionKey": "user_id",
+      "keyFields": ["key=timeline:{user_id}", "max 800 post_ids cached"]
+    }
+  ],
+  "apiContracts": [
+    {
+      "method": "POST",
+      "path": "/v1/posts",
+      "purpose": "Create post and trigger async hybrid fan-out",
+      "idempotent": true,
+      "samplePayload": "{\"text\": \"Hello SystemCraft\", \"clientRequestId\": \"uuid-123\"}"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/timeline?cursor={last_post_id}&limit=20",
+      "purpose": "Fetch paginated home feed via monotonic Snowflake cursor",
+      "idempotent": true,
+      "samplePayload": "{\"posts\": [...], \"nextCursor\": \"18923491234912\"}"
+    }
+  ],
+  "explorerTopology": {
+    "id": "news-feed-hybrid-flow",
+    "track": "hld",
+    "category": "patterns",
+    "layer": 6,
+    "title": "Hybrid Fan-Out News Feed Architecture",
+    "subtitle": "Push normal posts to follower Redis ZSETs; merge celebrity posts at read time",
+    "difficulty": "L4-L5",
+    "estimatedMinutes": 20,
+    "overview": "Pure fan-out-on-write collapses when a celebrity with 50M followers posts; pure fan-out-on-read stalls when a user follows 2,000 accounts. Hybrid fan-out combines pre-materialized Redis timelines for normal authors with fast read-time merge of followed celebrities.",
+    "keyTakeaways": [
+      "Store only `(post_id, timestamp)` inside Redis timeline ZSETs—hydrate post bodies in batch to save RAM.",
+      "Threshold (e.g., >10,000 followers) splits accounts into push-fan-out vs pull-on-read celebrities.",
+      "Use cursor-based pagination (`post_id < cursor`) instead of SQL `OFFSET` to avoid shifting duplicates on new posts."
+    ],
+    "nodes": [
+      {
+        "id": "client",
+        "label": "Mobile App",
+        "sublabel": "Reader / Author",
+        "kind": "client",
+        "layer": 1,
+        "gridPos": { "gx": 1, "gy": 5 },
+        "specs": { "protocol": "HTTPS", "port": "443", "maxQpsPerNode": 20, "baseLatencyMs": 1.0, "capProfile": "N/A", "scalingAxis": "Users" },
+        "summary": "Publishes posts and scrolls paginated timeline.",
+        "whenToUse": ["Client apps"],
+        "failureModes": ["Duplicate post submission on flaky mobile network without clientRequestId"]
+      },
+      {
+        "id": "feed-api",
+        "label": "Timeline & Post Service",
+        "sublabel": "Read Merge · Port 8080",
+        "kind": "compute",
+        "layer": 3,
+        "gridPos": { "gx": 4, "gy": 5 },
+        "specs": { "protocol": "gRPC / HTTP", "port": "8080", "maxQpsPerNode": 12000, "baseLatencyMs": 4.0, "capProfile": "AP", "scalingAxis": "Stateless pods" },
+        "summary": "Writes post to DB+Kafka on publish; merges precomputed ZSET + celebrity posts on read.",
+        "whenToUse": ["Feed assembly"],
+        "failureModes": ["N+1 hydration queries if posts aren't batch-fetched via MGET"]
+      },
+      {
+        "id": "kafka",
+        "label": "Post Events (Kafka)",
+        "sublabel": "posts.created",
+        "kind": "queue",
+        "layer": 6,
+        "gridPos": { "gx": 4, "gy": 1 },
+        "specs": { "protocol": "Kafka", "port": "9092", "maxQpsPerNode": 200000, "baseLatencyMs": 2.0, "capProfile": "CP", "scalingAxis": "Partitions" },
+        "summary": "Buffers new posts so publish API returns in <15ms before fan-out runs.",
+        "whenToUse": ["Decoupling post creation from follower fan-out"],
+        "failureModes": ["Consumer lag delays follower visibility during viral events"]
+      },
+      {
+        "id": "fanout-worker",
+        "label": "Fan-Out Workers",
+        "sublabel": "Hybrid Threshold=10k",
+        "kind": "compute",
+        "layer": 6,
+        "gridPos": { "gx": 7, "gy": 1 },
+        "specs": { "protocol": "gRPC / RESP", "port": "8081", "maxQpsPerNode": 50000, "baseLatencyMs": 3.0, "capProfile": "AP", "scalingAxis": "Worker pool" },
+        "summary": "If author < 10k followers, pipelines ZADD into active followers' Redis timelines; otherwise skips push.",
+        "whenToUse": ["Bounded async fan-out"],
+        "failureModes": ["Wasting RAM pushing to dormant accounts inactive for >30 days"]
+      },
+      {
+        "id": "redis-timeline",
+        "label": "Redis Timeline & Celeb Cache",
+        "sublabel": "ZSET post_ids · 12 ms",
+        "kind": "cache",
+        "layer": 3,
+        "gridPos": { "gx": 8, "gy": 5 },
+        "specs": { "protocol": "RESP3", "port": "6379", "maxQpsPerNode": 150000, "baseLatencyMs": 0.8, "capProfile": "AP", "scalingAxis": "Sharded by user_id" },
+        "summary": "Holds top 800 `post_id` entries per active user + cached recent posts of celebrities.",
+        "whenToUse": ["Sub-20ms feed ID retrieval"],
+        "failureModes": ["Cache eviction requires fallback rebuild from social graph"]
+      },
+      {
+        "id": "post-db",
+        "label": "Post Store & Media CDN",
+        "sublabel": "Snowflake Sharded + S3",
+        "kind": "db_nosql",
+        "layer": 4,
+        "gridPos": { "gx": 10, "gy": 8 },
+        "specs": { "protocol": "CQL / SQL", "port": "9042", "maxQpsPerNode": 40000, "baseLatencyMs": 5.0, "capProfile": "AP", "scalingAxis": "Hash(post_id)" },
+        "summary": "Stores canonical post text/metadata; images/videos reside in S3 behind CDN.",
+        "whenToUse": ["Batch post hydration"],
+        "failureModes": ["Slow hydration if post cache misses hit disk"]
+      }
+    ],
+    "edges": [
+      { "id": "e1", "from": "client", "to": "feed-api", "protocol": "HTTPS", "transport": "sync", "label": "POST / GET timeline" },
+      { "id": "e2", "from": "feed-api", "to": "kafka", "protocol": "Kafka", "transport": "async", "label": "Publish PostCreated" },
+      { "id": "e3", "from": "kafka", "to": "fanout-worker", "protocol": "Kafka", "transport": "async", "label": "Consume batch" },
+      { "id": "e4", "from": "fanout-worker", "to": "redis-timeline", "protocol": "RESP3", "transport": "async", "label": "Pipeline ZADD" },
+      { "id": "e5", "from": "feed-api", "to": "redis-timeline", "protocol": "RESP3", "transport": "sync", "label": "ZREVRANGE + Celebs" },
+      { "id": "e6", "from": "feed-api", "to": "post-db", "protocol": "Batch Get", "transport": "sync", "label": "Hydrate post bodies" }
+    ],
+    "steps": [
+      {
+        "stepNo": 1,
+        "phaseTitle": "1. POST WRITE & KAFKA EMIT",
+        "timestampMs": 0.0,
+        "sourceNodeId": "feed-api",
+        "targetNodeId": "kafka",
+        "edgeId": "e2",
+        "category": "write",
+        "protocol": "Kafka",
+        "info": "Post persisted with Snowflake ID; PostCreated emitted -> User gets 201 Created",
+        "payloadSize": "680 B",
+        "payloadInspector": "{\"postId\":\"18923491234912\",\"authorId\":\"u_42\",\"followers\":420}",
+        "latencyDeltaMs": 6.0,
+        "inspectorNote": "Author doesn't wait for fan-out—write path completes after DB insert + Kafka ack."
+      },
+      {
+        "stepNo": 2,
+        "phaseTitle": "2. ASYNC HYBRID FAN-OUT",
+        "timestampMs": 6.0,
+        "sourceNodeId": "fanout-worker",
+        "targetNodeId": "redis-timeline",
+        "edgeId": "e4",
+        "category": "async",
+        "protocol": "RESP3",
+        "info": "Author has 420 (<10k) followers -> pipeline ZADD into active follower ZSETs",
+        "payloadSize": "3.4 KB",
+        "payloadInspector": "ZADD timeline:u_101 1794905233 18923491234912 (trim ZREMRANGEBYRANK > 800)",
+        "latencyDeltaMs": 4.0,
+        "inspectorNote": "Dormant users (inactive >30 days) are skipped during fan-out and built lazily on login."
+      },
+      {
+        "stepNo": 3,
+        "phaseTitle": "3. READ-TIME MERGE (ZSET + CELEBS)",
+        "timestampMs": 10.0,
+        "sourceNodeId": "feed-api",
+        "targetNodeId": "redis-timeline",
+        "edgeId": "e5",
+        "category": "read",
+        "protocol": "RESP3",
+        "info": "Fetch top 20 IDs from user ZSET + top posts from 3 followed celebrities -> K-way merge",
+        "payloadSize": "2.1 KB",
+        "payloadInspector": "ZREVRANGEBYSCORE timeline:u_101 +inf (cursor) LIMIT 0 20 + merge(celeb:taylor, celeb:elon)",
+        "latencyDeltaMs": 2.0,
+        "inspectorNote": "K-way merge in memory takes <1ms because each celebrity's recent post list is already cached in Redis."
+      },
+      {
+        "stepNo": 4,
+        "phaseTitle": "4. BATCH HYDRATE & RESPOND",
+        "timestampMs": 12.0,
+        "sourceNodeId": "feed-api",
+        "targetNodeId": "post-db",
+        "edgeId": "e6",
+        "category": "read",
+        "protocol": "Batch Get",
+        "info": "MGET post:1892... -> hydrate 20 posts -> return JSON + nextCursor",
+        "payloadSize": "18.5 KB",
+        "payloadInspector": "Batch hydrated 20 posts (16 from Post Cache, 4 from DB) in 5ms",
+        "latencyDeltaMs": 5.0,
+        "inspectorNote": "Total feed read stays well under 50ms server-side."
+      }
+    ],
+    "chaosScenarios": [
+      {
+        "id": "celebrity-mega-post",
+        "title": "Celebrity with 60M Followers Posts (Bypass Write Amplification)",
+        "faultType": "qps_spike",
+        "targetNodeId": "fanout-worker",
+        "triggerSummary": "A mega-celebrity (60M followers) tweets during a live global broadcast.",
+        "mitigationSummary": "Hybrid check (`followers >= 10,000`) skips 60M Redis writes completely, writing once to `celeb_timeline:{id}` and merging on read.",
+        "steps": [
+          {
+            "stepNo": 1,
+            "phaseTitle": "1. CELEBRITY FLAG SHORT-CIRCUIT",
+            "timestampMs": 0.0,
+            "sourceNodeId": "kafka",
+            "targetNodeId": "fanout-worker",
+            "edgeId": "e3",
+            "category": "failover",
+            "protocol": "Kafka",
+            "info": "is_celebrity=true (60M followers) -> SKIP 60M fan-out; write 1 entry to celeb_posts:999",
+            "payloadSize": "240 B",
+            "payloadInspector": "ZADD celeb_posts:999 1794905240 18923499999999 (1 write instead of 60,000,000!)",
+            "latencyDeltaMs": 1.0,
+            "inspectorNote": "Prevents fan-out queues from backing up for all normal users."
+          },
+          {
+            "stepNo": 2,
+            "phaseTitle": "2. READ-TIME MERGE WITH REPLICAS",
+            "timestampMs": 1.0,
+            "sourceNodeId": "feed-api",
+            "targetNodeId": "redis-timeline",
+            "edgeId": "e5",
+            "category": "read",
+            "protocol": "RESP3",
+            "info": "Readers merge celeb_posts:999 from read-replicated/local-L1 cache",
+            "payloadSize": "1.8 KB",
+            "payloadInspector": "Local pod L1 cache (TTL 5s) absorbs hot celeb_posts:999 reads!",
+            "latencyDeltaMs": 1.5,
+            "inspectorNote": "Adding a 5-second in-process L1 cache on celebrity post lists prevents single-shard Redis hot-key overload."
+          }
+        ]
+      }
+    ],
+    "tradeoffs": [
+      {
+        "option": "Hybrid Fan-Out (Push Normal + Pull Celebrity)",
+        "pros": ["Fast reads (<50ms)", "Protects Redis/workers from mega-celebrity write storms"],
+        "cons": ["Slightly more complex read-path K-way merge & dynamic threshold tuning"],
+        "bestFor": "Twitter/X, Instagram, LinkedIn feeds with skewed follower graphs"
+      },
+      {
+        "option": "Pure Fan-Out on Write",
+        "pros": ["Trivial O(1) read path"],
+        "cons": ["Fails catastrophically on celebrity posts (minutes of lag + massive RAM bloat)"],
+        "bestFor": "Symmetric capped friend graphs (e.g. Facebook max 5,000 friends)"
+      }
+    ],
+    "quizQuestionIds": ["q-feed-1"],
+    "flashcardIds": ["fc-feed-1"]
+  },
+  "deepDives": [
+    {
+      "title": "Celebrity Hot-Key on Read Merge",
+      "bottleneck": "If 2M followers open their feed simultaneously after a celebrity posts, `celeb_posts:999` hammers one Redis shard.",
+      "solution": "Add a short 5-second local in-memory cache on Timeline Service pods (or replicate celebrity ZSET across N read replicas).",
+      "tradeoff": "Up to 5s propagation delay for celebrity tweets in exchange for 100x lower Redis shard pressure."
+    },
+    {
+      "title": "Offset vs Cursor Pagination",
+      "bottleneck": "`OFFSET 20` shifts items downward whenever new posts arrive, showing duplicate posts on page 2.",
+      "solution": "Pass monotonic Snowflake `cursor = last_seen_post_id` and query `score < cursor`.",
+      "tradeoff": "Users cannot jump directly to 'Page 47'—ideal for infinite scroll feeds."
+    }
+  ],
+  "rubricChecklist": [
+    { "phase": "Requirements & Math", "weight": 20, "criteria": ["Distinguishes read-heavy feed vs write path", "Identifies celebrity follower skew"] },
+    { "phase": "API & Storage", "weight": 20, "criteria": ["Uses cursor pagination", "Stores lightweight post_ids in Redis ZSETs + hydrates bodies"] },
+    { "phase": "Hybrid Fan-Out Deep Dive", "weight": 40, "criteria": ["Explains write vs read fan-out trade-off", "Uses Kafka to keep publish fast", "Skips dormant users"] },
+    { "phase": "Operational Realism", "weight": 20, "criteria": ["Adds local L1 cache for hot celebrity keys", "Handles media via S3 + CDN"] }
+  ]
+}

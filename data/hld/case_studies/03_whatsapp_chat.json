@@ -1,0 +1,300 @@
+{
+  "id": "whatsapp-chat",
+  "tier": 2,
+  "title": "Design an Instant Messaging System (WhatsApp)",
+  "subtitle": "Sticky WebSocket gateways, delivery receipts, offline queue & group fan-out",
+  "levelTag": "L5-L6",
+  "estimatedMinutes": 45,
+  "tags": ["WebSockets", "Presence", "Delivery Receipts", "Offline Sync"],
+  "functionalReqs": [
+    "1-on-1 real-time chat with <100ms delivery when online.",
+    "Message delivery receipts: Sent (✓), Delivered (✓✓), Read (blue ✓✓).",
+    "Offline message queuing and reliable sync upon reconnection.",
+    "Group chats up to 500–1,000 members + online/last-seen presence."
+  ],
+  "nonFunctionalReqs": [
+    { "metric": "Concurrent Connections", "target": "50M–100M persistent WebSockets", "rationale": "Each active mobile/web client holds an open bidirectional socket." },
+    { "metric": "Message Ordering", "target": "Strict per-chat monotonic ordering", "rationale": "Replies must never appear out of causal sequence inside a conversation." },
+    { "metric": "Durability", "target": "Zero lost messages once Sent ✓ acked", "rationale": "Users treat chat history as guaranteed reliable delivery." }
+  ],
+  "estimationPreset": {
+    "dau": 500000000,
+    "actionsPerUserPerDay": 40.0,
+    "peakMultiplier": 3.0,
+    "avgPayloadBytes": 250,
+    "readWriteRatio": "1:1 (symmetric send/deliver)",
+    "retentionYears": 5,
+    "workedSummary": {
+      "messagesPerDay": "20B messages/day (~200k msg/sec avg, ~600k msg/sec peak)",
+      "websocketFleet": "100M concurrent sockets ÷ 100k sockets/node ≈ 1,000 stateful Chat Gateways",
+      "dailyTextStorage": "20B × 250 B ≈ 5 TB/day (offload server retention once delivered if ephemeral, or retain in wide-column store)"
+    }
+  },
+  "coreEntities": [
+    {
+      "name": "ChatMessage",
+      "storageEngine": "Cassandra / ScyllaDB (LSM-tree optimized for high write throughput)",
+      "partitionKey": "(chat_id, bucket_month)",
+      "keyFields": ["chat_id", "message_id (Snowflake clustering key DESC)", "sender_id", "ciphertext", "status"]
+    },
+    {
+      "name": "ActiveSession",
+      "storageEngine": "Redis Cluster (TTL + heartbeat refresh)",
+      "partitionKey": "user_id",
+      "keyFields": ["user_id", "gateway_host_ip", "device_id", "last_heartbeat_ts"]
+    }
+  ],
+  "apiContracts": [
+    {
+      "method": "WS",
+      "path": "/ws/v1/stream",
+      "purpose": "Persistent bidirectional frame channel for send_msg, ack_delivered, ack_read, heartbeat",
+      "idempotent": true,
+      "samplePayload": "{\"type\":\"send_msg\",\"clientMsgId\":\"m_991\",\"chatId\":\"c_12\",\"body\":\"...\"}"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/chats/{chatId}/messages?afterSeq={seq}",
+      "purpose": "Catch-up sync for multi-device or offline reconnect",
+      "idempotent": true,
+      "samplePayload": "{\"messages\":[...],\"hasMore\":false}"
+    }
+  ],
+  "explorerTopology": {
+    "id": "whatsapp-realtime-flow",
+    "track": "hld",
+    "category": "patterns",
+    "layer": 1,
+    "title": "1-on-1 & Offline Chat Delivery Flow",
+    "subtitle": "Stateful WebSocket gateway routing via Redis session map + Cassandra LSM storage",
+    "difficulty": "L5-L6",
+    "estimatedMinutes": 22,
+    "overview": "Unlike stateless REST APIs, chat servers maintain millions of persistent WebSocket connections. A shared Redis Session Registry maps `user_id -> gateway_host` so Gateway A can route messages directly to Bob's Gateway B (or store in Cassandra + trigger APNs/FCM push if Bob is offline).",
+    "keyTakeaways": [
+      "Partition Cassandra messages by `chat_id` clustered by monotonic `message_id` (Snowflake/HLC) so chat history scans are single-partition sequential reads.",
+      "Use `client_msg_id` deduplication so flaky cellular retries don't send duplicate texts.",
+      "Separate Presence heartbeats with debouncing/TTL so flaky connections don't cause online/offline UI flicker."
+    ],
+    "nodes": [
+      {
+        "id": "alice",
+        "label": "Alice Mobile",
+        "sublabel": "WS Conn · Connected",
+        "kind": "client",
+        "layer": 1,
+        "gridPos": { "gx": 1, "gy": 2 },
+        "specs": { "protocol": "WSS (TLS)", "port": "443", "maxQpsPerNode": 10, "baseLatencyMs": 10.0, "capProfile": "N/A", "scalingAxis": "Users" },
+        "summary": "Sender maintaining persistent WebSocket to Chat Gateway A.",
+        "whenToUse": ["Real-time chat client"],
+        "failureModes": ["Cellular handoff drops socket silently unless ping/pong keepalives detect half-open TCP"]
+      },
+      {
+        "id": "gw-a",
+        "label": "Chat Gateway A",
+        "sublabel": "Stateful · 100k Conns",
+        "kind": "api_gateway",
+        "layer": 2,
+        "gridPos": { "gx": 4, "gy": 2 },
+        "specs": { "protocol": "WebSocket + gRPC", "port": "443 / 9000", "maxQpsPerNode": 50000, "baseLatencyMs": 1.0, "capProfile": "AP", "scalingAxis": "Epoll/Netty nodes" },
+        "summary": "Holds Alice's TCP socket, assigns monotonic server sequence, persists message, and forwards to Bob's gateway.",
+        "whenToUse": ["Persistent connection termination"],
+        "failureModes": ["Thundering herd reconnect storm if a gateway crashes—clients must use exponential jitter!"]
+      },
+      {
+        "id": "session-redis",
+        "label": "Session & Presence Map",
+        "sublabel": "Redis · user -> gw_ip",
+        "kind": "cache",
+        "layer": 3,
+        "gridPos": { "gx": 5, "gy": 6 },
+        "specs": { "protocol": "RESP3", "port": "6379", "maxQpsPerNode": 150000, "baseLatencyMs": 0.5, "capProfile": "AP", "scalingAxis": "Sharded by user_id" },
+        "summary": "Tracks which Chat Gateway currently holds each online user's socket.",
+        "whenToUse": ["O(1) cross-gateway routing"],
+        "failureModes": ["Stale pointer if gateway dies abruptly without deleting keys (mitigated by 30s TTL)"]
+      },
+      {
+        "id": "msg-db",
+        "label": "Cassandra Message Store",
+        "sublabel": "LSM · (chat_id, msg_id)",
+        "kind": "db_nosql",
+        "layer": 4,
+        "gridPos": { "gx": 7, "gy": 2 },
+        "specs": { "protocol": "CQL", "port": "9042", "maxQpsPerNode": 80000, "baseLatencyMs": 4.0, "capProfile": "AP", "scalingAxis": "Ring nodes by chat_id" },
+        "summary": "High-write LSM store holding persisted chat messages & offline inbox queue.",
+        "whenToUse": ["600k+ message writes/sec"],
+        "failureModes": ["Unbounded partition growth on multi-year active chats (solve with monthly bucket suffix)"]
+      },
+      {
+        "id": "gw-b",
+        "label": "Chat Gateway B",
+        "sublabel": "Holds Bob's Socket",
+        "kind": "api_gateway",
+        "layer": 2,
+        "gridPos": { "gx": 9, "gy": 5 },
+        "specs": { "protocol": "gRPC -> WSS", "port": "9000", "maxQpsPerNode": 50000, "baseLatencyMs": 1.0, "capProfile": "AP", "scalingAxis": "Gateway fleet" },
+        "summary": "Receives internal gRPC forward from Gateway A and pushes immediately down Bob's open WebSocket.",
+        "whenToUse": ["Real-time push to recipient"],
+        "failureModes": ["Bob disconnects mid-flight -> fallback immediately to Push Notification + Offline DB"]
+      },
+      {
+        "id": "bob",
+        "label": "Bob Mobile",
+        "sublabel": "WS / APNs Push",
+        "kind": "client",
+        "layer": 1,
+        "gridPos": { "gx": 11, "gy": 5 },
+        "specs": { "protocol": "WSS / FCM", "port": "443", "maxQpsPerNode": 10, "baseLatencyMs": 12.0, "capProfile": "N/A", "scalingAxis": "Users" },
+        "summary": "Recipient client sending back Delivered ✓✓ and Read blue ✓✓ acks.",
+        "whenToUse": ["Recipient device"],
+        "failureModes": ["Multi-device sync requires tracking per-device watermarks"]
+      }
+    ],
+    "edges": [
+      { "id": "e1", "from": "alice", "to": "gw-a", "protocol": "WSS", "transport": "stream", "label": "send_msg" },
+      { "id": "e2", "from": "gw-a", "to": "msg-db", "protocol": "CQL", "transport": "sync", "label": "Persist & ACK ✓" },
+      { "id": "e3", "from": "gw-a", "to": "session-redis", "protocol": "RESP3", "transport": "sync", "label": "Lookup Bob gateway" },
+      { "id": "e4", "from": "gw-a", "to": "gw-b", "protocol": "gRPC", "transport": "sync", "label": "Forward frame" },
+      { "id": "e5", "from": "gw-b", "to": "bob", "protocol": "WSS", "transport": "stream", "label": "Push msg" }
+    ],
+    "steps": [
+      {
+        "stepNo": 1,
+        "phaseTitle": "1. SEND FRAME OVER WSS",
+        "timestampMs": 0.0,
+        "sourceNodeId": "alice",
+        "targetNodeId": "gw-a",
+        "edgeId": "e1",
+        "category": "write",
+        "protocol": "WSS",
+        "info": "Alice sends encrypted frame (clientMsgId=m_991) -> Gateway A assigns Snowflake msgId",
+        "payloadSize": "310 B",
+        "payloadInspector": "{\"op\":\"send\",\"chat\":\"c_12\",\"clientMsgId\":\"m_991\",\"ciphertext\":\"...\"}",
+        "latencyDeltaMs": 10.0,
+        "inspectorNote": "Server checks clientMsgId idempotency cache to guarantee retries never duplicate messages."
+      },
+      {
+        "stepNo": 2,
+        "phaseTitle": "2. DURABLE WRITE -> SENT ✓",
+        "timestampMs": 10.0,
+        "sourceNodeId": "gw-a",
+        "targetNodeId": "msg-db",
+        "edgeId": "e2",
+        "category": "write",
+        "protocol": "CQL",
+        "info": "Persisted to Cassandra quorum -> Alice receives Sent (✓) ack",
+        "payloadSize": "340 B",
+        "payloadInspector": "INSERT INTO messages (chat_id, msg_id, body) IF NOT EXISTS -> QUORUM ACK",
+        "latencyDeltaMs": 4.0,
+        "inspectorNote": "Only after durable write succeeds does Alice see the single Sent checkmark."
+      },
+      {
+        "stepNo": 3,
+        "phaseTitle": "3. SESSION ROUTE LOOKUP",
+        "timestampMs": 14.0,
+        "sourceNodeId": "gw-a",
+        "targetNodeId": "session-redis",
+        "edgeId": "e3",
+        "category": "read",
+        "protocol": "RESP3",
+        "info": "GET session:bob -> gw-b (10.0.8.42:9000)",
+        "payloadSize": "64 B",
+        "payloadInspector": "Bob active on Gateway B (last heartbeat 4s ago)",
+        "latencyDeltaMs": 0.5,
+        "inspectorNote": "If Bob were offline (`nil`), Gateway A enqueues an APNs/FCM push notification and marks message pending sync."
+      },
+      {
+        "stepNo": 4,
+        "phaseTitle": "4. PUSH TO BOB -> DELIVERED ✓✓",
+        "timestampMs": 14.5,
+        "sourceNodeId": "gw-b",
+        "targetNodeId": "bob",
+        "edgeId": "e5",
+        "category": "network",
+        "protocol": "WSS",
+        "info": "Gateway B pushes frame to Bob -> Bob acks Delivered (✓✓) back to Alice",
+        "payloadSize": "340 B",
+        "payloadInspector": "Bob device receives ciphertext -> emits {op:\"ack_delivered\", msgId:\"...\"}",
+        "latencyDeltaMs": 12.0,
+        "inspectorNote": "Total end-to-end online delivery stays ~27ms plus last-mile RTT."
+      }
+    ],
+    "chaosScenarios": [
+      {
+        "id": "gateway-crash-reconnect-storm",
+        "title": "Gateway B Crash (100k Socket Drop + Offline Fallback)",
+        "faultType": "node_down",
+        "targetNodeId": "gw-b",
+        "triggerSummary": "Chat Gateway B crashes abruptly, dropping 100,000 active user WebSockets including Bob's.",
+        "mitigationSummary": "Gateway A's gRPC forward fails -> falls back to APNs/FCM push notification while message stays safe in Cassandra; clients reconnect with randomized backoff jitter so login/session services don't melt.",
+        "steps": [
+          {
+            "stepNo": 1,
+            "phaseTitle": "1. GRPC PUSH FAILS -> PUSH FALLBACK",
+            "timestampMs": 0.0,
+            "sourceNodeId": "gw-a",
+            "targetNodeId": "gw-b",
+            "edgeId": "e4",
+            "category": "failover",
+            "protocol": "gRPC",
+            "info": "Connection refused on Gateway B -> message already durable in Cassandra; trigger FCM/APNs wake push",
+            "payloadSize": "180 B",
+            "payloadInspector": "gRPC UNAVAILABLE -> delete stale Redis session:bob -> enqueue APNs wake alert",
+            "latencyDeltaMs": 3.0,
+            "inspectorNote": "Because step 2 persisted the message before routing, zero messages are lost during a gateway crash."
+          },
+          {
+            "stepNo": 2,
+            "phaseTitle": "2. JITTERED RECONNECT & DELTA SYNC",
+            "timestampMs": 3.0,
+            "sourceNodeId": "bob",
+            "targetNodeId": "gw-a",
+            "edgeId": "e1",
+            "category": "read",
+            "protocol": "WSS",
+            "info": "Bob reconnects with random jitter (1–15s) to healthy Gateway A & pulls messages > lastAckedId",
+            "payloadSize": "420 B",
+            "payloadInspector": "GET /v1/chats/sync?afterSeq=882101 -> delivers missed frames cleanly",
+            "latencyDeltaMs": 15.0,
+            "inspectorNote": "Exponential backoff + full jitter prevents 100k simultaneous TLS handshakes from crashing surviving gateways."
+          }
+        ]
+      }
+    ],
+    "tradeoffs": [
+      {
+        "option": "WebSockets (Stateful Edge Gateways)",
+        "pros": ["True low-latency full duplex (<50ms)", "Compact framing overhead for typing indicators & receipts"],
+        "cons": ["Requires connection registry (Redis) + careful draining during deploys"],
+        "bestFor": "Real-time chat, multiplayer collaboration, live trading"
+      },
+      {
+        "option": "Long Polling / SSE",
+        "pros": ["Simpler HTTP/2 infrastructure compatibility"],
+        "cons": ["Higher header/reconnect overhead on frequent bidirectional chat"],
+        "bestFor": "Unidirectional feeds or LLM token streaming (SSE)"
+      }
+    ],
+    "quizQuestionIds": ["q-chat-1"],
+    "flashcardIds": ["fc-chat-1"]
+  },
+  "deepDives": [
+    {
+      "title": "Group Chat Fan-Out Scaling",
+      "bottleneck": "Broadcasting to 500-member groups synchronously blocks sender gateways.",
+      "solution": "Cap small-group fan-out via async Kafka Message Router looking up member session pointers in batches; for massive channels (>5k users), switch to pull-based inbox/channel feeds.",
+      "tradeoff": "Increases latency slightly for large groups while keeping 1-on-1 chat fast."
+    },
+    {
+      "title": "Causal Message Ordering Across Devices",
+      "bottleneck": "Client device clocks drift wildly (wrong timestamps).",
+      "solution": "Assign server-side per-chat monotonic sequence numbers or Snowflake/Hybrid Logical Clock IDs inside the chat partition.",
+      "tradeoff": "Requires routing chat writes consistently or ordering by server arrival time."
+    }
+  ],
+  "rubricChecklist": [
+    { "phase": "Requirements & Connections", "weight": 20, "criteria": ["Estimates 50M–100M persistent sockets", "Selects WebSockets over polling"] },
+    { "phase": "Storage & Ordering", "weight": 25, "criteria": ["Chooses write-optimized LSM store (Cassandra/Scylla)", "Partitions by (chat_id, bucket) + monotonic msg_id"] },
+    { "phase": "Routing & Receipts", "weight": 35, "criteria": ["Uses Redis session map across gateways", "Explains Sent/Delivered/Read flow + offline push fallback"] },
+    { "phase": "Resilience & Groups", "weight": 20, "criteria": ["Uses clientMsgId idempotency", "Handles reconnect storm jitter & group fan-out"] }
+  ]
+}

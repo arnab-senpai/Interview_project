@@ -1,0 +1,300 @@
+{
+  "id": "chatgpt-streaming-assistant",
+  "tier": 5,
+  "title": "Design a ChatGPT-Scale Conversational Assistant",
+  "subtitle": "SSE token streaming, KV-cache & PagedAttention, TPM rate limiting, guardrails & SLM fallback",
+  "levelTag": "L6-L7",
+  "estimatedMinutes": 50,
+  "tags": ["SSE Streaming", "KV-Cache", "TPM Rate Limit", "Guardrails", "PagedAttention"],
+  "functionalReqs": [
+    "Stream real-time LLM responses token-by-token over Server-Sent Events (SSE).",
+    "Maintain multi-turn conversation history across devices while respecting model context limits.",
+    "Enforce user/org TPM (Tokens Per Minute) + RPM quotas and safety guardrails.",
+    "Maintain high responsiveness via semantic caching, model routing, and graceful degradation under GPU saturation."
+  ],
+  "nonFunctionalReqs": [
+    { "metric": "Time To First Token (TTFT)", "target": "< 400 ms (p95)", "rationale": "Users perceive streaming chat as frozen if first token lags >500ms." },
+    { "metric": "Decode Speed (TPS)", "target": "> 45 tokens/sec per stream", "rationale": "Faster than human reading speed for fluid UX." },
+    { "metric": "GPU VRAM Efficiency", "target": "> 85% HBM utilization without OOM", "rationale": "GPU clusters dominate COGS; naive KV padding wastes >60% VRAM." }
+  ],
+  "estimationPreset": {
+    "dau": 50000000,
+    "actionsPerUserPerDay": 10.0,
+    "peakMultiplier": 3.0,
+    "avgPayloadBytes": 4000,
+    "readWriteRatio": "1:1 stateful turn + stream",
+    "retentionYears": 3,
+    "workedSummary": {
+      "promptsPerSec": "500M prompts/day ≈ 5,000 QPS avg, ~15,000 QPS peak",
+      "tokenThroughput": "15,000 QPS × 1,000 avg tokens ≈ 15M tokens/sec total (input + output)!",
+      "gpuSizingContext": "Sizing is bound by HBM VRAM (model weights + per-request KV-cache) and decode memory bandwidth—not CPU!"
+    }
+  },
+  "coreEntities": [
+    {
+      "name": "ConversationMessage",
+      "storageEngine": "Sharded Postgres / Cassandra (partition by conversation_id)",
+      "partitionKey": "conversation_id",
+      "keyFields": ["conversation_id", "turn_id", "role (user|assistant|tool)", "token_count", "content", "created_at"]
+    },
+    {
+      "name": "TokenQuotaBucket",
+      "storageEngine": "Redis Cluster (Atomic Lua Dual Bucket: RPM + TPM)",
+      "partitionKey": "org_id / user_id",
+      "keyFields": ["remaining_tokens", "remaining_requests", "last_refill_ms"]
+    }
+  ],
+  "apiContracts": [
+    {
+      "method": "SSE",
+      "path": "/v1/conversations/{id}/messages",
+      "purpose": "Submit prompt turn, validate guardrails/TPM, and open Server-Sent Events token stream",
+      "idempotent": true,
+      "samplePayload": "event: token\ndata: {\"delta\":\"Consistent \",\"finishReason\":null}"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/conversations/{id}",
+      "purpose": "Fetch persisted multi-turn history and branch tree",
+      "idempotent": true,
+      "samplePayload": "{\"conversationId\":\"conv_91\",\"turns\":[...]}"
+    }
+  ],
+  "explorerTopology": {
+    "id": "chatgpt-streaming-flow",
+    "track": "hld",
+    "category": "ai-infra",
+    "layer": 7,
+    "title": "ChatGPT-Scale Inference & Streaming Pipeline",
+    "subtitle": "TPM reservation -> Context assembly -> Semantic cache -> vLLM PagedAttention SSE stream",
+    "difficulty": "L6-L7",
+    "estimatedMinutes": 25,
+    "overview": "Unlike CRUD apps scaled around stateless CPU and SQL read replicas, a ChatGPT-scale assistant scales around **token budgets, context-window compaction, prefix/KV-cache reuse, continuous GPU batching, and graceful SLM degradation**.",
+    "keyTakeaways": [
+      "SSE outperforms raw WebSockets for LLM streaming because generation is unidirectional per turn and traverses standard HTTP/2 L7 proxies cleanly.",
+      "Reserve estimated prompt + max output tokens upfront in Redis TPM bucket, then refund unused tokens when stream finishes.",
+      "Continuous batching + PagedAttention eliminates idle GPU bubbles and KV-cache fragmentation."
+    ],
+    "nodes": [
+      {
+        "id": "client",
+        "label": "Web / Mobile Client",
+        "sublabel": "EventSource SSE",
+        "kind": "client",
+        "layer": 1,
+        "gridPos": { "gx": 1, "gy": 5 },
+        "specs": { "protocol": "HTTPS / SSE", "port": "443", "maxQpsPerNode": 10, "baseLatencyMs": 10.0, "capProfile": "N/A", "scalingAxis": "Users" },
+        "summary": "Renders streamed markdown tokens progressively and caches partial turns locally.",
+        "whenToUse": ["Interactive AI chat UI"],
+        "failureModes": ["Browser disconnect mid-stream wastes GPU cycles unless Gateway cancels upstream RPC"]
+      },
+      {
+        "id": "ai-gw",
+        "label": "AI Gateway + TPM Limiter",
+        "sublabel": "Guardrails · Token Bucket",
+        "kind": "api_gateway",
+        "layer": 2,
+        "gridPos": { "gx": 3, "gy": 5 },
+        "specs": { "protocol": "HTTP/2 + RESP", "port": "443", "maxQpsPerNode": 40000, "baseLatencyMs": 8.0, "capProfile": "AP", "scalingAxis": "Stateless gateway fleet" },
+        "summary": "Authenticates user, checks dual RPM/TPM quotas in Redis Lua, and runs fast input safety classifiers.",
+        "whenToUse": ["Protecting finite GPU clusters from token exhaustion"],
+        "failureModes": ["Rate-limiting only by RPM lets a 128k-token prompt starve the GPU pool"]
+      },
+      {
+        "id": "orch",
+        "label": "Chat Orchestrator",
+        "sublabel": "Context Trimmer + Router",
+        "kind": "compute",
+        "layer": 3,
+        "gridPos": { "gx": 6, "gy": 5 },
+        "specs": { "protocol": "gRPC", "port": "8080", "maxQpsPerNode": 15000, "baseLatencyMs": 5.0, "capProfile": "AP", "scalingAxis": "Stateless pods" },
+        "summary": "Loads recent turns, compacts older history via rolling summary, checks semantic cache, and routes to frontier vs SLM.",
+        "whenToUse": ["Multi-turn state & dynamic model routing"],
+        "failureModes": ["Naive sliding window drops important early instructions unless pinned"]
+      },
+      {
+        "id": "conv-db",
+        "label": "Conversation Store + Cache",
+        "sublabel": "Redis + Sharded PG",
+        "kind": "db_sql",
+        "layer": 4,
+        "gridPos": { "gx": 6, "gy": 1 },
+        "specs": { "protocol": "SQL / RESP", "port": "5432", "maxQpsPerNode": 30000, "baseLatencyMs": 4.0, "capProfile": "CP", "scalingAxis": "Shard by user_id" },
+        "summary": "Persists conversation turns asynchronously once stream completes and caches active session context.",
+        "whenToUse": ["Durable chat threads"],
+        "failureModes": ["Persisting per-token to DB would crush IOPS—buffer full turn in memory and flush on completion/abort"]
+      },
+      {
+        "id": "router-scheduler",
+        "label": "KV-Aware Inference Scheduler",
+        "sublabel": "Prefix Locality Routing",
+        "kind": "load_balancer",
+        "layer": 7,
+        "gridPos": { "gx": 8, "gy": 5 },
+        "specs": { "protocol": "gRPC", "port": "8090", "maxQpsPerNode": 20000, "baseLatencyMs": 1.0, "capProfile": "AP", "scalingAxis": "Consistent hash on system_prefix" },
+        "summary": "Routes multi-turn follow-ups to the GPU replica already caching that conversation's KV prefix blocks.",
+        "whenToUse": ["Cutting TTFT prefill latency by 3x–5x on multi-turn chats"],
+        "failureModes": ["Overloaded sticky worker requires queue-depth spill-over"]
+      },
+      {
+        "id": "gpu-pool",
+        "label": "GPU Inference Pool (H100)",
+        "sublabel": "Continuous Batch + PagedAttn",
+        "kind": "gpu_cluster",
+        "layer": 7,
+        "gridPos": { "gx": 10, "gy": 5 },
+        "specs": { "protocol": "gRPC Stream", "port": "8000", "maxQpsPerNode": 150, "baseLatencyMs": 160.0, "capProfile": "N/A", "scalingAxis": "Prefill/Decode disaggregated pods" },
+        "summary": "Runs iteration-level continuous batching + PagedAttention non-contiguous KV blocks; falls back to SLM on saturation.",
+        "whenToUse": ["High-throughput LLM token generation"],
+        "failureModes": ["Client disconnect without abort leaves phantom token decoding burning GPU"]
+      }
+    ],
+    "edges": [
+      { "id": "e1", "from": "client", "to": "ai-gw", "protocol": "HTTPS/SSE", "transport": "stream", "label": "POST turn + open SSE" },
+      { "id": "e2", "from": "ai-gw", "to": "orch", "protocol": "gRPC", "transport": "stream", "label": "Authorized prompt" },
+      { "id": "e3", "from": "orch", "to": "conv-db", "protocol": "RESP/SQL", "transport": "sync", "label": "Load turns / Save final" },
+      { "id": "e4", "from": "orch", "to": "router-scheduler", "protocol": "gRPC", "transport": "stream", "label": "Prefix-aware dispatch" },
+      { "id": "e5", "from": "router-scheduler", "to": "gpu-pool", "protocol": "gRPC", "transport": "stream", "label": "Prefill + Decode stream" }
+    ],
+    "steps": [
+      {
+        "stepNo": 1,
+        "phaseTitle": "1. TPM QUOTA & INPUT GUARDRAIL",
+        "timestampMs": 0.0,
+        "sourceNodeId": "client",
+        "targetNodeId": "ai-gw",
+        "edgeId": "e1",
+        "category": "llm",
+        "protocol": "HTTPS/SSE",
+        "info": "Tokenizer counts 420 input tokens -> Redis reserves 1,420 tokens (incl. max_tokens=1000) & guardrail passes",
+        "payloadSize": "1.8 KB",
+        "payloadInspector": "TPM Reserve: -1420 | Guardrail(PII/Safety): PASS in 6ms",
+        "latencyDeltaMs": 8.0,
+        "inspectorNote": "Dual reservation + end-of-stream reconciliation prevents users from blowing past TPM limits with parallel streams."
+      },
+      {
+        "stepNo": 2,
+        "phaseTitle": "2. CONTEXT ASSEMBLY & COMPACTION",
+        "timestampMs": 8.0,
+        "sourceNodeId": "orch",
+        "targetNodeId": "conv-db",
+        "edgeId": "e3",
+        "category": "read",
+        "protocol": "RESP/SQL",
+        "info": "Loaded last 6 turns + rolling summary from Redis -> total prompt fits inside 8k budget",
+        "payloadSize": "6.4 KB",
+        "payloadInspector": "Context: [System Prompt] + [Summary turns 1-14] + [Verbatim turns 15-20]",
+        "latencyDeltaMs": 4.0,
+        "inspectorNote": "Rolling summarization prevents unbounded linear growth of KV-cache VRAM and input token bills."
+      },
+      {
+        "stepNo": 3,
+        "phaseTitle": "3. KV-PREFIX LOCALITY ROUTING",
+        "timestampMs": 12.0,
+        "sourceNodeId": "orch",
+        "targetNodeId": "router-scheduler",
+        "edgeId": "e4",
+        "category": "read",
+        "protocol": "gRPC",
+        "info": "Consistent hash on prefix(conv_91) hits GPU-Node-4 with warm KV-cache blocks!",
+        "payloadSize": "6.5 KB",
+        "payloadInspector": "Prefix Cache HIT: skipped recomputing 3,100 historical tokens -> prefill drops 70%!",
+        "latencyDeltaMs": 2.0,
+        "inspectorNote": "Reusing cached KV tensors from previous turns slashes TTFT and prefill FLOPs dramatically."
+      },
+      {
+        "stepNo": 4,
+        "phaseTitle": "4. CONTINUOUS BATCHING & SSE STREAM",
+        "timestampMs": 14.0,
+        "sourceNodeId": "router-scheduler",
+        "targetNodeId": "gpu-pool",
+        "edgeId": "e5",
+        "category": "llm",
+        "protocol": "gRPC",
+        "info": "First token yielded at 180ms; tokens stream over SSE at 55 TPS; unused TPM refunded on [DONE]",
+        "payloadSize": "2.2 KB",
+        "payloadInspector": "TTFT: 180ms | Tokens Used: 420+310=730 -> Refunded +690 TPM to Redis; Turn saved asynchronously",
+        "latencyDeltaMs": 166.0,
+        "inspectorNote": "If the user hits 'Stop Generating', Gateway immediately cancels the gRPC stream to free GPU decode slots."
+      }
+    ],
+    "chaosScenarios": [
+      {
+        "id": "client-abort-and-prefill-spike",
+        "title": "Long-Context Prefill Spike + Disconnected Client Cleanup",
+        "faultType": "gpu_saturation",
+        "targetNodeId": "gpu-pool",
+        "triggerSummary": "Surge of 100k-token document uploads causes prefill latency spikes while mobile users close tabs mid-stream.",
+        "mitigationSummary": "Disaggregated Prefill vs Decode pods isolate long-prompt compute from streaming tokens; cancellation propagation frees orphaned KV blocks instantly.",
+        "steps": [
+          {
+            "stepNo": 1,
+            "phaseTitle": "1. CANCEL PROPAGATION FREES KV",
+            "timestampMs": 0.0,
+            "sourceNodeId": "ai-gw",
+            "targetNodeId": "gpu-pool",
+            "edgeId": "e5",
+            "category": "failover",
+            "protocol": "gRPC",
+            "info": "Client closed SSE socket -> Gateway fires gRPC cancel -> GPU frees 140 MB KV-cache immediately",
+            "payloadSize": "64 B",
+            "payloadInspector": "ContextCancelled -> PagedAttention deallocates physical KV blocks & refunds unused TPM",
+            "latencyDeltaMs": 2.0,
+            "inspectorNote": "Without cancellation propagation, abandoned requests continue burning H100 cycles until max_tokens."
+          },
+          {
+            "stepNo": 2,
+            "phaseTitle": "2. DISAGGREGATED PREFILL / SLM FALLBACK",
+            "timestampMs": 2.0,
+            "sourceNodeId": "router-scheduler",
+            "targetNodeId": "gpu-pool",
+            "edgeId": "e5",
+            "category": "llm",
+            "protocol": "gRPC",
+            "info": "Heavy prefill isolated from decode fleet; queue > threshold downshifts simple queries to quantized 8B SLM",
+            "payloadSize": "1.4 KB",
+            "payloadInspector": "Decode ITL stays < 25ms (45+ TPS) for active streams during heavy prefill spike",
+            "latencyDeltaMs": 120.0,
+            "inspectorNote": "Separating compute-bound Prefill nodes from memory-bandwidth-bound Decode nodes stops long prompts from stuttering active streams."
+          }
+        ]
+      }
+    ],
+    "tradeoffs": [
+      {
+        "option": "Server-Sent Events (SSE) over HTTP/2",
+        "pros": ["Native browser EventSource + HTTP/2 multiplexing", "Easy L7 load balancing & proxy traversal", "Ideal for unidirectional token streaming"],
+        "cons": ["Half-duplex per request (user sends next turn as a fresh POST)"],
+        "bestFor": "ChatGPT/Claude-style text streaming interfaces"
+      },
+      {
+        "option": "WebSockets",
+        "pros": ["Full-duplex low-overhead binary frames"],
+        "cons": ["Sticky socket state complicates autoscaling & draining"],
+        "bestFor": "Real-time bidirectional voice/audio multimodal agents (WebRTC/WS)"
+      }
+    ],
+    "quizQuestionIds": ["q-gpt-1"],
+    "flashcardIds": ["fc-gpt-1"]
+  },
+  "deepDives": [
+    {
+      "title": "PagedAttention & Continuous Batching",
+      "bottleneck": "Static batching waits for the longest response in a batch to finish, and contiguous KV allocation wastes 60%+ VRAM via fragmentation.",
+      "solution": "Schedule at iteration (token) granularity—inserting new requests as soon as one finishes—and store KV tensors in virtual-memory-style non-contiguous blocks.",
+      "tradeoff": "Increases scheduler complexity, yet boosts GPU throughput 4x–10x."
+    },
+    {
+      "title": "Deterministic Safety & Token Accounting",
+      "bottleneck": "LLM responses are non-deterministic in length, making upfront rate limits inaccurate and risking prompt-injection / PII leaks.",
+      "solution": "Reserve conservative `input + max_output` tokens upfront, reconcile delta at `[DONE]`, and wrap LLM calls behind deterministic moderation & policy filters.",
+      "tradeoff": "Small guardrail classifier hop (~10ms) added to TTFT in exchange for compliance and cost protection."
+    }
+  ],
+  "rubricChecklist": [
+    { "phase": "GenAI Scale & Metrics", "weight": 20, "criteria": ["Defines TTFT, TPS, TPM, and HBM VRAM constraints", "Justifies SSE over WebSockets"] },
+    { "phase": "API, Quotas & Context", "weight": 25, "criteria": ["Designs TPM + RPM dual rate limiter with reserve/refund", "Compacts history without blowing context windows"] },
+    { "phase": "GPU Inference Internals", "weight": 35, "criteria": ["Explains continuous batching, KV-cache & PagedAttention", "Routes multi-turn requests for prefix cache affinity"] },
+    { "phase": "Resilience & Guardrails", "weight": 20, "criteria": ["Propagates client abort to cancel GPU decode", "Proposes SLM fallback & safety filters under load"] }
+  ]
+}

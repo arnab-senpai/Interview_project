@@ -1,0 +1,180 @@
+{
+  "version": "1.0.0",
+  "pedagogicalDesign": {
+    "title": "First-Principles Narrative + Pragmatic Craftsmanship",
+    "description": "Every static lesson opens with a failure-first story ('why this exists'), lets learners toggle three static explanation lenses (Intuition, Production Mechanics, Staff Trade-Offs), embeds pause-and-predict Socratic prompts before critical failures, and grounds decisions in DDIA chapters and Pragmatic Programmer heuristics."
+  },
+  "ddiaChapterMap": [
+    {
+      "chapter": 1,
+      "part": "I · Foundations of Data Systems",
+      "title": "Reliable, Scalable, and Maintainable Applications",
+      "coreMentalModels": [
+        "Faults vs Failures: anticipate hardware, software, and human faults before they cascade into outages",
+        "Describe load using explicit parameters (fan-out, read/write ratio) and measure tail latency (p95, p99, p999) rather than misleading averages",
+        "Operability, simplicity, and evolvability determine long-term velocity"
+      ],
+      "linkedTopicIds": ["l7-load-balancer", "dns-and-cdn", "news-feed"]
+    },
+    {
+      "chapter": 2,
+      "part": "I · Foundations of Data Systems",
+      "title": "Data Models and Query Languages",
+      "coreMentalModels": [
+        "Relational joins shine for many-to-many data; Document models shine for self-contained trees with locality",
+        "Impedance mismatch and schema-on-read vs schema-on-write",
+        "Declarative queries let engines optimize execution plans under the hood"
+      ],
+      "linkedTopicIds": ["nosql-data-models", "sql-acid-and-isolation"]
+    },
+    {
+      "chapter": 3,
+      "part": "I · Foundations of Data Systems",
+      "title": "Storage and Retrieval",
+      "coreMentalModels": [
+        "LSM-Trees (MemTable + WAL + SSTable compaction) optimize sequential writes at the cost of read/compaction amplification",
+        "B-Trees optimize in-place page reads/updates with predictable latency and simpler transactional locks",
+        "OLTP row stores vs OLAP column-oriented compressed storage"
+      ],
+      "linkedTopicIds": ["btrees-vs-lsm-trees", "whatsapp-chat", "realtime-analytics-olap"]
+    },
+    {
+      "chapter": 4,
+      "part": "I · Foundations of Data Systems",
+      "title": "Encoding and Evolution",
+      "coreMentalModels": [
+        "Binary schema evolution (Protobuf, Thrift, Avro) via field tags preserves backward and forward compatibility during rolling deploys",
+        "Data flows across databases, REST/gRPC RPCs, and async event brokers"
+      ],
+      "linkedTopicIds": ["kafka-event-streaming", "l7-load-balancer"]
+    },
+    {
+      "chapter": 5,
+      "part": "II · Distributed Data",
+      "title": "Replication",
+      "coreMentalModels": [
+        "Single-leader replication lag causes read-your-writes, monotonic-read, and consistent-prefix anomalies",
+        "Multi-leader replication introduces concurrent write conflicts (LWW vs CRDTs)",
+        "Leaderless Dynamo quorums (W + R > N), sloppy quorums, and vector-clock causality"
+      ],
+      "linkedTopicIds": ["replication-and-consensus", "distributed-kv-store"]
+    },
+    {
+      "chapter": 6,
+      "part": "II · Distributed Data",
+      "title": "Partitioning",
+      "coreMentalModels": [
+        "Key-range partitioning preserves range scans but risks hot-spot skew; Hash/Consistent-Hash partitioning spreads load evenly",
+        "Secondary indexes (local document-partitioned scatter-gather vs global term-partitioned)",
+        "Fixed logical partitions/vnodes keep rebalancing safe"
+      ],
+      "linkedTopicIds": ["consistent-hashing", "sharding-and-hot-keys", "uber-rideshare"]
+    },
+    {
+      "chapter": 7,
+      "part": "II · Distributed Data",
+      "title": "Transactions",
+      "coreMentalModels": [
+        "Weak isolation stops dirty reads/writes, yet Snapshot Isolation still suffers Write Skew and Phantom Reads",
+        "True Serializability comes via single-threaded execution, 2PL, or optimistic Serializable Snapshot Isolation (SSI)"
+      ],
+      "linkedTopicIds": ["sql-acid-and-isolation", "payment-gateway", "ticketmaster-flash-sale"]
+    },
+    {
+      "chapter": 8,
+      "part": "II · Distributed Data",
+      "title": "The Trouble with Distributed Systems",
+      "coreMentalModels": [
+        "Unbounded network delays, asymmetric partitions, and stop-the-world GC pauses break wall-clock timeouts",
+        "Time-of-day NTP clocks can jump backward—never rely on wall clocks for ordering or lease safety",
+        "Monotonic fencing tokens protect resources when a paused lock holder wakes up late"
+      ],
+      "linkedTopicIds": ["replication-and-consensus", "distributed-rate-limiter", "distributed-locking-fencing"]
+    },
+    {
+      "chapter": 9,
+      "part": "II · Distributed Data",
+      "title": "Consistency and Consensus",
+      "coreMentalModels": [
+        "Linearizability (recency guarantee on a single register) vs Serializability (multi-object transaction isolation)",
+        "CAP/PACELC: partitions force choosing consistency or availability; normal operation forces latency vs consistency",
+        "Raft/Paxos consensus turns total-order broadcast and ZooKeeper/etcd coordination into safe primitives"
+      ],
+      "linkedTopicIds": ["replication-and-consensus", "cap-and-pacelc"]
+    },
+    {
+      "chapter": 10,
+      "part": "III · Derived Data",
+      "title": "Batch Processing",
+      "coreMentalModels": [
+        "Immutable inputs + deterministic transformations enable safe retries and clean reprocessing",
+        "Sort-merge / map-side joins and dataflow engines separate compute from durable state"
+      ],
+      "linkedTopicIds": ["realtime-analytics-olap"]
+    },
+    {
+      "chapter": 11,
+      "part": "III · Derived Data",
+      "title": "Stream Processing",
+      "coreMentalModels": [
+        "Append-only partitioned logs (Kafka) turn databases into streams via Change Data Capture (CDC) & Outbox",
+        "Event time vs processing time, watermarking, and idempotent sinks for effective-once semantics"
+      ],
+      "linkedTopicIds": ["kafka-event-streaming", "outbox-and-cdc"]
+    },
+    {
+      "chapter": 12,
+      "part": "III · Derived Data",
+      "title": "The Future of Data Systems",
+      "coreMentalModels": [
+        "Unbundling databases: derive caches, search indexes, and vector stores reliably from an immutable event log",
+        "End-to-end auditability, idempotent request IDs, and correctness verification across heterogeneous stores"
+      ],
+      "linkedTopicIds": ["enterprise-rag-pipeline", "chatgpt-streaming-assistant"]
+    }
+  ],
+  "pragmaticPrinciples": [
+    {
+      "id": "etc",
+      "name": "ETC (Easier To Change)",
+      "coreIdea": "Every architectural choice—coupling, data format, service boundary—is judged by whether it makes tomorrow's requirement change easier or harder.",
+      "hldApplication": "Keep schemas backward-compatible, decouple async side-effects behind event logs, and avoid leaky database assumptions in public APIs.",
+      "lldApplication": "Program to interfaces/abstractions and invert dependencies so implementations swap cleanly."
+    },
+    {
+      "id": "orthogonality",
+      "name": "Orthogonality (Eliminate Hidden Coupling)",
+      "coreIdea": "Changing one component should not ripple unexpectedly into unrelated subsystems.",
+      "hldApplication": "Isolate rate limiting, auth, caching, and business compute behind clean gateway/service seams; shard by tenant/city so Mumbai traffic never destabilizes London.",
+      "lldApplication": "Single Responsibility Principle, clean modules, and pure unit-testable domain logic."
+    },
+    {
+      "id": "reversibility",
+      "name": "Reversibility (No Final Decisions)",
+      "coreIdea": "Treat database engines, cloud vendors, and model providers as replaceable adapters written in sand—not stone.",
+      "hldApplication": "Hide storage behind domain APIs, use standard HTTP/gRPC/S3 protocols, and design model-routing gateways so SLMs and frontier LLMs swap effortlessly.",
+      "lldApplication": "Repository, Adapter, and Strategy patterns isolating volatile third-party SDKs."
+    },
+    {
+      "id": "tracer-bullets",
+      "name": "Tracer Bullets (End-to-End Thin Slices)",
+      "coreIdea": "Ship a minimal connected path from client to storage and back early so real latency, bottlenecks, and integration seams surface immediately.",
+      "hldApplication": "Walk interviews and prototypes end-to-end (Client -> Gateway -> Service -> DB -> Response) before prematurely optimizing exotic edge tiers.",
+      "lldApplication": "Build one working vertical feature with tests before expanding abstractions."
+    },
+    {
+      "id": "dry",
+      "name": "DRY (Single Authoritative Source of Truth)",
+      "coreIdea": "Every piece of knowledge or state must have one unambiguous owner; derived caches and search indexes are projections, never competing truths.",
+      "hldApplication": "Never dual-write directly from app code to Postgres + Redis/Elasticsearch without Outbox/CDC or cache invalidation rules—derive projections from the single system of record.",
+      "lldApplication": "Avoid duplicated business invariants across validators, UI, and handlers."
+    },
+    {
+      "id": "fail-fast",
+      "name": "Crash Early & Dead Programs Tell No Lies",
+      "coreIdea": "Silently swallowing corruption or hanging indefinitely causes cascading exhaustion; fail fast with bounded timeouts, circuit breakers, and DLQs.",
+      "hldApplication": "Enforce strict deadlines, reject malformed schemas to DLQs, use fencing tokens, and shed load gracefully instead of queuing until OOM.",
+      "lldApplication": "Validate preconditions loudly at boundaries; enforce invariants in constructors."
+    }
+  ]
+}

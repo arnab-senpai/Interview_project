@@ -1,0 +1,186 @@
+{
+  "id": "realtime-transport-protocols",
+  "track": "hld",
+  "category": "building-blocks",
+  "layer": 1,
+  "title": "WebSockets vs SSE vs Long Polling vs gRPC",
+  "subtitle": "Choosing bidirectional vs server-push vs binary RPC transport",
+  "difficulty": "L4-L5",
+  "estimatedMinutes": 15,
+  "overview": "Every real-time feature forces a transport choice. Short polling wastes bandwidth; Long Polling ties up HTTP handlers; Server-Sent Events (SSE) push cleanly over standard HTTP/2; WebSockets unlock full-duplex chat/gaming; and gRPC gives typed Protobuf binary RPCs for internal microservices.",
+  "firstPrinciplesStory": "You build a live auction ticker using 1-second HTTP polling. With 500,000 open tabs, you suddenly get hit by 500,000 HTTP requests every second—99% returning 'no new bid', burning TLS handshakes and JSON parsing CPU for nothing! Switching to persistent server-push cuts traffic 50x—but choosing full WebSockets where one-way SSE suffices adds sticky-session draining headaches behind L7 proxies.",
+  "adaptiveLenses": {
+    "intuition": "Short polling is calling the restaurant every 5 seconds asking 'is my food ready?'. Long polling is staying on hold until they answer, then immediately redialing. SSE is a one-way intercom where the kitchen calls out updates over your existing phone line. WebSocket is a two-way walkie-talkie. gRPC is a compressed pneumatic tube between internal factory stations.",
+    "mechanics": "Long polling holds an HTTP request open up to ~30s until an event arrives, then reconnects. SSE streams `text/event-stream` with automatic `Last-Event-ID` resume over HTTP/2 multiplexing. WebSocket upgrades HTTP/1.1 (`101 Switching Protocols`) to raw bidirectional TCP frames. gRPC uses HTTP/2 streams + compact binary Protobuf contracts.",
+    "staffTradeoffs": "Always prefer SSE over WebSockets for unidirectional feeds (LLM token streams, stock tickers, build logs) because SSE rides seamlessly on standard HTTP/2 L7 load balancers and auto-reconnects natively. Reserve WebSockets for high-frequency bidirectional frames (chat typing, multiplayer cursors) and gRPC for strongly-typed internal east-west RPCs."
+  },
+  "ddiaAnchors": [
+    {
+      "chapter": "DDIA Ch. 4 · Encoding & Service Data Flow",
+      "concept": "Binary RPC (Protobuf/gRPC) vs Text HTTP",
+      "whyItMatters": "Typed Protobuf schemas with field tags prevent breaking rolling microservice deploys and shrink wire payloads."
+    }
+  ],
+  "pragmaticTips": [
+    {
+      "principle": "Reversibility & Simplicity (Choose Boring Transport)",
+      "tip": "Don't deploy stateful WebSocket connection registries unless the client genuinely sends frequent upstream messages over the same socket.",
+      "application": "Use SSE + normal HTTP POST for LLM chat; reserve WebSockets for bi-directional apps like WhatsApp or Figma."
+    }
+  ],
+  "keyTakeaways": [
+    "SSE provides native reconnect (`Last-Event-ID`) and HTTP/2 L7 compatibility for server-to-client push.",
+    "WebSockets reduce per-frame overhead for true full-duplex chat and multiplayer collaboration.",
+    "gRPC accelerates internal service-to-service calls via Protobuf binary framing and HTTP/2 multiplexing."
+  ],
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Web / Mobile Client",
+      "sublabel": "SSE / WSS Upgrade",
+      "kind": "client",
+      "layer": 1,
+      "gridPos": { "gx": 1, "gy": 5 },
+      "specs": { "protocol": "HTTP/2 + WSS", "port": "443", "maxQpsPerNode": 20, "baseLatencyMs": 1.0, "capProfile": "N/A", "scalingAxis": "Connected users" },
+      "summary": "Maintains persistent stream for live token/message push.",
+      "whenToUse": ["Live UI updates"],
+      "failureModes": ["Mobile NAT timeouts drop idle sockets unless heartbeats run every 25–30s"]
+    },
+    {
+      "id": "edge-gw",
+      "label": "L7 Edge Gateway",
+      "sublabel": "HTTP/2 SSE & WS Proxy",
+      "kind": "api_gateway",
+      "layer": 2,
+      "gridPos": { "gx": 5, "gy": 5 },
+      "specs": { "protocol": "HTTP/2 · WS", "port": "443", "maxQpsPerNode": 80000, "baseLatencyMs": 1.0, "capProfile": "AP", "scalingAxis": "Gateway fleet" },
+      "summary": "Multiplexes SSE streams cleanly over HTTP/2 or terminates upgraded WebSocket TCP sockets.",
+      "whenToUse": ["Ingress termination"],
+      "failureModes": ["HTTP/1.1 browsers cap 6 SSE connections per domain unless HTTP/2 is enabled"]
+    },
+    {
+      "id": "stream-svc",
+      "label": "Realtime Stream Service",
+      "sublabel": "gRPC East-West Hub",
+      "kind": "compute",
+      "layer": 3,
+      "gridPos": { "gx": 9, "gy": 3 },
+      "specs": { "protocol": "gRPC / Protobuf", "port": "9090", "maxQpsPerNode": 35000, "baseLatencyMs": 2.0, "capProfile": "AP", "scalingAxis": "Horizontal pods" },
+      "summary": "Consumes backend events over typed gRPC streams and flushes frames to edge clients.",
+      "whenToUse": ["Streaming AI tokens, live telemetry, chat fan-out"],
+      "failureModes": ["Slow client read buffers bloat pod memory unless bounded write deadlines drop stalled consumers"]
+    },
+    {
+      "id": "event-bus",
+      "label": "Pub/Sub Event Bus",
+      "sublabel": "Redis / Kafka Fan-Out",
+      "kind": "queue",
+      "layer": 6,
+      "gridPos": { "gx": 9, "gy": 7 },
+      "specs": { "protocol": "RESP / Kafka", "port": "6379", "maxQpsPerNode": 200000, "baseLatencyMs": 0.5, "capProfile": "AP", "scalingAxis": "Topics / shards" },
+      "summary": "Broadcasts updates to gateway pods holding active client subscriptions.",
+      "whenToUse": ["Multi-pod subscription delivery"],
+      "failureModes": ["Missed events during brief disconnect unless client sends Last-Event-ID catchup"]
+    }
+  ],
+  "edges": [
+    { "id": "e-c-gw", "from": "client", "to": "edge-gw", "protocol": "SSE / WSS", "transport": "stream", "label": "Open persistent stream" },
+    { "id": "e-gw-svc", "from": "edge-gw", "to": "stream-svc", "protocol": "gRPC", "transport": "stream", "label": "Binary Protobuf stream" },
+    { "id": "e-bus-svc", "from": "event-bus", "to": "stream-svc", "protocol": "PubSub", "transport": "async", "label": "Push new delta" }
+  ],
+  "steps": [
+    {
+      "stepNo": 1,
+      "phaseTitle": "1. STREAM HANDSHAKE",
+      "timestampMs": 0.0,
+      "sourceNodeId": "client",
+      "targetNodeId": "edge-gw",
+      "edgeId": "e-c-gw",
+      "category": "network",
+      "protocol": "HTTP/2 SSE",
+      "info": "GET /v1/events (Accept: text/event-stream, Last-Event-ID: 401)",
+      "payloadSize": "320 B",
+      "payloadInspector": "GET /v1/events HTTP/2\nAccept: text/event-stream\nLast-Event-ID: 401",
+      "latencyDeltaMs": 4.0,
+      "inspectorNote": "SSE reuses an existing HTTP/2 stream without needing a separate TCP 101 protocol upgrade."
+    },
+    {
+      "stepNo": 2,
+      "phaseTitle": "2. INTERNAL GRPC MULTIPLEX",
+      "timestampMs": 4.0,
+      "sourceNodeId": "edge-gw",
+      "targetNodeId": "stream-svc",
+      "edgeId": "e-gw-svc",
+      "category": "read",
+      "protocol": "gRPC",
+      "info": "Edge Gateway opens compact binary gRPC server-stream to Stream Service",
+      "payloadSize": "110 B",
+      "payloadInspector": "rpc SubscribeUpdates(SubscribeReq) returns (stream EventDelta)",
+      "latencyDeltaMs": 1.0,
+      "inspectorNote": "gRPC uses binary Protobuf frames over HTTP/2—3x smaller and faster to parse than verbose JSON."
+    },
+    {
+      "stepNo": 3,
+      "phaseTitle": "3. PUSH DELTA TO CLIENT",
+      "timestampMs": 5.0,
+      "sourceNodeId": "event-bus",
+      "targetNodeId": "stream-svc",
+      "edgeId": "e-bus-svc",
+      "category": "async",
+      "protocol": "PubSub",
+      "info": "Event #402 arrives -> streamed immediately via SSE `id: 402`",
+      "payloadSize": "180 B",
+      "payloadInspector": "id: 402\nevent: price_tick\ndata: {\"symbol\":\"NVDA\",\"price\":142.10}",
+      "latencyDeltaMs": 1.5,
+      "inspectorNote": "Zero polling waste—client renders update within milliseconds of backend emission.",
+      "predictPrompt": {
+        "prompt": "Why is SSE generally preferred over WebSockets for streaming ChatGPT-style LLM token output?",
+        "hint": "Think about traffic direction per turn and how L7 HTTP/2 proxies handle connections.",
+        "reveal": "LLM generation is strictly server-to-client after the prompt POST. SSE works natively over standard HTTP/2 L7 load balancers, supports browser auto-reconnect with Last-Event-ID, and avoids WebSocket proxy timeout quirks."
+      }
+    }
+  ],
+  "chaosScenarios": [
+    {
+      "id": "mobile-disconnect-resume",
+      "title": "Mobile Network Drop & Last-Event-ID Seamless Resume",
+      "faultType": "node_down",
+      "targetNodeId": "edge-gw",
+      "triggerSummary": "Client subway tunnel drops connection for 8 seconds while events #403–#405 fire on the server.",
+      "mitigationSummary": "Browser EventSource auto-reconnects passing `Last-Event-ID: 402`; Stream Service replays missed #403–#405 from Redis/Kafka buffer before resuming live push.",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. AUTO-RECONNECT WITH CURSOR",
+          "timestampMs": 0.0,
+          "sourceNodeId": "client",
+          "targetNodeId": "edge-gw",
+          "edgeId": "e-c-gw",
+          "category": "failover",
+          "protocol": "SSE",
+          "info": "Reconnect sends Last-Event-ID: 402 -> server replays missed #403..405 cleanly",
+          "payloadSize": "340 B",
+          "payloadInspector": "Last-Event-ID: 402 -> Replay events [403, 404, 405] -> Resume live stream",
+          "latencyDeltaMs": 6.0,
+          "inspectorNote": "Pairing Last-Event-ID with a short-lived replay log makes transient disconnects invisible to users."
+        }
+      ]
+    }
+  ],
+  "tradeoffs": [
+    {
+      "option": "Server-Sent Events (SSE)",
+      "pros": ["Native HTTP/2 compatibility", "Automatic reconnect + Last-Event-ID", "Zero custom framing"],
+      "cons": ["Unidirectional server-to-client only", "Text/UTF-8 payloads (base64 needed for binary)"],
+      "bestFor": "LLM streaming, live dashboards, notifications, feeds"
+    },
+    {
+      "option": "WebSockets",
+      "pros": ["Full-duplex low-latency binary & text frames", "Minimal per-message framing overhead"],
+      "cons": ["Stateful TCP pinning complicates L7 draining & autoscaling"],
+      "bestFor": "Chat apps, multiplayer games, collaborative editing"
+    }
+  ],
+  "quizQuestionIds": ["q-rt-1", "q-rt-2"],
+  "flashcardIds": ["fc-rt-1", "fc-rt-2"]
+}

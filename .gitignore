@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite*
+.env
+.env.*
+backend/.jwt_secret
+backend/systemcraft.db
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo

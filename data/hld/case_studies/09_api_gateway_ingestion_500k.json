@@ -1,0 +1,178 @@
+{
+  "id": "api-gateway-500k-ingestion",
+  "tier": 3,
+  "title": "Design 500k RPS API Gateway & Ingestion (p99 < 50ms)",
+  "subtitle": "Cell-based blast isolation, offline JWT verify, CoDel load shedding & hedged reads",
+  "levelTag": "L5-L6",
+  "estimatedMinutes": 45,
+  "tags": ["p99 Tail Latency", "Cell Architecture", "Token Bucket", "Hedged Requests"],
+  "functionalReqs": [
+    "Terminate TLS 1.3 and verify tenant JWTs at edge PoPs without synchronous auth-database bottlenecks.",
+    "Enforce hierarchical token-bucket quotas (`HTTP 429` + jittered `Retry-After`) during 1.5M RPS flash crowds.",
+    "Execute hedged backup RPCs on idempotent reads above `p95` while shipping POST events cleanly via partitioned ingestion logs."
+  ],
+  "nonFunctionalReqs": [
+    { "metric": "Tail Latency", "target": "p99 <= 50 ms at 500k RPS", "rationale": "Parallel shard fan-out multiplies p99 slow rates via `1 - (1 - p)^K`." },
+    { "metric": "Flash-Crowd Survival", "target": "3x burst (1.5M RPS) zero OOM", "rationale": "Bounded Little's Law concurrency (`L = λ * W`) sheds excess load in <0.5ms." },
+    { "metric": "Blast Isolation", "target": "Shuffle-sharded cells limit noisy neighbors", "rationale": "One abusive tenant affects <8% of fleet combinations instead of 100%." }
+  ],
+  "estimationPreset": {
+    "dau": 40000000,
+    "actionsPerUserPerDay": 1080.0,
+    "peakMultiplier": 3.0,
+    "avgPayloadBytes": 1500,
+    "readWriteRatio": "70:30",
+    "retentionYears": 3,
+    "workedSummary": {
+      "steadyBandwidth": "500,000 RPS × 1,500 B = 750 MB/s (~6 Gbps; 18 Gbps peak 3x spike)",
+      "gatewayCores": "500k RPS / ~25k TLS RPS/vCPU -> ~90–120 vCPUs across 6 isolated regional cells",
+      "quotaRam": "10M active keys × 64 B = ~640 MB distributed Redis Token Bucket + local 50ms lease cache"
+    }
+  },
+  "coreEntities": [
+    {
+      "name": "TenantQuotaBucket",
+      "storageEngine": "Local In-Process Lease + Redis Cluster",
+      "partitionKey": "{tenant_id}",
+      "keyFields": ["tenant_id", "tokens_remaining", "refill_rate_rps", "last_refill_monotonic_ms"]
+    },
+    {
+      "name": "CellRoutingDirectory",
+      "storageEngine": "etcd Raft Config pushed to Edge memory",
+      "partitionKey": "cell_id",
+      "keyFields": ["tenant_id", "assigned_cells[2]", "waf_policy_version", "shed_threshold_ms"]
+    }
+  ],
+  "apiContracts": [
+    {
+      "method": "POST",
+      "path": "/v1/ingest/events",
+      "purpose": "Ingest telemetry batch into partitioned Kafka with `X-Deadline-Ms`, offline JWKS auth, and CoDel load shedding",
+      "idempotent": true,
+      "samplePayload": "{\"eventId\":\"evt_901\",\"tenantId\":\"t_acme\",\"payload\":{\"status\":200}}"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/query/state",
+      "purpose": "Low-latency read routed through LFU Edge Cache + hedged backup RPC after `p95` threshold",
+      "idempotent": true
+    }
+  ],
+  "explorerTopology": {
+    "id": "api-gw-500k-flow",
+    "track": "hld",
+    "category": "patterns",
+    "layer": 2,
+    "title": "500k RPS Edge Gateway & Adaptive Ingestion Flow",
+    "subtitle": "Offline JWKS -> Local Lease Quota -> CoDel Load Shedding -> Hedged Read Mesh",
+    "difficulty": "L5-L6",
+    "estimatedMinutes": 20,
+    "overview": "Tracing 500k RPS from BGP Anycast + Maglev L4 Load Balancers through stateless Rust/Envoy L7 cell gateways into hedged reads and durable async ingestion.",
+    "keyTakeaways": [
+      "Verify EdDSA/RS256 JWT tokens against cached JWKS keys locally so Auth DB outages never stall API traffic.",
+      "Amortize Redis quota RTT via 50ms local micro-leases + shed CoDel queue spikes cleanly at ingress."
+    ],
+    "nodes": [
+      {
+        "id": "client",
+        "label": "500k RPS Clients",
+        "sublabel": "HTTP/2 & HTTP/3",
+        "kind": "client",
+        "layer": 1,
+        "gridPos": { "gx": 1, "gy": 5 },
+        "specs": { "protocol": "HTTPS/3", "port": "443", "maxQpsPerNode": null, "baseLatencyMs": 4.0, "capProfile": "N/A", "scalingAxis": "Global callers" },
+        "summary": "High-concurrency edge clients multiplexing requests over HTTP/2 and QUIC.",
+        "whenToUse": ["Public & mobile ingestion APIs"],
+        "failureModes": ["Naive client retries without jitter trigger flash-crowd feedback loops"]
+      },
+      {
+        "id": "l4-maglev",
+        "label": "Anycast + Maglev L4 LB",
+        "sublabel": "Direct Server Return",
+        "kind": "load_balancer",
+        "layer": 2,
+        "gridPos": { "gx": 3, "gy": 5 },
+        "specs": { "protocol": "BGP + eBPF XDP", "port": "443", "maxQpsPerNode": 1000000, "baseLatencyMs": 0.4, "capProfile": "AP", "scalingAxis": "Consistent L4 table" },
+        "summary": "Hashes flows onto regional cell gateways in <0.5ms using kernel-bypass eBPF.",
+        "whenToUse": ["Multi-hundred-Gbps L4 traffic steering"],
+        "failureModes": ["Naive modulo hashing drops active TLS sessions during pod replacement"]
+      },
+      {
+        "id": "l7-cell",
+        "label": "Cell L7 Gateway",
+        "sublabel": "JWKS + CoDel + Leases",
+        "kind": "api_gateway",
+        "layer": 2,
+        "gridPos": { "gx": 6, "gy": 5 },
+        "specs": { "protocol": "Envoy / Rust Async", "port": "8443", "maxQpsPerNode": 30000, "baseLatencyMs": 3.0, "capProfile": "AP", "scalingAxis": "Shuffle-sharded cells" },
+        "summary": "Enforces offline JWT auth, micro-leased Token Bucket limits, and CoDel deadline load shedding.",
+        "whenToUse": ["Orthogonal multi-tenant ingress boundaries"],
+        "failureModes": ["Shared worker queues suffer noisy-neighbor cascades without cell isolation"]
+      },
+      {
+        "id": "hedged-mesh",
+        "label": "Hedged Read Cluster",
+        "sublabel": "LFU Cache + Backup RPC",
+        "kind": "cache",
+        "layer": 3,
+        "gridPos": { "gx": 9, "gy": 2 },
+        "specs": { "protocol": "gRPC + Deadline", "port": "9090", "maxQpsPerNode": 50000, "baseLatencyMs": 8.0, "capProfile": "AP", "scalingAxis": "Sharded replicas" },
+        "summary": "Serves LFU cache hits in 2ms; fires backup hedged GET if primary exceeds p95 threshold.",
+        "whenToUse": ["Strict p99 read SLAs across multi-shard backends"],
+        "failureModes": ["Unbudgeted hedging doubles load during cluster brownouts"]
+      },
+      {
+        "id": "kafka-ingest",
+        "label": "Ingestion Kafka Log",
+        "sublabel": "Bounded Backpressure",
+        "kind": "queue",
+        "layer": 6,
+        "gridPos": { "gx": 9, "gy": 8 },
+        "specs": { "protocol": "Kafka Binary", "port": "9092", "maxQpsPerNode": 120000, "baseLatencyMs": 5.0, "capProfile": "CP", "scalingAxis": "Partitions" },
+        "summary": "Decouples async burst writes orthogonally from synchronous downstream DBs.",
+        "whenToUse": ["High-volume POST ingestion absorption"],
+        "failureModes": ["Unbounded gateway buffers cause OOM crashes when brokers stall"]
+      }
+    ],
+    "edges": [
+      { "id": "e1", "from": "client", "to": "l4-maglev", "protocol": "HTTPS/3", "transport": "sync", "label": "QUIC 0-RTT" },
+      { "id": "e2", "from": "l4-maglev", "to": "l7-cell", "protocol": "TCP/XDP", "transport": "sync", "label": "Shuffle Cell Route" },
+      { "id": "e3", "from": "l7-cell", "to": "hedged-mesh", "protocol": "gRPC", "transport": "sync", "label": "Hedged Read" },
+      { "id": "e4", "from": "l7-cell", "to": "kafka-ingest", "protocol": "Kafka", "transport": "async", "label": "Append Ingest" }
+    ],
+    "steps": [
+      { "stepNo": 1, "phaseTitle": "Anycast & Maglev Routing", "timestampMs": 0, "sourceNodeId": "client", "targetNodeId": "l4-maglev", "edgeId": "e1", "category": "network", "protocol": "HTTP/3", "info": "QUIC packet routed to closest healthy edge PoP.", "payloadSize": "1.5 KB", "payloadInspector": "Src: Anycast PoP\nProtocol: QUIC / TLS 1.3 0-RTT", "latencyDeltaMs": 4.0, "inspectorNote": "QUIC removes TCP Head-of-Line stalls over lossy mobile links." },
+      { "stepNo": 2, "phaseTitle": "Shuffle-Sharded Cell Dispatch", "timestampMs": 4, "sourceNodeId": "l4-maglev", "targetNodeId": "l7-cell", "edgeId": "e2", "category": "network", "protocol": "eBPF XDP", "info": "Maglev hashes flow onto tenant's 2-of-16 isolated cells.", "payloadSize": "1.5 KB", "payloadInspector": "Tenant: t_acme -> Cells [C3, C11]\nOffline JWKS Verify: PASS (0.2ms)", "latencyDeltaMs": 2.0, "inspectorNote": "Local JWKS verification avoids calling a central auth DB 500k times per second." },
+      { "stepNo": 3, "phaseTitle": "Hedged Read Tail Mitigation", "timestampMs": 6, "sourceNodeId": "l7-cell", "targetNodeId": "hedged-mesh", "edgeId": "e3", "category": "read", "protocol": "gRPC", "info": "Primary replica > p95 (18ms) due to GC; gateway fires backup RPC and completes in 24ms total.", "payloadSize": "1.2 KB", "payloadInspector": "Replica-1: stalled (GC)\nHedged Replica-2: 200 OK in 6ms (budget 2% QPS)", "latencyDeltaMs": 18.0, "inspectorNote": "Idempotent hedged requests slash p99.9 tail spikes while costing <2% extra read traffic." },
+      { "stepNo": 4, "phaseTitle": "Bounded Async Event Ingestion", "timestampMs": 24, "sourceNodeId": "l7-cell", "targetNodeId": "kafka-ingest", "edgeId": "e4", "category": "write", "protocol": "Kafka", "info": "Writes ingestion batch to Kafka partition within strict `X-Deadline-Ms = 50`.", "payloadSize": "1.5 KB", "payloadInspector": "Kafka acks=all | latency=+5ms\nTotal E2E p99: 29ms (< 50ms SLA)", "latencyDeltaMs": 5.0, "inspectorNote": "Keeps gateway decoupled cleanly from slow analytical/DB sinks." }
+    ],
+    "chaosScenarios": [
+      {
+        "id": "chaos-flash-spike",
+        "title": "1.5M RPS Flash-Crowd + CoDel Shedding",
+        "faultType": "qps_spike",
+        "targetNodeId": "l7-cell",
+        "triggerSummary": "Flash crowd surges ingress to 1.5M RPS; downstream queue wait exceeds CoDel 12ms sojourn threshold.",
+        "mitigationSummary": "Gateway sheds low-priority excess requests in <0.4ms with `429 Retry-After` jitter while keeping critical calls under 38ms p99.",
+        "steps": [
+          { "stepNo": 1, "phaseTitle": "CoDel Sojourn Breach Detected", "timestampMs": 0, "sourceNodeId": "l4-maglev", "targetNodeId": "l7-cell", "edgeId": "e2", "category": "failover", "protocol": "CoDel Guard", "info": "Inflight concurrency crosses Little's Law knee; low-tier calls receive `429 Too Many Requests` + jittered `Retry-After`.", "payloadSize": "260 B", "payloadInspector": "HTTP/2 429\nRetry-After: 4s + random(0..2s)\nHealthy Tier p99 preserved at 36ms!", "latencyDeltaMs": 0.5, "inspectorNote": "Failing fast before allocating downstream pools prevents total cluster collapse." }
+        ]
+      }
+    ],
+    "tradeoffs": [
+      { "option": "Local Micro-Lease Quota + Async Redis Sync", "pros": ["Sub-0.2ms local quota checks", "Gateway survives Redis blips temporarily"], "cons": ["~2-5% slight quota overshoot tolerance across pods during bursts"], "bestFor": "High-QPS API gateways (500k+ RPS)" }
+    ]
+  },
+  "deepDives": [
+    { "title": "Little's Law & Adaptive CoDel Load Shedding", "bottleneck": "Unbounded queues blow past 50ms SLA during 1.5M RPS bursts even if CPU isn't 100%.", "solution": "Track queue sojourn latency (`CoDel`) and dynamically cap inflight requests per cell, returning `429/503` immediately with randomized jitter.", "tradeoff": "Rejecting excess non-critical requests cleanly preserves sub-50ms SLA for admitted requests." },
+    { "title": "Cell Shuffle-Sharding Blast Containment", "bottleneck": "Global worker pools allow one noisy tenant or buggy retry loop to take down 100% of users.", "solution": "Map tenants deterministically into 2-of-16 orthogonal cells via Maglev + etcd cell directory.", "tradeoff": "Marginally lower bin-packing efficiency in exchange for mathematical tenant isolation." }
+  ],
+  "rubricChecklist": [
+    { "phase": "Load Math & Tail SLAs", "weight": 25, "criteria": ["Calculates 500k->1.5M RPS bandwidth and explains parallel fan-out p99 amplification"] },
+    { "phase": "Edge Security & Quotas", "weight": 25, "criteria": ["Specifies offline JWKS cache verification and local micro-leased Token Bucket rate limiting"] },
+    { "phase": "Tail Mitigation & Shedding", "weight": 25, "criteria": ["Applies hedged reads (bounded retry budget) and CoDel/Little's Law fast fail-over shedding"] },
+    { "phase": "Blast Radius & Reversibility", "weight": 25, "criteria": ["Uses shuffle-sharded cells (TPP Orthogonality) and decouples vendor policies behind interfaces"] }
+  ],
+  "quizQuestionIds": ["q-gw-1", "q-gw-2"],
+  "flashcardIds": ["fc-gw-1", "fc-gw-2"]
+}

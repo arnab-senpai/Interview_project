@@ -1,0 +1,257 @@
+{
+  "id": "enterprise-rag-pipeline",
+  "track": "hld",
+  "category": "ai-infra",
+  "layer": 7,
+  "title": "Enterprise RAG Pipeline & LLM Gateway",
+  "subtitle": "Semantic caching, ACL-filtered hybrid retrieval, reranking & SLM fallback",
+  "difficulty": "L5-L6",
+  "estimatedMinutes": 22,
+  "overview": "Modern 2025–2026 GenAI system design blends deterministic security boundaries (RBAC/ACL enforcement, TPM rate limits, PII guardrails) with probabilistic retrieval and hardware-constrained GPU inference. A production RAG pipeline enforces permissions BEFORE retrieval, fuses BM25 + HNSW vector search, reranks top candidates, and streams tokens via SSE.",
+  "firstPrinciplesStory": "You plug an LLM straight into company docs using naive vector search. On day one, two serious bugs surface: an intern asks about executive compensation and the LLM leaks restricted HR chunks filtered out *too late*; then a search for error code `ERR_9914_TIMEOUT` fails completely because pure cosine embeddings miss exact alphanumeric strings! Treating retrieval, ACLs, semantic caching, and GPU inference as a composable deterministic-plus-probabilistic pipeline (DDIA Ch. 12 unbundled derived views!) turns a fragile demo into a trustworthy system.",
+  "adaptiveLenses": {
+    "intuition": "Think of Enterprise RAG like an open-book exam with a strict security librarian: before the smart analyst (LLM) sees a single page, the librarian verifies your badge (ACL pre-filter), pulls exact keyword matches AND conceptual matches (BM25 + Vector), checks a sticky note of recently verified identical questions (Semantic Cache), and trims 50 pages down to the best 6 before writing a cited reply.",
+    "mechanics": "AI Gateway runs fast PII/injection guardrails and reserves dual RPM+TPM quotas in Redis. ACL-hashed semantic cache short-circuits repeats; otherwise dense HNSW + sparse BM25 retrieve with mandatory `acl IN user_groups` pre-filter, fused via Reciprocal Rank Fusion (RRF), pruned by a Cross-Encoder Reranker, and streamed via SSE from a continuous-batching vLLM cluster.",
+    "staffTradeoffs": "Keep probabilistic LLMs strictly outside deterministic state boundaries: never let unvalidated LLM output mutate permissions or skip ACL pre-filters. Balance TTFT (<400ms) vs recall by capping reranker candidates (top 50 -> top 6) and maintaining a quantized 8B SLM fallback for GPU KV-cache overload."
+  },
+  "ddiaAnchors": [
+    {
+      "chapter": "DDIA Ch. 12 · Unbundling Derived Views",
+      "concept": "Keeping Search, Vector & Cache Indexes Synchronized via Streams",
+      "whyItMatters": "Document updates and ACL permission changes must propagate reliably from source-of-truth permissions into vector & BM25 indexes via CDC/streams."
+    }
+  ],
+  "pragmaticTips": [
+    {
+      "principle": "Reversibility (Model-Agnostic AI Gateway)",
+      "tip": "Wrap inference providers behind a unified gateway contract so swapping frontier models, open-weight SLMs, or embedding versions requires zero app rewrites.",
+      "application": "Route routine traffic to quantized SLMs when GPU queues spike while preserving the same SSE & citation contract."
+    }
+  ],
+  "keyTakeaways": [
+    "Always push user ACL/group filters INSIDE the vector/BM25 query predicate—never post-filter after LLM generation.",
+    "Semantic caching bypasses expensive GPU prefill/decode when cosine similarity >= 0.95 for identical tenant scope.",
+    "Graceful degradation routes non-critical or overloaded traffic from frontier models to a quantized SLM when GPU KV-cache saturates."
+  ],
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Enterprise User",
+      "sublabel": "SSE Stream · Dept=Eng",
+      "kind": "client",
+      "layer": 1,
+      "gridPos": { "gx": 1, "gy": 5 },
+      "specs": { "protocol": "HTTPS / SSE", "port": "443", "maxQpsPerNode": 20, "baseLatencyMs": 1.0, "capProfile": "N/A", "scalingAxis": "Users" },
+      "summary": "Authenticated employee expecting cited answers with TTFT < 500ms.",
+      "whenToUse": ["Internal knowledge search, customer copilot"],
+      "failureModes": ["Streaming disconnect loses partial generation if unpersisted"]
+    },
+    {
+      "id": "ai-gateway",
+      "label": "AI Gateway + Guardrails",
+      "sublabel": "TPM Limit · PII/Injection",
+      "kind": "api_gateway",
+      "layer": 7,
+      "gridPos": { "gx": 3, "gy": 5 },
+      "specs": { "protocol": "HTTP/2 + SSE", "port": "443", "maxQpsPerNode": 25000, "baseLatencyMs": 12.0, "capProfile": "AP", "scalingAxis": "Stateless gateway fleet" },
+      "summary": "Enforces Token-Per-Minute quotas, scans for prompt injections/PII, and extracts user ACL groups.",
+      "whenToUse": ["All enterprise LLM ingress traffic"],
+      "failureModes": ["Heavy classifier guardrails inflate TTFT if run synchronously without small fast models"]
+    },
+    {
+      "id": "semantic-cache",
+      "label": "Semantic Cache",
+      "sublabel": "Redis Vector · cos >= 0.95",
+      "kind": "cache",
+      "layer": 3,
+      "gridPos": { "gx": 5, "gy": 2 },
+      "specs": { "protocol": "RESP3", "port": "6379", "maxQpsPerNode": 40000, "baseLatencyMs": 8.0, "capProfile": "AP", "scalingAxis": "Sharded in-mem HNSW" },
+      "summary": "Caches `(tenant_acl_hash, query_embedding) -> cited_answer` to slash LLM cost & latency by 30–60%.",
+      "whenToUse": ["Repeated FAQ or team knowledge queries"],
+      "failureModes": ["Returning cross-tenant cached answers if ACL scope isn't part of the cache key!"]
+    },
+    {
+      "id": "hybrid-retriever",
+      "label": "Hybrid Retriever (BM25+HNSW)",
+      "sublabel": "Vector DB + ACL Filter",
+      "kind": "vector_db",
+      "layer": 4,
+      "gridPos": { "gx": 6, "gy": 6 },
+      "specs": { "protocol": "gRPC", "port": "6334", "maxQpsPerNode": 8000, "baseLatencyMs": 35.0, "capProfile": "AP", "scalingAxis": "Sharded collections + HNSW RAM" },
+      "summary": "Runs sparse lexical BM25 + dense HNSW vector search with mandatory `acl_group IN user_groups` pre-filter, fused via RRF.",
+      "whenToUse": ["Exact keyword + semantic recall across PDFs, wikis, tickets"],
+      "failureModes": ["Strict selective ACL post-filtering collapses recall unless pre-filtered inside HNSW"]
+    },
+    {
+      "id": "reranker",
+      "label": "Cross-Encoder Reranker",
+      "sublabel": "Top 50 -> Top 6 Chunks",
+      "kind": "compute",
+      "layer": 7,
+      "gridPos": { "gx": 8, "gy": 4 },
+      "specs": { "protocol": "gRPC", "port": "8081", "maxQpsPerNode": 1500, "baseLatencyMs": 45.0, "capProfile": "N/A", "scalingAxis": "T4/L4 GPU batching" },
+      "summary": "Scores top-50 fused candidates precisely so only high-signal grounded chunks enter the LLM context window.",
+      "whenToUse": ["Reducing hallucination & prompt token bloat"],
+      "failureModes": ["Latency scales linearly if too many candidates are passed"]
+    },
+    {
+      "id": "llm-cluster",
+      "label": "LLM GPU Pool (vLLM)",
+      "sublabel": "PagedAttention · 48 TPS",
+      "kind": "gpu_cluster",
+      "layer": 7,
+      "gridPos": { "gx": 10, "gy": 6 },
+      "specs": { "protocol": "gRPC / SSE", "port": "8000", "maxQpsPerNode": 120, "baseLatencyMs": 180.0, "capProfile": "N/A", "scalingAxis": "H100/B200 replicas + SLM fallback" },
+      "summary": "Executes continuous batching with KV-cache block sharing and streams grounded tokens + citations.",
+      "whenToUse": ["High-throughput multi-tenant LLM serving"],
+      "failureModes": ["VRAM OOM preemption on sudden long-context prompt spikes"]
+    }
+  ],
+  "edges": [
+    { "id": "e-c-gw", "from": "client", "to": "ai-gateway", "protocol": "HTTPS/SSE", "transport": "stream", "label": "POST /v1/ask" },
+    { "id": "e-gw-sc", "from": "ai-gateway", "to": "semantic-cache", "protocol": "RESP3", "transport": "sync", "label": "ACL-Scoped Vector Lookup" },
+    { "id": "e-gw-ret", "from": "ai-gateway", "to": "hybrid-retriever", "protocol": "gRPC", "transport": "sync", "label": "Hybrid BM25+ANN + ACL" },
+    { "id": "e-ret-rr", "from": "hybrid-retriever", "to": "reranker", "protocol": "gRPC", "transport": "sync", "label": "Top-50 RRF Candidates" },
+    { "id": "e-rr-llm", "from": "reranker", "to": "llm-cluster", "protocol": "gRPC/SSE", "transport": "stream", "label": "Top-6 Grounded Prompt" }
+  ],
+  "steps": [
+    {
+      "stepNo": 1,
+      "phaseTitle": "1. GUARDRAIL & TPM QUOTA",
+      "timestampMs": 0.0,
+      "sourceNodeId": "client",
+      "targetNodeId": "ai-gateway",
+      "edgeId": "e-c-gw",
+      "category": "llm",
+      "protocol": "HTTPS/SSE",
+      "info": "Prompt passes injection classifier; TPM bucket reserves 2,500 tokens",
+      "payloadSize": "1.2 KB",
+      "payloadInspector": "User: eng_42 | ACLs: [eng, all-staff] | TPM Remaining: 184,000",
+      "latencyDeltaMs": 12.0,
+      "inspectorNote": "Deterministic auth & fast guardrail checks run before touching vector stores or expensive GPUs."
+    },
+    {
+      "stepNo": 2,
+      "phaseTitle": "2. ACL-SCOPED SEMANTIC CACHE MISS",
+      "timestampMs": 12.0,
+      "sourceNodeId": "ai-gateway",
+      "targetNodeId": "semantic-cache",
+      "edgeId": "e-gw-sc",
+      "category": "cache_miss",
+      "protocol": "RESP3",
+      "info": "Best cosine match = 0.84 (< 0.95 threshold) within user's ACL hash -> Miss",
+      "payloadSize": "6.1 KB",
+      "payloadInspector": "QueryVec[1536] | ScopeFilter: acl_hash=9a21f -> max_sim=0.84 -> MISS",
+      "latencyDeltaMs": 8.0,
+      "inspectorNote": "Scoping semantic cache by ACL hash guarantees confidential HR/finance answers never leak to unauthorized employees."
+    },
+    {
+      "stepNo": 3,
+      "phaseTitle": "3. HYBRID RETRIEVAL (BM25 + HNSW)",
+      "timestampMs": 20.0,
+      "sourceNodeId": "ai-gateway",
+      "targetNodeId": "hybrid-retriever",
+      "edgeId": "e-gw-ret",
+      "category": "read",
+      "protocol": "gRPC",
+      "info": "Dense HNSW + Sparse BM25 fused via RRF with pre-filter `acl IN [eng, all-staff]` -> 50 chunks",
+      "payloadSize": "48 KB",
+      "payloadInspector": "Filter: metadata.acl ANY ['eng','all-staff'] | Fusion: Reciprocal Rank Fusion (k=60)",
+      "latencyDeltaMs": 35.0,
+      "inspectorNote": "Hybrid search captures exact error codes/acronyms (BM25) AND conceptual phrasing (Dense Vector).",
+      "predictPrompt": {
+        "prompt": "Why does enforcing ACL permissions inside the vector/BM25 query (`acl IN user_groups`) matter far more than filtering unauthorized results *after* retrieving top-10 matches?",
+        "hint": "What happens if all top-10 semantic matches belong to an executive HR folder the caller cannot read?",
+        "reveal": "Post-filtering leaves 0 allowed chunks (empty recall failure!) AND risks leaking confidential snippets into logs, caches, or prompt windows. Pre-filtering inside the index guarantees both security isolation and full top-K permitted recall."
+      }
+    },
+    {
+      "stepNo": 4,
+      "phaseTitle": "4. CROSS-ENCODER RERANKING",
+      "timestampMs": 55.0,
+      "sourceNodeId": "hybrid-retriever",
+      "targetNodeId": "reranker",
+      "edgeId": "e-ret-rr",
+      "category": "read",
+      "protocol": "gRPC",
+      "info": "50 candidates pruned to top 6 highest-relevance passages with doc_id citations",
+      "payloadSize": "9.4 KB",
+      "payloadInspector": "Kept 6/50 chunks (scores 0.94..0.81) -> saves ~4,200 context tokens",
+      "latencyDeltaMs": 45.0,
+      "inspectorNote": "Trimming irrelevant chunks reduces TTFT, lowers inference cost, and sharply improves answer faithfulness."
+    },
+    {
+      "stepNo": 5,
+      "phaseTitle": "5. STREAMING LLM GENERATION (SSE)",
+      "timestampMs": 100.0,
+      "sourceNodeId": "reranker",
+      "targetNodeId": "llm-cluster",
+      "edgeId": "e-rr-llm",
+      "category": "llm",
+      "protocol": "gRPC/SSE",
+      "info": "First token arrives at 280ms total TTFT; output moderation + citation tags streamed",
+      "payloadSize": "3.8 KB",
+      "payloadInspector": "data: {\"token\":\"Per [doc:runbook-14], ...\", \"ttft_ms\":280, \"tps\":52}",
+      "latencyDeltaMs": 180.0,
+      "inspectorNote": "Continuous batching and prefix caching on the system prompt keep TTFT well under the 500ms interactive UX budget."
+    }
+  ],
+  "chaosScenarios": [
+    {
+      "id": "gpu-kv-saturation-slm-fallback",
+      "title": "Frontier GPU KV-Cache Saturation -> SLM Model Routing Fallback",
+      "faultType": "gpu_saturation",
+      "targetNodeId": "llm-cluster",
+      "triggerSummary": "H100 frontier pool hits 98% KV-cache HBM utilization during a company all-hands traffic surge.",
+      "mitigationSummary": "AI Gateway sheds heavy frontier routing for standard Q&A, downshifting to an 8B quantized SLM pool and serving semantic cache hits.",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. KV-CACHE PRESSURE DETECTED",
+          "timestampMs": 0.0,
+          "sourceNodeId": "ai-gateway",
+          "targetNodeId": "llm-cluster",
+          "edgeId": "e-rr-llm",
+          "category": "failover",
+          "protocol": "gRPC",
+          "info": "Frontier pool kv_cache_usage=98%, queue_ttft=2,400ms (> SLO 500ms)",
+          "payloadSize": "128 B",
+          "payloadInspector": "LoadSignal: frontier-70b saturated -> Trigger ModelRouter Fallback Policy",
+          "latencyDeltaMs": 5.0,
+          "inspectorNote": "Letting queues pile up causes cascading client timeouts and wasted compute on abandoned requests."
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "2. GRACEFUL DEGRADATION TO 8B SLM",
+          "timestampMs": 5.0,
+          "sourceNodeId": "reranker",
+          "targetNodeId": "llm-cluster",
+          "edgeId": "e-rr-llm",
+          "category": "llm",
+          "protocol": "gRPC/SSE",
+          "info": "Routed to FP8 8B SLM fallback with top-4 chunks -> TTFT restored to 190ms",
+          "payloadSize": "2.9 KB",
+          "payloadInspector": "Model: llama-3-8b-fp8-fallback | x-degraded-mode: slm-fast-path | ttft_ms: 190",
+          "latencyDeltaMs": 140.0,
+          "inspectorNote": "Grounded with top reranked chunks, a smaller SLM still gives accurate cited answers at 1/8th GPU memory."
+        }
+      ]
+    }
+  ],
+  "tradeoffs": [
+    {
+      "option": "Hybrid Retrieval (BM25 + Dense Vector) + Reranker",
+      "pros": ["High recall on both exact IDs/terms and semantic intent", "Stronger grounding & lower hallucination"],
+      "cons": ["Adds ~40–60ms retrieval + rerank latency", "Requires maintaining both inverted and HNSW indices"],
+      "bestFor": "Production enterprise RAG over technical docs, policies, and tickets"
+    },
+    {
+      "option": "Fine-Tuning Only (No RAG)",
+      "pros": ["Adapts tone/domain formatting cleanly", "No retrieval hop"],
+      "cons": ["Cannot reflect real-time doc edits or per-user ACL permissions", "No verifiable citations"],
+      "bestFor": "Style/format specialization—not dynamic factual grounding"
+    }
+  ],
+  "quizQuestionIds": ["q-rag-1", "q-rag-2"],
+  "flashcardIds": ["fc-rag-1", "fc-rag-2"]
+}

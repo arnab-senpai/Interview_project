@@ -1,0 +1,247 @@
+{
+  "version": "1.0.0",
+  "patterns": [
+    {
+      "id": "realtime-push-updates",
+      "name": "Real-Time Push & Presence",
+      "category": "Communication",
+      "summary": "Maintain persistent or long-lived server connections to push state mutations with sub-second latency instead of wasteful short polling.",
+      "triggerSignals": [
+        "Live chat, typing indicators, online presence",
+        "Real-time driver GPS tracking or live scoreboards",
+        "Streaming LLM token output"
+      ],
+      "coreComponents": [
+        "WebSocket / SSE Gateway Fleet",
+        "Sticky Session / Connection Registry (Redis)",
+        "Pub-Sub Fan-Out Bus (Redis Pub/Sub or Kafka)"
+      ],
+      "commonPitfalls": [
+        "Storing connection maps only in local process memory without a shared session registry",
+        "Using full bidirectional WebSockets when unidirectional SSE works behind standard HTTP/2 proxies"
+      ],
+      "relatedCaseStudies": ["whatsapp-chat", "uber-rideshare", "chatgpt-streaming-assistant"]
+    },
+    {
+      "id": "heavy-write-ingestion",
+      "name": "High-Throughput Write Buffering & Ingestion",
+      "category": "Throughput",
+      "summary": "Protect transactional or analytical stores from write spikes by absorbing events into partitioned logs and flushing sequentially in batches.",
+      "triggerSignals": [
+        "Metrics, telemetry, audit logs, clickstreams",
+        "100k+ writes/sec with tolerable sub-second to few-second visibility lag"
+      ],
+      "coreComponents": [
+        "Stateless Ingestion Edge",
+        "Partitioned Append Log (Kafka)",
+        "Batch Consumer Workers + LSM/TSDB/OLAP Sink"
+      ],
+      "commonPitfalls": [
+        "Synchronous row-by-row SQL inserts on hot request threads",
+        "Partitioning on a low-cardinality key causing one broker to saturate"
+      ],
+      "relatedCaseStudies": ["metrics-monitoring", "uber-rideshare", "realtime-analytics-olap"]
+    },
+    {
+      "id": "timeline-fanout",
+      "name": "Hybrid Fan-Out (Write vs Read)",
+      "category": "Feeds & Social",
+      "summary": "Pre-compute timelines in Redis for regular users on write, while merging celebrity posts on read to prevent N-million write amplification.",
+      "triggerSignals": [
+        "Home timelines, activity streams, followed creator feeds",
+        "Extreme follower skew (average 200 vs celebrities with 50M+)"
+      ],
+      "coreComponents": [
+        "Async Fan-Out Worker Pool",
+        "Redis Sorted-Set Timeline Cache",
+        "Celebrity Post Merge Layer + Social Graph Service"
+      ],
+      "commonPitfalls": [
+        "Pure fan-out-on-write causing minutes-long lag when a celebrity posts",
+        "Pure fan-out-on-read slamming follower DB joins on every feed open"
+      ],
+      "relatedCaseStudies": ["news-feed", "instagram-media"]
+    },
+    {
+      "id": "geospatial-proximity",
+      "name": "Geo-Proximity & Dynamic Spatial Indexing",
+      "category": "Location",
+      "summary": "Project 2D latitude/longitude coordinates onto 1D cell IDs (Geohash / Uber H3 / Quadtree) so nearest-neighbor lookups run in O(1)/O(log N) memory.",
+      "triggerSignals": [
+        "Find nearby drivers, restaurants, or matches within R km",
+        "Moving entities updating coordinates every few seconds"
+      ],
+      "coreComponents": [
+        "H3 / Geohash Spatial Indexer",
+        "In-Memory Geo Store (Redis GEO / Sharded Region Grid)",
+        "High-Write Location Stream"
+      ],
+      "commonPitfalls": [
+        "Running expensive SQL bounding-box trigonometric queries at high ping rates",
+        "Boundary edge misses without querying the 8 surrounding neighbor cells"
+      ],
+      "relatedCaseStudies": ["uber-rideshare"]
+    },
+    {
+      "id": "distributed-unique-id",
+      "name": "Distributed Unique ID Generation (Snowflake)",
+      "category": "Primitives",
+      "summary": "Generate globally unique, roughly time-sortable 64-bit IDs locally on worker nodes without cross-node coordination.",
+      "triggerSignals": [
+        "Sharded databases needing B-Tree friendly primary keys",
+        "High-rate entity creation without a central auto-increment bottleneck"
+      ],
+      "coreComponents": [
+        "41-bit Timestamp + 10-bit Machine/Shard ID + 12-bit Sequence",
+        "NTP Clock-Skew Guard",
+        "Worker ID Lease Registry (ZooKeeper / etcd)"
+      ],
+      "commonPitfalls": [
+        "Using random UUIDv4 as a clustered primary key, causing severe B-Tree page splits",
+        "Ignoring backward NTP clock jumps that can emit duplicate IDs"
+      ],
+      "relatedCaseStudies": ["unique-id-generator", "news-feed", "whatsapp-chat"]
+    },
+    {
+      "id": "key-shortening-kgs",
+      "name": "Collision-Free Short Key Generation",
+      "category": "Addressing",
+      "summary": "Generate compact URL/token keys via Base62 encoding over distributed counters or pre-generated Key Generation Service (KGS) batches.",
+      "triggerSignals": [
+        "Short links, invite codes, tracking tokens",
+        "Zero-retry uniqueness requirement under concurrency"
+      ],
+      "coreComponents": [
+        "Base62 Encoder / KGS Pre-Allocated Key Pool",
+        "In-Memory Unused/Used Key Leases",
+        "Hot Redirect Cache"
+      ],
+      "commonPitfalls": [
+        "Hashing + naive DB retry loops under high write concurrency",
+        "Returning HTTP 301 permanently when analytics or link mutation is required"
+      ],
+      "relatedCaseStudies": ["url-shortener"]
+    },
+    {
+      "id": "financial-double-entry-ledger",
+      "name": "Transactional Double-Entry Ledger & Idempotency",
+      "category": "Correctness",
+      "summary": "Guarantee zero lost or duplicated money using immutable debit/credit ledger rows, ACID transactions, and client-supplied idempotency keys.",
+      "triggerSignals": [
+        "Payments, wallets, payouts, invoicing, billing",
+        "External bank/PSP network timeouts where retries are mandatory"
+      ],
+      "coreComponents": [
+        "Idempotency Key Store",
+        "ACID Double-Entry Ledger (Postgres)",
+        "Outbox + Async PSP Reconciliation Pipeline"
+      ],
+      "commonPitfalls": [
+        "Updating mutable 'balance' columns directly without an auditable immutable journal",
+        "Lacking idempotency keys on POST /charges during mobile network drops"
+      ],
+      "relatedCaseStudies": ["payment-gateway"]
+    },
+    {
+      "id": "collaborative-crdt-ot",
+      "name": "Collaborative Real-Time State Convergence (OT / CRDT)",
+      "category": "Sync",
+      "summary": "Allow multiple users to edit shared state concurrently offline or online and converge deterministically without locking documents.",
+      "triggerSignals": [
+        "Multi-cursor document editors, whiteboards, design canvases",
+        "Offline edits merging back upon reconnection"
+      ],
+      "coreComponents": [
+        "WebSocket Sync Gateway",
+        "CRDT / Operational Transformation Engine",
+        "Snapshot Compaction + Operation Log"
+      ],
+      "commonPitfalls": [
+        "Last-write-wins overwriting concurrent edits silently",
+        "Unbounded CRDT tombstone memory growth without periodic snapshot compaction"
+      ],
+      "relatedCaseStudies": ["collaborative-docs"]
+    },
+    {
+      "id": "media-dag-abr-cdn",
+      "name": "Async Media Chunking, DAG Transcoding & Edge CDN",
+      "category": "Media",
+      "summary": "Split large uploads into chunks, transcode multi-resolution segments in parallel via DAG workers, and serve HLS/DASH segments from edge CDNs.",
+      "triggerSignals": [
+        "Video/audio streaming, large file uploads, image thumbnailing",
+        "Global viewer base with heterogeneous bandwidth"
+      ],
+      "coreComponents": [
+        "Pre-Signed Object Store Upload (S3)",
+        "Chunked DAG Transcoding Workers",
+        "Origin Shield + Multi-Tier Pull CDN"
+      ],
+      "commonPitfalls": [
+        "Proxying multi-GB video uploads through application API servers",
+        "Serving monolithic MP4s instead of adaptive bitrate (ABR) chunks"
+      ],
+      "relatedCaseStudies": ["video-streaming", "dropbox-sync", "instagram-media"]
+    },
+    {
+      "id": "flash-sale-concurrency",
+      "name": "Flash-Sale Traffic Shaping & Atomic Inventory Hold",
+      "category": "Concurrency",
+      "summary": "Absorb extreme spike traffic in a virtual waiting room and enforce short-lived atomic seat/stock locks in memory before checkout.",
+      "triggerSignals": [
+        "Concert tickets, limited product drops, flash deals",
+        "100k users competing for 500 inventory units within seconds"
+      ],
+      "coreComponents": [
+        "Edge Virtual Waiting Room / Queue Token",
+        "Redis Atomic Lua Hold with TTL",
+        "ACID Checkout Finalization + Expiry Sweeper"
+      ],
+      "commonPitfalls": [
+        "Letting all waiting users hit primary SQL row locks simultaneously",
+        "Forgetting TTL expiration cleanup when a user abandons checkout"
+      ],
+      "relatedCaseStudies": ["ticketmaster-flash-sale"]
+    },
+    {
+      "id": "multi-stage-search-ranking",
+      "name": "Two-Stage Retrieval & Re-Ranking Funnel",
+      "category": "Search & RecSys",
+      "summary": "Combine fast parallel recall (inverted index + ANN vector search) over millions of items with a precision ML/cross-encoder re-ranker on top-K.",
+      "triggerSignals": [
+        "Full-text search, e-commerce ranking, personalized recommendations",
+        "Sub-100ms latency budget across tens of millions of documents"
+      ],
+      "coreComponents": [
+        "Query Parser & Expansion",
+        "Scatter-Gather Recall (BM25 + HNSW)",
+        "Feature Store + Lightweight Re-Ranker"
+      ],
+      "commonPitfalls": [
+        "Running heavy neural cross-encoders over the full corpus instead of top-100 candidates",
+        "Stale index sync lag between primary DB mutations and search shards"
+      ],
+      "relatedCaseStudies": ["distributed-search-engine", "enterprise-rag-system"]
+    },
+    {
+      "id": "production-rag-llm-gateway",
+      "name": "Production AI Gateway, Semantic Cache & Hybrid RAG",
+      "category": "GenAI Infra",
+      "summary": "Wrap probabilistic LLM inference with deterministic input/output guardrails, token-aware rate limits, semantic caching, ACL-scoped hybrid retrieval, and SLM fallbacks.",
+      "triggerSignals": [
+        "Enterprise Q&A assistants, AI answer engines, high-cost LLM APIs",
+        "Strict latency (TTFT), permission safety, and GPU budget constraints"
+      ],
+      "coreComponents": [
+        "AI Gateway (TPM/RPM Limiter + Guardrails)",
+        "Semantic Vector Cache",
+        "ACL-Filtered Hybrid Retriever + Reranker",
+        "Continuous-Batching GPU Pool + SLM Fallback"
+      ],
+      "commonPitfalls": [
+        "Retrieving private chunks first and filtering permissions post-LLM generation (data leak risk)",
+        "Rate-limiting only by RPM when single long-context prompts exhaust GPU KV-cache"
+      ],
+      "relatedCaseStudies": ["chatgpt-streaming-assistant", "enterprise-rag-system", "llm-inference-platform"]
+    }
+  ]
+}

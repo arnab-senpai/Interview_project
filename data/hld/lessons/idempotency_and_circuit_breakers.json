@@ -1,0 +1,201 @@
+{
+  "id": "idempotency-and-circuit-breakers",
+  "track": "hld",
+  "category": "patterns",
+  "layer": 7,
+  "title": "Idempotency Keys, Circuit Breakers & Backoff Jitter",
+  "subtitle": "Preventing duplicate charges and cascading retry storms",
+  "difficulty": "L4-L5",
+  "estimatedMinutes": 16,
+  "overview": "Networks are unreliable: mobile users tap Pay twice or experience a timeout *after* the server processed the charge, while blind client retries multiply an upstream blip into a 10x retry storm that prevents recovery. Idempotency keys make retries safe, while Circuit Breakers + Exponential Backoff with Full Jitter protect failing dependencies.",
+  "firstPrinciplesStory": "A third-party Fraud API degrades from 40ms to 5s latency. Your Checkout service times out at 2s and immediately retries 3 times—tripling traffic onto the struggling Fraud API! Meanwhile, every Checkout pod ties up all worker threads waiting on 2s timeouts, cascading the outage across your entire site, and anxious customers hit 'Pay' again getting double-charged! Bounded timeouts, Circuit Breakers, Jittered Backoff, and Idempotency Keys turn partial failures into graceful containment.",
+  "adaptiveLenses": {
+    "intuition": "An **Idempotency Key** is writing a unique receipt number (`req_991`) on a check: even if the bank teller accidentally processes a photocopy twice, they see `#991` already cleared and hand back the exact original receipt without taking another dollar. A **Circuit Breaker** is your home electrical breaker tripping open during a short circuit so the whole house doesn't catch fire—testing one probe (`Half-Open`) 15 seconds later before restoring power.",
+    "mechanics": "Client sends `Idempotency-Key: uuid` on `POST /charges`. Server atomically claims `(user_id, key)` inside the transaction (or Redis lock) and stores the serialized response; duplicate keys replay the cached response (`409` if payload mismatches!). Outbound clients wrap downstream RPCs with a `CircuitBreaker(Closed -> Open -> Half-Open)` + `sleep = random(0, min(cap, base * 2^attempt))` full jitter.",
+    "staffTradeoffs": "Never use bare `base * 2^attempt` without random jitter—if 10,000 clients drop together, deterministic backoff makes all 10,000 hammer the server in synchronized waves at 1s, 2s, 4s! Also enforce **Retry Budgets** (cap retries at ~10–20% of normal traffic) so nested microservice retries (`3^3 = 27x` amplification!) never amplify outages."
+  },
+  "ddiaAnchors": [
+    {
+      "chapter": "DDIA Ch. 8 & 12 · Partial Failures & End-to-End Correctness",
+      "concept": "Idempotency & At-Least-Once Safe Retries",
+      "whyItMatters": "Because TCP/HTTP timeouts cannot distinguish 'never arrived' from 'succeeded but ack lost', end-to-end idempotency is mandatory."
+    }
+  ],
+  "pragmaticTips": [
+    {
+      "principle": "Crash Early & Bound Every Resource",
+      "tip": "An RPC call without a deadline/timeout is a memory and thread-pool leak waiting for the first slow dependency.",
+      "application": "Set tight per-hop timeouts + circuit breakers + bulkhead thread pools isolating slow external APIs."
+    }
+  ],
+  "keyTakeaways": [
+    "Idempotency keys let callers safely retry ambiguous timeouts without duplicate side effects.",
+    "Full jitter spreads synchronized retry waves evenly across time, preventing thundering-herd retry storms.",
+    "Circuit breakers fail fast (`Open`) when error rate crosses threshold and probe safely (`Half-Open`) before restoring traffic."
+  ],
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Mobile Client",
+      "sublabel": "Idempotency-Key: k_991",
+      "kind": "client",
+      "layer": 1,
+      "gridPos": { "gx": 1, "gy": 5 },
+      "specs": { "protocol": "HTTPS", "port": "443", "maxQpsPerNode": 20, "baseLatencyMs": 1.0, "capProfile": "N/A", "scalingAxis": "Clients" },
+      "summary": "Sends persistent UUID Idempotency-Key across automatic network retries.",
+      "whenToUse": ["Payments, order placement, account mutations"],
+      "failureModes": ["Generating a fresh UUID inside the retry loop breaks idempotency completely!"]
+    },
+    {
+      "id": "checkout-svc",
+      "label": "Checkout + Circuit Breaker",
+      "sublabel": "Breaker: CLOSED | Backoff",
+      "kind": "compute",
+      "layer": 7,
+      "gridPos": { "gx": 5, "gy": 5 },
+      "specs": { "protocol": "HTTP / gRPC", "port": "8080", "maxQpsPerNode": 10000, "baseLatencyMs": 2.0, "capProfile": "N/A", "scalingAxis": "App pods" },
+      "summary": "Checks Idempotency store atomically and guards external Fraud/Bank RPCs via Circuit Breaker.",
+      "whenToUse": ["Resilient mutation & external API integration"],
+      "failureModes": ["Retrying on HTTP 400 validation errors or without jitter wastes resources"]
+    },
+    {
+      "id": "idemp-db",
+      "label": "Idempotency & Ledger DB",
+      "sublabel": "PK (user_id, key) · Cached Resp",
+      "kind": "db_sql",
+      "layer": 4,
+      "gridPos": { "gx": 5, "gy": 1 },
+      "specs": { "protocol": "SQL", "port": "5432", "maxQpsPerNode": 12000, "baseLatencyMs": 3.0, "capProfile": "CP", "scalingAxis": "Partition by user_id" },
+      "summary": "Atomically inserts idempotency key alongside ledger debit and saves JSON response for replays.",
+      "whenToUse": ["Preventing double-charges"],
+      "failureModes": ["Using a volatile non-persistent Redis cache risks losing keys right before crash"]
+    },
+    {
+      "id": "fraud-api",
+      "label": "External Fraud / PSP API",
+      "sublabel": "Timeout=800ms · Degradable",
+      "kind": "external",
+      "layer": 7,
+      "gridPos": { "gx": 10, "gy": 5 },
+      "specs": { "protocol": "HTTPS", "port": "443", "maxQpsPerNode": 5000, "baseLatencyMs": 35.0, "capProfile": "N/A", "scalingAxis": "Third-party SLA" },
+      "summary": "Third-party external API susceptible to latency spikes and 5xx brownouts.",
+      "whenToUse": ["External risk checks or payment processors"],
+      "failureModes": ["Slow 10s hangs exhaust caller connection pools without timeouts & circuit breaking"]
+    }
+  ],
+  "edges": [
+    { "id": "e-c-chk", "from": "client", "to": "checkout-svc", "protocol": "HTTPS", "transport": "sync", "label": "POST + Key k_991" },
+    { "id": "e-chk-db", "from": "checkout-svc", "to": "idemp-db", "protocol": "SQL", "transport": "sync", "label": "Check/Commit Key" },
+    { "id": "e-chk-ext", "from": "checkout-svc", "to": "fraud-api", "protocol": "HTTPS", "transport": "sync", "label": "Guarded RPC" }
+  ],
+  "steps": [
+    {
+      "stepNo": 1,
+      "phaseTitle": "1. FIRST REQUEST + ATOMIC KEY CLAIM",
+      "timestampMs": 0.0,
+      "sourceNodeId": "client",
+      "targetNodeId": "checkout-svc",
+      "edgeId": "e-c-chk",
+      "category": "write",
+      "protocol": "HTTPS",
+      "info": "POST /v1/charges (Idempotency-Key: k_991, amount=$50) arrives",
+      "payloadSize": "410 B",
+      "payloadInspector": "POST /v1/charges | Idempotency-Key: k_991 | SHA256(body)=0x91ab",
+      "latencyDeltaMs": 2.0,
+      "inspectorNote": "Body hash is stored alongside the key so reusing `k_991` with a different dollar amount raises 422/409!"
+    },
+    {
+      "stepNo": 2,
+      "phaseTitle": "2. GUARDED EXTERNAL CALL",
+      "timestampMs": 2.0,
+      "sourceNodeId": "checkout-svc",
+      "targetNodeId": "fraud-api",
+      "edgeId": "e-chk-ext",
+      "category": "network",
+      "protocol": "HTTPS",
+      "info": "Circuit Breaker CLOSED -> Fraud check passes in 35ms (deadline=800ms)",
+      "payloadSize": "320 B",
+      "payloadInspector": "FraudScore: 0.04 (ALLOW) | Breaker window: 99.9% healthy",
+      "latencyDeltaMs": 35.0,
+      "inspectorNote": "Strict 800ms timeout prevents slow upstream connections from leaking threads."
+    },
+    {
+      "stepNo": 3,
+      "phaseTitle": "3. PERSIST CHARGE & SAVED RESPONSE",
+      "timestampMs": 37.0,
+      "sourceNodeId": "checkout-svc",
+      "targetNodeId": "idemp-db",
+      "edgeId": "e-chk-db",
+      "category": "write",
+      "protocol": "SQL",
+      "info": "Tx commits charge AND saves 200 OK JSON against k_991 -> network drops response!",
+      "payloadSize": "510 B",
+      "payloadInspector": "DB COMMIT OK: {charge_id: 'ch_77', status: 'PAID'} saved in idempotency_keys",
+      "latencyDeltaMs": 3.0,
+      "inspectorNote": "Suppose Wi-Fi drops right before the client gets the 200 OK—so the client retries with `k_991`!",
+      "predictPrompt": {
+        "prompt": "Client retries `POST /v1/charges` with the SAME `Idempotency-Key: k_991` 2 seconds later. What does Checkout Service do?",
+        "hint": "Check whether it needs to call the external Fraud/Payment API a second time.",
+        "reveal": "It finds `k_991` already committed in `idemp-db`, skips charging or calling Fraud API again, and replays the exact saved `{charge_id: 'ch_77', status: 'PAID'}` response!"
+      }
+    }
+  ],
+  "chaosScenarios": [
+    {
+      "id": "fraud-brownout-circuit-open",
+      "title": "External Fraud API Slowdown -> Breaker Trips OPEN + Full Jitter Probe",
+      "faultType": "latency_injection",
+      "targetNodeId": "fraud-api",
+      "triggerSummary": "Fraud API latency spikes to 5,000ms, causing >50% 800ms timeouts across a 10-second sliding window.",
+      "mitigationSummary": "Circuit Breaker trips OPEN, immediately shedding calls in <1ms via fallback heuristic for 15s, then tests 1 probe in HALF-OPEN before closing.",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. TIMEOUT WAVE TRIPS BREAKER OPEN",
+          "timestampMs": 0.0,
+          "sourceNodeId": "checkout-svc",
+          "targetNodeId": "fraud-api",
+          "edgeId": "e-chk-ext",
+          "category": "failover",
+          "protocol": "HTTPS",
+          "info": "Error rate 62% (>50% threshold) -> Circuit Breaker switches CLOSED -> OPEN",
+          "payloadSize": "128 B",
+          "payloadInspector": "Breaker State: OPEN (15s cooldown) -> Fast-fail / fallback rule active (<1ms)",
+          "latencyDeltaMs": 1.0,
+          "inspectorNote": "Failing fast frees Checkout worker threads immediately AND gives the struggling Fraud API breathing room to recover."
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "2. HALF-OPEN PROBE RESTORES SERVICE",
+          "timestampMs": 1.0,
+          "sourceNodeId": "checkout-svc",
+          "targetNodeId": "fraud-api",
+          "edgeId": "e-chk-ext",
+          "category": "read",
+          "protocol": "HTTPS",
+          "info": "After 15s, Breaker allows 3 canary requests (HALF-OPEN) -> 200 OK -> CLOSED!",
+          "payloadSize": "320 B",
+          "payloadInspector": "3/3 probes succeeded in 32ms -> Breaker State: CLOSED",
+          "latencyDeltaMs": 32.0,
+          "inspectorNote": "Controlled canary probing verifies real recovery without unleashing full traffic immediately."
+        }
+      ]
+    }
+  ],
+  "tradeoffs": [
+    {
+      "option": "DB-Backed Idempotency + Circuit Breaker + Full Jitter",
+      "pros": ["100% duplicate-safe retries", "Prevents cascading thread-pool exhaustion & retry storms"],
+      "cons": ["Needs periodic TTL cleanup of old idempotency rows", "Requires tuning breaker thresholds"],
+      "bestFor": "All payment, order, booking, and third-party API integrations"
+    },
+    {
+      "option": "Naive Fixed-Delay Retries without Breaker",
+      "pros": ["2 lines of code"],
+      "cons": ["Multiplies outages exponentially across microservice hops (thundering retry storm)"],
+      "bestFor": "Never recommended for production services"
+    }
+  ],
+  "quizQuestionIds": ["q-idemp-1", "q-idemp-2"],
+  "flashcardIds": ["fc-idemp-1", "fc-idemp-2"]
+}

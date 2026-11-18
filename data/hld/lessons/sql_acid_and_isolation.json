@@ -1,0 +1,211 @@
+{
+  "id": "sql-acid-and-isolation",
+  "track": "hld",
+  "category": "foundations",
+  "layer": 4,
+  "title": "Relational DBs, MVCC & Isolation Levels",
+  "subtitle": "Read Committed, Snapshot Isolation, Write Skew anomalies & Serializable SSI",
+  "difficulty": "L5-L6",
+  "estimatedMinutes": 22,
+  "overview": "Calling a database 'ACID' does not mean concurrent transactions cannot corrupt business invariants! Default Postgres (`Read Committed`) and even `Repeatable Read` (`Snapshot Isolation`) permit subtle anomalies like **Write Skew**—where two transactions read the same valid state concurrently and commit mutually violating updates.",
+  "firstPrinciplesStory": "Suppose your hospital requires at least one doctor on-call at all times. Two doctors, Alice and Bob, both feel sick at 11:02 PM and open the scheduling portal simultaneously. Both transactions run under Snapshot Isolation: Alice checks 'Count of on-call doctors = 2 (Alice, Bob)' and removes herself; Bob checks the exact same snapshot 'Count = 2' and removes himself! Because Alice updates Alice's row and Bob updates Bob's row, there is ZERO dirty write conflict—both commit cleanly, leaving zero doctors on call. That classic DDIA Chapter 7 trap is Write Skew.",
+  "adaptiveLenses": {
+    "intuition": "Snapshot Isolation gives every transaction a frozen photograph of the database taken at its start time so readers never block writers. That works wonderfully until two people look at the same photo, make decisions based on what's still true in the photo, and write to *different* rows—breaking a shared rule that spanned both rows.",
+    "mechanics": "MVCC stores `(xmin, xmax)` version timestamps on every tuple. Under Snapshot Isolation, Tx A only reads tuples committed before Tx A's snapshot ID. Postgres prevents Lost Updates on the *same* row via first-committer-wins abort, yet fails to detect cross-row invariants (Write Skew / Phantoms) unless upgraded to `SELECT ... FOR UPDATE` pessimistic locking or `SERIALIZABLE` (SSI tracking `SIREAD` predicate locks).",
+    "staffTradeoffs": "Never blindly enable global `SERIALIZABLE` everywhere if high-contention retries hurt throughput—nor assume `READ COMMITTED` protects balances or inventory! Use targeted `SELECT ... FOR UPDATE` on explicit lock rows (e.g., parent shift/account row), atomic conditional `UPDATE ... WHERE stock >= qty`, or SSI (`SERIALIZABLE`) with idempotent retry loops on low-contention financial invariants."
+  },
+  "ddiaAnchors": [
+    {
+      "chapter": "DDIA Ch. 7 · Transactions & Weak Isolation",
+      "concept": "Write Skew & Materializing Conflicts",
+      "whyItMatters": "Explains why two conflict-free row writes can violate multi-row invariants under Snapshot Isolation."
+    },
+    {
+      "chapter": "DDIA Ch. 7 · Serializability (2PL & SSI)",
+      "concept": "Serializable Snapshot Isolation",
+      "whyItMatters": "Detects dangerous rw-antidependency cycles optimistically without blocking concurrent readers."
+    }
+  ],
+  "pragmaticTips": [
+    {
+      "principle": "Assert Invariants at the Source of Truth (DRY)",
+      "tip": "Checking `if count >= 2` in Python application memory before issuing SQL creates a race window—enforce invariants inside the database transaction boundary.",
+      "application": "Use conditional updates, unique partial indexes, or `SELECT FOR UPDATE` / `SERIALIZABLE` with retry."
+    },
+    {
+      "principle": "Design Explicit Lock Rows When Needed",
+      "tip": "When no single row represents the shared constraint (e.g., meeting room + time slot), materialize a conflict row or lock parent resource.",
+      "application": "In Ticketmaster/Uber, lock the parent event/shift row or use Redis atomic slot keys before committing SQL."
+    }
+  ],
+  "keyTakeaways": [
+    "MVCC ensures readers never block writers and writers never block readers by keeping row versions.",
+    "Snapshot Isolation eliminates Dirty Reads, Non-Repeatable Reads, and same-row Lost Updates—but still permits Write Skew.",
+    "Fix Write Skew cleanly with explicit `SELECT FOR UPDATE`, materialized lock rows, or `SERIALIZABLE` (SSI) + retry."
+  ],
+  "nodes": [
+    {
+      "id": "tx-alice",
+      "label": "Tx A (Doctor Alice)",
+      "sublabel": "Snapshot #100 · Remove Alice",
+      "kind": "compute",
+      "layer": 3,
+      "gridPos": { "gx": 1, "gy": 2 },
+      "specs": { "protocol": "PostgreSQL Wire", "port": "5432", "maxQpsPerNode": 5000, "baseLatencyMs": 1.0, "capProfile": "CP", "scalingAxis": "App workers" },
+      "summary": "Concurrent transaction attempting to mark Alice off-duty if count >= 2.",
+      "whenToUse": ["Concurrent booking / scheduling callers"],
+      "failureModes": ["Commits unsafe state under naive Snapshot Isolation"]
+    },
+    {
+      "id": "tx-bob",
+      "label": "Tx B (Doctor Bob)",
+      "sublabel": "Snapshot #100 · Remove Bob",
+      "kind": "compute",
+      "layer": 3,
+      "gridPos": { "gx": 1, "gy": 7 },
+      "specs": { "protocol": "PostgreSQL Wire", "port": "5432", "maxQpsPerNode": 5000, "baseLatencyMs": 1.0, "capProfile": "CP", "scalingAxis": "App workers" },
+      "summary": "Simultaneous transaction attempting to mark Bob off-duty on the exact same snapshot.",
+      "whenToUse": ["Concurrent multi-row invariant checks"],
+      "failureModes": ["Triggers serialization conflict 40001 under SSI—app must retry!"]
+    },
+    {
+      "id": "mvcc-engine",
+      "label": "Postgres MVCC + SSI Engine",
+      "sublabel": "Snapshots & SIREAD Locks",
+      "kind": "db_sql",
+      "layer": 4,
+      "gridPos": { "gx": 6, "gy": 5 },
+      "specs": { "protocol": "MVCC / SSI", "port": "5432", "maxQpsPerNode": 12000, "baseLatencyMs": 3.0, "capProfile": "CP", "scalingAxis": "WAL + Tuple Versions" },
+      "summary": "Maintains tuple `(xmin, xmax)` versions and tracks predicate read dependencies under SERIALIZABLE.",
+      "whenToUse": ["Strong transactional invariants"],
+      "failureModes": ["Long-lived transactions block VACUUM cleanup, causing table bloat"]
+    },
+    {
+      "id": "table-shifts",
+      "label": "OnCall Shifts Table",
+      "sublabel": "Row Alice | Row Bob",
+      "kind": "db_sql",
+      "layer": 4,
+      "gridPos": { "gx": 10, "gy": 5 },
+      "specs": { "protocol": "B-Tree Heap", "port": "5432", "maxQpsPerNode": 12000, "baseLatencyMs": 2.0, "capProfile": "CP", "scalingAxis": "Partition by shift_date" },
+      "summary": "Stores separate rows for Alice and Bob under shared invariant `SUM(on_call) >= 1`.",
+      "whenToUse": ["Normalized OLTP tables"],
+      "failureModes": ["Checking two separate rows without range/predicate lock permits Write Skew"]
+    }
+  ],
+  "edges": [
+    { "id": "e-a-mvcc", "from": "tx-alice", "to": "mvcc-engine", "protocol": "SQL", "transport": "sync", "label": "Alice Tx" },
+    { "id": "e-b-mvcc", "from": "tx-bob", "to": "mvcc-engine", "protocol": "SQL", "transport": "sync", "label": "Bob Tx" },
+    { "id": "e-mvcc-tbl", "from": "mvcc-engine", "to": "table-shifts", "protocol": "Heap Tuple", "transport": "sync", "label": "Read/Write Rows" }
+  ],
+  "steps": [
+    {
+      "stepNo": 1,
+      "phaseTitle": "1. BOTH TX START ON SNAPSHOT #100",
+      "timestampMs": 0.0,
+      "sourceNodeId": "tx-alice",
+      "targetNodeId": "mvcc-engine",
+      "edgeId": "e-a-mvcc",
+      "category": "read",
+      "protocol": "SQL",
+      "info": "Tx A & Tx B both BEGIN ISOLATION LEVEL SERIALIZABLE -> assigned Snapshot #100",
+      "payloadSize": "180 B",
+      "payloadInspector": "SELECT count(*) FROM shifts WHERE on_call=true AND shift_id=42 -> returns 2 (SIREAD predicate registered)",
+      "latencyDeltaMs": 1.0,
+      "inspectorNote": "Neither transaction blocks the other on read—SSI records lightweight SIREAD predicate locks in RAM."
+    },
+    {
+      "stepNo": 2,
+      "phaseTitle": "2. DISJOINT ROW UPDATES",
+      "timestampMs": 1.0,
+      "sourceNodeId": "mvcc-engine",
+      "targetNodeId": "table-shifts",
+      "edgeId": "e-mvcc-tbl",
+      "category": "write",
+      "protocol": "Heap Tuple",
+      "info": "Tx A updates Row(Alice); Tx B updates Row(Bob) -> zero row-lock overlap!",
+      "payloadSize": "260 B",
+      "payloadInspector": "Tx A: UPDATE shifts SET on_call=false WHERE doc='Alice'\nTx B: UPDATE shifts SET on_call=false WHERE doc='Bob'",
+      "latencyDeltaMs": 2.0,
+      "inspectorNote": "Notice why ordinary row locks or Snapshot Isolation miss this: Alice and Bob wrote to DIFFERENT rows!",
+      "predictPrompt": {
+        "prompt": "Alice calls COMMIT first and succeeds. When Bob calls COMMIT 2ms later under `SERIALIZABLE` (SSI), what happens vs `REPEATABLE READ` (Snapshot Isolation)?",
+        "hint": "Look for the rw-antidependency cycle between Tx A's predicate read and Tx B's write (and vice versa).",
+        "reveal": "Under REPEATABLE READ (Snapshot Isolation), Bob ALSO commits—leaving 0 doctors on call (Write Skew!). Under SERIALIZABLE (SSI), Postgres detects the mutual dependency cycle and aborts Bob with SQLSTATE 40001 (`could not serialize access`)."
+      }
+    },
+    {
+      "stepNo": 3,
+      "phaseTitle": "3. SSI SERIALIZATION GUARD ABORT",
+      "timestampMs": 3.0,
+      "sourceNodeId": "mvcc-engine",
+      "targetNodeId": "tx-bob",
+      "edgeId": "e-b-mvcc",
+      "category": "consensus",
+      "protocol": "SQL",
+      "info": "Tx A commits; Tx B aborted with SQLSTATE 40001 -> App retries -> sees count=1 -> refuses off-call!",
+      "payloadSize": "140 B",
+      "payloadInspector": "ERROR: could not serialize access due to read/write dependencies among transactions (40001)",
+      "latencyDeltaMs": 1.5,
+      "inspectorNote": "Invariant `on_call >= 1` stays 100% intact without blocking read-only queries."
+    }
+  ],
+  "chaosScenarios": [
+    {
+      "id": "snapshot-isolation-write-skew",
+      "title": "Downgraded to Repeatable Read -> Silent Write Skew Violation",
+      "faultType": "partition",
+      "targetNodeId": "mvcc-engine",
+      "triggerSummary": "A developer changes isolation from SERIALIZABLE to default READ COMMITTED / REPEATABLE READ without adding SELECT FOR UPDATE.",
+      "mitigationSummary": "Restore SERIALIZABLE + retry loop OR lock the parent `shift_day` row explicitly with `SELECT ... FROM shift_days WHERE id=42 FOR UPDATE`.",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. UNGUARDED SNAPSHOT COMMIT",
+          "timestampMs": 0.0,
+          "sourceNodeId": "tx-bob",
+          "targetNodeId": "mvcc-engine",
+          "edgeId": "e-b-mvcc",
+          "category": "failover",
+          "protocol": "SQL",
+          "info": "Under Snapshot Isolation, BOTH Tx A and Tx B commit -> 0 doctors left on call!",
+          "payloadSize": "210 B",
+          "payloadInspector": "COMMIT OK (Alice=false), COMMIT OK (Bob=false) -> Silent Business Invariant Breach!",
+          "latencyDeltaMs": 2.0,
+          "inspectorNote": "Silent data corruption is far worse than an exception—always think about multi-row invariants in interviews."
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "2. FIX VIA PARENT ROW LOCK (FOR UPDATE)",
+          "timestampMs": 2.0,
+          "sourceNodeId": "mvcc-engine",
+          "targetNodeId": "table-shifts",
+          "edgeId": "e-mvcc-tbl",
+          "category": "consensus",
+          "protocol": "SQL",
+          "info": "Lock parent row `shift_id=42 FOR UPDATE` -> serializes Alice & Bob deterministically",
+          "payloadSize": "180 B",
+          "payloadInspector": "SELECT id FROM shift_groups WHERE id=42 FOR UPDATE -> Tx B waits for Tx A commit -> sees count=1",
+          "latencyDeltaMs": 3.0,
+          "inspectorNote": "Locking a single shared parent row turns invisible Write Skew into a deterministic same-row lock."
+        }
+      ]
+    }
+  ],
+  "tradeoffs": [
+    {
+      "option": "Serializable Snapshot Isolation (SSI)",
+      "pros": ["Catches all anomalies including Write Skew & Phantoms", "Readers never block writers"],
+      "cons": ["App MUST handle SQLSTATE 40001 serialization retries cleanly", "Higher abort rate under extreme hot-row contention"],
+      "bestFor": "Multi-row invariants, double-entry financial checks, low-to-medium contention correctness"
+    },
+    {
+      "option": "Read Committed / Snapshot + Explicit `FOR UPDATE`",
+      "pros": ["High baseline throughput", "Targeted pessimistic lock only where invariants collide"],
+      "cons": ["Developers must remember to lock the right parent/conflict rows every time"],
+      "bestFor": "High-scale OLTP apps (Ticketmaster seat holds, wallet debits)"
+    }
+  ],
+  "quizQuestionIds": ["q-acid-1", "q-acid-2"],
+  "flashcardIds": ["fc-acid-1", "fc-acid-2"]
+}

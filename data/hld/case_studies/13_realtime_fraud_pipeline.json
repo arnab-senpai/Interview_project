@@ -1,0 +1,123 @@
+{
+  "id": "realtime-fraud-pipeline",
+  "tier": 5,
+  "title": "Design 1M TPS Real-Time Fraud & Activity Pipeline",
+  "subtitle": "Transactional Outbox + Debezium CDC -> Kafka -> Flink Actors + Watermarks & Blackboard Rules",
+  "levelTag": "L6-L7",
+  "estimatedMinutes": 50,
+  "tags": ["1M TPS", "Kafka", "Debezium CDC", "Flink Watermarks", "Actors & Blackboard"],
+  "functionalReqs": [
+    "Ingest `1,000,000` payment & auth events/sec across `100M` accounts, computing 5m/1h/24h velocity features within `40 ms`.",
+    "Project settled transactions atomically from core PostgreSQL ledgers to Activity Feeds & Search indexes with zero dual-write split brain.",
+    "Evaluate multi-stage velocity rules + ML fraud scores via decoupled Actor & Blackboard stages resilient to out-of-order mobile retries."
+  ],
+  "nonFunctionalReqs": [
+    { "metric": "Stream Throughput", "target": "1M events/sec sustained (2.5M/s burst)", "rationale": "Keyed across 256 Kafka partitions (~4k msg/sec per partition)." },
+    { "metric": "Fraud Scoring Latency", "target": "p99 <= 40 ms sliding window evaluation", "rationale": "In-memory RocksDB keyed Flink actors maintain HyperLogLog distinct counters lock-free." },
+    { "metric": "Late Event Accuracy", "target": "Out-of-order mobile retries up to 120s handled cleanly", "rationale": "Event-Time Watermarks + bounded allowedLateness prevent processing-time blind spots." }
+  ],
+  "estimationPreset": {
+    "dau": 100000000,
+    "actionsPerUserPerDay": 864.0,
+    "peakMultiplier": 2.5,
+    "avgPayloadBytes": 600,
+    "readWriteRatio": "20:80",
+    "retentionYears": 3,
+    "workedSummary": {
+      "streamBandwidth": "1M/s × 600 B = 600 MB/s raw -> 1.8 GB/s RF=3 Kafka replication (~256 partitions)",
+      "flinkActorState": "20M active accounts × 256 B HyperLogLog sketch = ~5.1 GB local RocksDB state",
+      "dedupeCache": "1M/s × 15m TTL dedupe key = ~21 GB partitioned Redis / RocksDB idempotent sink index"
+    }
+  },
+  "coreEntities": [
+    {
+      "name": "OutboxTransactionEvent",
+      "storageEngine": "PostgreSQL Local ACID Outbox + Debezium WAL CDC",
+      "partitionKey": "account_id",
+      "keyFields": ["event_id (UUIDv7)", "account_id", "event_time_ms", "amount_minor", "device_hash", "wal_lsn"]
+    },
+    {
+      "name": "AccountActorWindowState",
+      "storageEngine": "Apache Flink Keyed State (RocksDB Incremental Checkpoints -> S3)",
+      "partitionKey": "account_id (+ salting #0..3 for mega-merchants)",
+      "keyFields": ["account_id", "hll_distinct_cards_1h", "velocity_tx_5m", "current_watermark_ms"]
+    }
+  ],
+  "apiContracts": [
+    {
+      "method": "POST",
+      "path": "/v1/fraud/score",
+      "purpose": "Evaluate synchronous risk gate reading live Actor Blackboard risk signals computed by Flink streaming windows",
+      "idempotent": true,
+      "samplePayload": "{\"eventId\":\"evt_771\",\"accountId\":\"acc_401\",\"amountMinor\":89500,\"eventTs\":1794980000000}"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/accounts/{accountId}/activity-feed",
+      "purpose": "Fetch CQRS materialized activity timeline projected idempotently from Kafka CDC logs"
+    }
+  ],
+  "explorerTopology": {
+    "id": "fraud-1m-pipeline-flow",
+    "track": "hld",
+    "category": "patterns",
+    "layer": 6,
+    "title": "1M TPS Outbox CDC -> Flink Actors -> CQRS Views",
+    "subtitle": "Breaking Temporal Coupling via Log Brokers, Watermarks & Blackboard Risk Signals",
+    "difficulty": "L6-L7",
+    "estimatedMinutes": 24,
+    "overview": "How principal streaming architectures replace fragile synchronous HTTP chains & SQL cron jobs with Debezium WAL CDC, Kafka, stateful Flink actors, and idempotent CQRS projections.",
+    "keyTakeaways": [
+      "Transactional Outbox + Debezium WAL CDC guarantees DB commits and Kafka events never split-brain.",
+      "Event-Time Watermarks + Actor partitioning handle 1M TPS + late mobile arrivals without global locks."
+    ],
+    "nodes": [
+      { "id": "ledger-db", "label": "Core Ledger + Outbox DB", "sublabel": "Single ACID WAL Commit", "kind": "db_sql", "layer": 4, "gridPos": { "gx": 1, "gy": 5 }, "specs": { "protocol": "Postgres WAL", "port": "5432", "maxQpsPerNode": 40000, "baseLatencyMs": 3.0, "capProfile": "CP", "scalingAxis": "Sharded by account_id" }, "summary": "Commits domain row + `outbox_events` atomically in one transaction.", "whenToUse": ["Eliminating dual-write DB+Kafka bugs"], "failureModes": ["Publishing to Kafka outside local ACID tx leaks phantom/dropped events"] },
+      { "id": "debezium", "label": "Debezium WAL CDC", "sublabel": "LSN Log Tailer", "kind": "compute", "layer": 6, "gridPos": { "gx": 3, "gy": 5 }, "specs": { "protocol": "PG Logical Repl", "port": "8083", "maxQpsPerNode": 120000, "baseLatencyMs": 5.0, "capProfile": "CP", "scalingAxis": "Shard connectors" }, "summary": "Streams committed WAL LSN changes to Kafka cleanly without polling production OLTP tables.", "whenToUse": ["Zero-polling reliable change capture"], "failureModes": ["Restart without LSN dedupe replays already-produced messages"] },
+      { "id": "kafka-stream", "label": "Kafka 256 Partitions", "sublabel": "acks=all | Replayable Log", "kind": "queue", "layer": 6, "gridPos": { "gx": 6, "gy": 5 }, "specs": { "protocol": "Kafka Binary", "port": "9092", "maxQpsPerNode": 400000, "baseLatencyMs": 4.0, "capProfile": "CP", "scalingAxis": "256 partitions (account_id)" }, "summary": "Retains ordered partitioned transaction streams across multiple independent consumer groups.", "whenToUse": ["Breaking temporal coupling (TPP Topic 33)"], "failureModes": ["Un-salted mega-merchant keys skew single partition consumer lag"] },
+      { "id": "flink-actors", "label": "Flink Keyed Actors", "sublabel": "Event-Time + Watermarks", "kind": "compute", "layer": 6, "gridPos": { "gx": 9, "gy": 3 }, "specs": { "protocol": "RocksDB State", "port": "8081", "maxQpsPerNode": 250000, "baseLatencyMs": 12.0, "capProfile": "AP", "scalingAxis": "TaskManager slots" }, "summary": "Computes 5m/1h velocity & HyperLogLog distinct card sketches with bounded-lateness Watermarks.", "whenToUse": ["Sub-40ms streaming feature engineering (TPP Actors)"], "failureModes": ["Naive processing-time windows miss delayed mobile bursts"] },
+      { "id": "cqrs-sinks", "label": "Blackboard & Feed Sinks", "sublabel": "ON CONFLICT event_id DO NOTHING", "kind": "db_nosql", "layer": 7, "gridPos": { "gx": 9, "gy": 7 }, "specs": { "protocol": "Idempotent Sink", "port": "9042", "maxQpsPerNode": 200000, "baseLatencyMs": 6.0, "capProfile": "AP", "scalingAxis": "CQRS materialized shards" }, "summary": "Posts risk flags on Fraud Blackboard & updates user Activity Feeds idempotently despite replays.", "whenToUse": ["CQRS read projections & decoupled risk scoring (TPP Blackboard)"], "failureModes": ["Non-idempotent counters inflate totals on consumer restart"] }
+    ],
+    "edges": [
+      { "id": "e1", "from": "ledger-db", "to": "debezium", "protocol": "PG WAL Stream", "transport": "stream", "label": "Tail LSN Changes" },
+      { "id": "e2", "from": "debezium", "to": "kafka-stream", "protocol": "Kafka acks=all", "transport": "async", "label": "Publish Keyed Log" },
+      { "id": "e3", "from": "kafka-stream", "to": "flink-actors", "protocol": "Stream Read", "transport": "stream", "label": "Keyed Sliding Windows" },
+      { "id": "e4", "from": "flink-actors", "to": "cqrs-sinks", "protocol": "Idempotent Sink", "transport": "async", "label": "Blackboard Risk & Feed" },
+      { "id": "e5", "from": "kafka-stream", "to": "cqrs-sinks", "protocol": "CQRS Relay", "transport": "stream", "label": "Materialize Feed View" }
+    ],
+    "steps": [
+      { "stepNo": 1, "phaseTitle": "Atomic Local Outbox + WAL Capture", "timestampMs": 0, "sourceNodeId": "ledger-db", "targetNodeId": "debezium", "edgeId": "e1", "category": "write", "protocol": "WAL LSN", "info": "Ledger commits payment + `outbox_events` atomically; Debezium streams WAL record in 5ms.", "payloadSize": "600 B", "payloadInspector": "BEGIN; INSERT ledger + INSERT outbox; COMMIT;\nWAL LSN #884129", "latencyDeltaMs": 5.0, "inspectorNote": "Zero dual-write gap and zero polling queries on OLTP tables." },
+      { "stepNo": 2, "phaseTitle": "Partitioned Durable Event Log", "timestampMs": 5, "sourceNodeId": "debezium", "targetNodeId": "kafka-stream", "edgeId": "e2", "category": "async", "protocol": "Kafka ISR", "info": "Writes cleanly to 256 partitions keyed by `account_id` (`acks=all`, `min.insync.replicas=2`).", "payloadSize": "600 B", "payloadInspector": "Partition: hash(account_id) % 256\nBandwidth: 600 MB/s cluster-wide", "latencyDeltaMs": 4.0, "inspectorNote": "Both Flink Fraud Engine and Feed Projectors consume independently without touching OLTP DB." },
+      { "stepNo": 3, "phaseTitle": "Keyed Actor Velocity + Event-Time Watermark", "timestampMs": 9, "sourceNodeId": "kafka-stream", "targetNodeId": "flink-actors", "edgeId": "e3", "category": "read", "protocol": "Flink Actor", "info": "Isolated per-account Actor updates 5m velocity & HyperLogLog distinct card count governed by `W(t) = maxEventTime - 120s`.", "payloadSize": "256 B", "payloadInspector": "Actor: acc_401 | 5m_tx_count: 14\nWatermark: 1794979880000 (handles late mobile retries)", "latencyDeltaMs": 12.0, "inspectorNote": "Actors prevent lock contention while Event-Time watermarks handle out-of-order mobile retries cleanly." },
+      { "stepNo": 4, "phaseTitle": "Blackboard Signal + Idempotent Feed Sink", "timestampMs": 21, "sourceNodeId": "flink-actors", "targetNodeId": "cqrs-sinks", "edgeId": "e4", "category": "write", "protocol": "Idempotent Upsert", "info": "Posts velocity anomaly on Fraud Blackboard & writes feed row via `ON CONFLICT (event_id) DO NOTHING`.", "payloadSize": "410 B", "payloadInspector": "Feed Dedupe Key: evt_771 (At-least-once + idempotent sink = effective once!)", "latencyDeltaMs": 6.0, "inspectorNote": "Even if a worker crashes before committing offsets, replayed events never duplicate balances or feed alerts." }
+    ],
+    "chaosScenarios": [
+      {
+        "id": "chaos-late-worker-crash",
+        "title": "Flink Worker Eviction + 90s Late Mobile Event Flood",
+        "faultType": "node_down",
+        "targetNodeId": "flink-actors",
+        "triggerSummary": "Flink TaskManager crashes mid-checkpoint while subway mobile devices dump 90s-delayed transactions.",
+        "mitigationSummary": "New TaskManager restores incremental S3 RocksDB checkpoint, replays from last Kafka offset cleanly, handles late arrivals via `allowedLateness`, and sink deduplicates by `event_id`.",
+        "steps": [
+          { "stepNo": 1, "phaseTitle": "RocksDB Recovery + Bounded Lateness Recompute", "timestampMs": 0, "sourceNodeId": "kafka-stream", "targetNodeId": "flink-actors", "edgeId": "e3", "category": "failover", "protocol": "Checkpoint Replay", "info": "Recovers checkpoint from S3 in 3s; replays uncommitted offset slice cleanly and evaluates late 90s mobile batch.", "payloadSize": "600 B", "payloadInspector": "Recovered Checkpoint #4112\nAllowedLateness 120s caught burst accurately!", "latencyDeltaMs": 15.0, "inspectorNote": "Incremental checkpoints + idempotent sinks make 1M TPS crash recovery routine." }
+        ]
+      }
+    ],
+    "tradeoffs": [
+      { "option": "Outbox CDC + Kafka + Keyed Flink Actors + Watermarks", "pros": ["Breaks temporal coupling cleanly", "Handles 1M TPS & late arrivals with zero DB polling load"], "cons": ["Operational complexity of Kafka ISR, Flink S3 checkpoints & idempotent sinks"], "bestFor": "Real-time fraud velocity engines, telemetry, and high-scale feeds" }
+    ]
+  },
+  "deepDives": [
+    { "title": "Mega-Merchant Partition Skew Salting in Kafka + Flink", "bottleneck": "1 large enterprise merchant (`account_id = big_retailer`) accounts for 12% of traffic, hot-spotting 1 of 256 Flink slots.", "solution": "Detect top-K heavy hitters and salt only their partition keys (`big_retailer#0..15`), running a fast two-stage pre-aggregate -> global merge.", "tradeoff": "Preserves exact single-key ordering for 99.99% of normal accounts while scaling hot accounts horizontally." },
+    { "title": "Actor + Blackboard Orthogonal Evolution", "bottleneck": "Hardcoding ML fraud checks, velocity counters, and notification emails inside one monolith creates fragile release bottlenecks.", "solution": "Flink Actors compute window features asynchronously and post risk evidence onto a decoupled Blackboard rules coordinator.", "tradeoff": "Teams deploy new fraud signals independently without touching core ledger or payment authorization code (TPP ETC)." }
+  ],
+  "rubricChecklist": [
+    { "phase": "Outbox & CDC vs Dual Writes", "weight": 25, "criteria": ["Eliminates app-level dual writes & DB cron polling via Transactional Outbox + WAL Debezium CDC"] },
+    { "phase": "Kafka Log Semantics", "weight": 25, "criteria": ["Sizes 256 partitions at 1M TPS, explains ISR durability and idempotent sink deduplication"] },
+    { "phase": "Event-Time & Watermarks", "weight": 25, "criteria": ["Distinguishes Event-Time vs Processing-Time windows and sets Bounded-Out-of-Orderness watermarks"] },
+    { "phase": "Decoupling (Actors/Blackboard/CQRS)", "weight": 25, "criteria": ["Applies TPP Breaking Temporal Coupling, keyed Flink Actors, Blackboard signals, and CQRS views"] }
+  ],
+  "quizQuestionIds": ["q-fraud-1", "q-fraud-2"],
+  "flashcardIds": ["fc-fraud-1", "fc-fraud-2"]
+}

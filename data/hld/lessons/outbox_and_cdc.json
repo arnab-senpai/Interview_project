@@ -1,0 +1,214 @@
+{
+  "id": "outbox-and-cdc",
+  "track": "hld",
+  "category": "patterns",
+  "layer": 6,
+  "title": "Transactional Outbox & Change Data Capture (CDC)",
+  "subtitle": "Eliminating dual-write bugs between Postgres and Kafka",
+  "difficulty": "L5-L6",
+  "estimatedMinutes": 18,
+  "overview": "Writing to Postgres AND publishing to Kafka in two separate network calls is one of the most common distributed data bugs: if the app crashes or Kafka blips between the two writes, your database and search/billing caches silently diverge forever. The Transactional Outbox + CDC pattern guarantees atomic dual-state propagation without distributed 2PC.",
+  "firstPrinciplesStory": "Your Checkout Service runs `INSERT INTO orders ...` in Postgres, then calls `kafka.produce('OrderCreated')`. Everything looks great in staging until a pod OOM-kills right between the SQL `COMMIT` and the Kafka call—leaving a paid order in Postgres that Shipping and Billing NEVER hear about! Reversing the order fails too: publishing to Kafka before SQL commits lets Shipping mail items for orders that rolled back! Making the database WAL itself the single commit point solves both bugs cleanly.",
+  "adaptiveLenses": {
+    "intuition": "Instead of mailing a letter at the post office AND trying to update your checkbook separately (and dropping one if you trip on the stairs), you write BOTH the order AND the 'mail this receipt' slip on the exact same checkbook page in one transaction. A dedicated courier (Debezium CDC) reads your ledger's carbon copy (WAL) and guarantees every slip reaches Kafka.",
+    "mechanics": "Inside ONE local SQL transaction, app writes domain state (`orders`) AND appends an event row to an `outbox_events` table. Debezium tails Postgres's logical replication WAL (no polling load!) and streams `outbox_events` into Kafka partitions. Consumers deduplicate on `event_id` for effective-once sync.",
+    "staffTradeoffs": "CDC over WAL beats periodic `SELECT * FROM outbox WHERE sent=false` polling because WAL streaming adds near-zero query overhead and delivers sub-100ms propagation lag. Remember to periodically purge/partition processed outbox rows so the outbox table doesn't bloat—or truncate via Postgres `pg_logical_emit_message`."
+  },
+  "ddiaAnchors": [
+    {
+      "chapter": "DDIA Ch. 11 & 12 · CDC & Derived Data",
+      "concept": "Avoiding Dual-Write Race Conditions via Log Tail",
+      "whyItMatters": "Establishes one single system-of-record commit log that reliably feeds Elasticsearch, Redis, and downstream microservices."
+    }
+  ],
+  "pragmaticTips": [
+    {
+      "principle": "DRY (Single Authoritative Commit Point)",
+      "tip": "Never update two heterogeneous datastores via separate app-level network calls when consistency between them matters.",
+      "application": "Derive search indexes, analytics, and domain events from one transactional WAL + Outbox."
+    }
+  ],
+  "keyTakeaways": [
+    "App-level dual writes (`DB + Kafka`) always leave a crash window where one succeeds and the other fails.",
+    "Writing domain state + `outbox_events` inside one local ACID transaction makes emission atomic.",
+    "WAL-based CDC (Debezium) eliminates polling overhead and streams outbox events to Kafka with sub-100ms lag."
+  ],
+  "nodes": [
+    {
+      "id": "order-svc",
+      "label": "Order Service",
+      "sublabel": "Single ACID Tx",
+      "kind": "compute",
+      "layer": 3,
+      "gridPos": { "gx": 1, "gy": 5 },
+      "specs": { "protocol": "SQL", "port": "8080", "maxQpsPerNode": 10000, "baseLatencyMs": 2.0, "capProfile": "CP", "scalingAxis": "App pods" },
+      "summary": "Inserts business row AND outbox row inside one atomic Postgres transaction.",
+      "whenToUse": ["Reliable domain event publishing"],
+      "failureModes": ["Publishing directly to Kafka inside app code causes silent dual-write drift"]
+    },
+    {
+      "id": "postgres",
+      "label": "Postgres + Outbox Table",
+      "sublabel": "orders + outbox_events WAL",
+      "kind": "db_sql",
+      "layer": 4,
+      "gridPos": { "gx": 4, "gy": 5 },
+      "specs": { "protocol": "PostgreSQL Logical WAL", "port": "5432", "maxQpsPerNode": 12000, "baseLatencyMs": 4.0, "capProfile": "CP", "scalingAxis": "Primary + Outbox partition" },
+      "summary": "Commits domain mutation + event atomically into the Write-Ahead Log.",
+      "whenToUse": ["System-of-truth OLTP storage"],
+      "failureModes": ["Unpruned outbox rows bloat disk unless periodically archived/deleted"]
+    },
+    {
+      "id": "debezium",
+      "label": "Debezium CDC Relay",
+      "sublabel": "Logical WAL Tail",
+      "kind": "compute",
+      "layer": 6,
+      "gridPos": { "gx": 7, "gy": 2 },
+      "specs": { "protocol": "PG Replication -> Kafka", "port": "8083", "maxQpsPerNode": 80000, "baseLatencyMs": 5.0, "capProfile": "CP", "scalingAxis": "Kafka Connect workers" },
+      "summary": "Reads committed outbox inserts directly from Postgres WAL slot and routes to Kafka.",
+      "whenToUse": ["Zero-polling reliable event extraction"],
+      "failureModes": ["Dropped consumer leaves inactive replication slot holding WAL disk space unless alerted"]
+    },
+    {
+      "id": "kafka",
+      "label": "Kafka Event Bus",
+      "sublabel": "orders.events · Partitions",
+      "kind": "queue",
+      "layer": 6,
+      "gridPos": { "gx": 9, "gy": 5 },
+      "specs": { "protocol": "Kafka TCP", "port": "9092", "maxQpsPerNode": 250000, "baseLatencyMs": 2.0, "capProfile": "CP", "scalingAxis": "Partitions" },
+      "summary": "Distributes guaranteed committed domain events to Search, Cache, and Billing.",
+      "whenToUse": ["Derived view synchronization"],
+      "failureModes": ["At-least-once CDC replay requires idempotent downstream consumers"]
+    },
+    {
+      "id": "search-sink",
+      "label": "Search & Billing Sinks",
+      "sublabel": "Idempotent Consumers",
+      "kind": "search_index",
+      "layer": 4,
+      "gridPos": { "gx": 11, "gy": 7 },
+      "specs": { "protocol": "REST / SQL", "port": "9200", "maxQpsPerNode": 40000, "baseLatencyMs": 4.0, "capProfile": "AP", "scalingAxis": "Consumer workers" },
+      "summary": "Updates Elasticsearch and Billing projections idempotently via `event_id` / LSN.",
+      "whenToUse": ["Synchronizing polyglot derived stores"],
+      "failureModes": ["Out-of-order stale updates unless gated by LSN/version number"]
+    }
+  ],
+  "edges": [
+    { "id": "e-svc-pg", "from": "order-svc", "to": "postgres", "protocol": "SQL", "transport": "sync", "label": "1 Tx: orders + outbox" },
+    { "id": "e-pg-deb", "from": "postgres", "to": "debezium", "protocol": "PG WAL", "transport": "stream", "label": "Stream WAL slot" },
+    { "id": "e-deb-kfk", "from": "debezium", "to": "kafka", "protocol": "Kafka", "transport": "async", "label": "Emit OrderCreated" },
+    { "id": "e-kfk-sink", "from": "kafka", "to": "search-sink", "protocol": "Kafka", "transport": "async", "label": "Sync derived index" }
+  ],
+  "steps": [
+    {
+      "stepNo": 1,
+      "phaseTitle": "1. SINGLE ATOMIC OUTBOX TRANSACTION",
+      "timestampMs": 0.0,
+      "sourceNodeId": "order-svc",
+      "targetNodeId": "postgres",
+      "edgeId": "e-svc-pg",
+      "category": "write",
+      "protocol": "SQL",
+      "info": "BEGIN; INSERT orders(...); INSERT outbox_events(...); COMMIT;",
+      "payloadSize": "420 B",
+      "payloadInspector": "Both domain state & outbox_events share the exact same ACID commit LSN=0/4A20B1",
+      "latencyDeltaMs": 4.0,
+      "inspectorNote": "If the order rolls back, the outbox event rolls back too—zero phantom events!"
+    },
+    {
+      "stepNo": 2,
+      "phaseTitle": "2. DEBEZIUM TAILS COMMITTED WAL",
+      "timestampMs": 4.0,
+      "sourceNodeId": "postgres",
+      "targetNodeId": "debezium",
+      "edgeId": "e-pg-deb",
+      "category": "async",
+      "protocol": "PG WAL",
+      "info": "Debezium streams WAL record for outbox_events (0 SQL polling queries!)",
+      "payloadSize": "380 B",
+      "payloadInspector": "WAL Logical Decode -> Table=outbox_events | EventID=evt_8841 | Aggregate=order_7",
+      "latencyDeltaMs": 5.0,
+      "inspectorNote": "Logical replication streams only committed WAL changes sequentially."
+    },
+    {
+      "stepNo": 3,
+      "phaseTitle": "3. PUBLISH TO KAFKA & SYNC SINKS",
+      "timestampMs": 9.0,
+      "sourceNodeId": "debezium",
+      "targetNodeId": "kafka",
+      "edgeId": "e-deb-kfk",
+      "category": "async",
+      "protocol": "Kafka",
+      "info": "Debezium publishes OrderCreated to Kafka -> Search & Billing stay 100% consistent",
+      "payloadSize": "460 B",
+      "payloadInspector": "Topic: orders.events | Key: order_7 | Header x-event-id: evt_8841",
+      "latencyDeltaMs": 2.0,
+      "inspectorNote": "Even if Kafka goes down for 10 minutes, Debezium pauses at its WAL offset and catches up cleanly when Kafka recovers.",
+      "predictPrompt": {
+        "prompt": "Why should downstream Search/Billing consumers check `event_id` (or LSN version) before applying a CDC message?",
+        "hint": "What happens if Debezium crashes right after publishing to Kafka but BEFORE saving its Connect offset?",
+        "reveal": "Debezium restarts from the last saved offset and re-emits `evt_8841` (at-least-once delivery). Consumers checking `event_id` or `version > current_version` guarantee zero duplicate processing or stale overwrites."
+      }
+    }
+  ],
+  "chaosScenarios": [
+    {
+      "id": "kafka-outage-cdc-recovery",
+      "title": "Kafka Cluster Outage During Checkout (Zero Lost Events)",
+      "faultType": "node_down",
+      "targetNodeId": "kafka",
+      "triggerSummary": "Kafka brokers become unreachable for 5 minutes while customers keep placing orders.",
+      "mitigationSummary": "Order Service checkouts keep succeeding at 100% availability via Postgres ACID commits; Debezium resumes cleanly from Postgres WAL offset once Kafka recovers.",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. CHECKOUT SUCCEEDS WHILE KAFKA DOWN",
+          "timestampMs": 0.0,
+          "sourceNodeId": "order-svc",
+          "targetNodeId": "postgres",
+          "edgeId": "e-svc-pg",
+          "category": "write",
+          "protocol": "SQL",
+          "info": "Orders + outbox_events persist safely in Postgres even while Kafka is unreachable",
+          "payloadSize": "420 B",
+          "payloadInspector": "Checkout API availability remains 100%; outbox queues durably in Postgres WAL",
+          "latencyDeltaMs": 4.0,
+          "inspectorNote": "Notice the resilience gain: a downstream Kafka outage no longer takes down customer checkout!"
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "2. WAL CATCHUP ON KAFKA RECOVERY",
+          "timestampMs": 4.0,
+          "sourceNodeId": "debezium",
+          "targetNodeId": "kafka",
+          "edgeId": "e-deb-kfk",
+          "category": "failover",
+          "protocol": "Kafka",
+          "info": "Kafka returns -> Debezium drains 5m WAL backlog in order -> 0 lost events",
+          "payloadSize": "2.4 KB",
+          "payloadInspector": "Resumed from replication slot LSN 0/4A20B1 -> synced all pending orders to Search & Billing",
+          "latencyDeltaMs": 8.0,
+          "inspectorNote": "Zero reconciliation scripts needed—every committed order automatically streams to derived consumers."
+        }
+      ]
+    }
+  ],
+  "tradeoffs": [
+    {
+      "option": "Transactional Outbox + WAL CDC (Debezium)",
+      "pros": ["Zero dual-write divergence", "Zero polling load on primary SQL", "Checkout works even if Kafka temporarily blips"],
+      "cons": ["Adds Kafka Connect / Debezium operational component", "Requires monitoring Postgres WAL replication slot retention"],
+      "bestFor": "Orders, payments, search sync, microservices event-driven consistency"
+    },
+    {
+      "option": "Direct App Dual-Write (SQL + Kafka)",
+      "pros": ["No CDC infrastructure required"],
+      "cons": ["Permanent silent divergence risk whenever crash/network fails between commits"],
+      "bestFor": "Best-effort non-critical analytics/click telemetry only"
+    }
+  ],
+  "quizQuestionIds": ["q-cdc-1", "q-cdc-2"],
+  "flashcardIds": ["fc-cdc-1", "fc-cdc-2"]
+}

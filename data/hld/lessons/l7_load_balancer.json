@@ -1,0 +1,242 @@
+{
+  "id": "l7-load-balancer",
+  "track": "hld",
+  "category": "building-blocks",
+  "layer": 2,
+  "title": "L4 vs L7 Load Balancing & Algorithms",
+  "subtitle": "TLS termination, health checks, Least-Conn & PEWMA routing",
+  "difficulty": "L3-L4",
+  "estimatedMinutes": 16,
+  "overview": "Load balancers decouple clients from volatile backend fleets. Layer 4 (Transport) forwards TCP packets at wire speed via DSR/NAT without decrypting TLS; Layer 7 (Application) terminates TLS, inspects HTTP paths/headers, and chooses backends dynamically using Least-Connections or latency-aware PEWMA.",
+  "firstPrinciplesStory": "You add 8 shiny new backend pods behind a basic L4 Load Balancer during a traffic spike, expecting load to drop by 3x. Instead, the original 4 pods melt at 98% CPU while your 8 new pods sit completely idle! Why? Because HTTP/2 and gRPC multiplex hundreds of requests over ONE long-lived TCP socket—and L4 balances connections, not requests. Understanding where L4 stops and L7 takes over saves you from mysterious horizontal-scaling failures.",
+  "adaptiveLenses": {
+    "intuition": "An L4 balancer is an expressway tollbooth waving entire sealed trucks (TCP connections) into lanes without looking inside; an L7 proxy opens each truck, reads individual package labels (HTTP routes/RPCs), and steers packages away from slow loading docks.",
+    "mechanics": "Production ingress pairs L4 ECMP/Maglev (routing millions of packets/sec via 5-tuple hash) in front of L7 Envoy proxies. Envoy terminates TLS 1.3, tracks active in-flight streams and exponentially smoothed latency (PEWMA), and ejects gray-failing backends via passive outlier detection.",
+    "staffTradeoffs": "Round Robin works poorly when request cost varies wildly (e.g., 2ms cache check vs 400ms PDF export) or during GC pauses. Power-of-Two-Choices + PEWMA balances tail latency cleanly without O(N) global state contention, while strict retry budgets (<20%) prevent retry storms."
+  },
+  "ddiaAnchors": [
+    {
+      "chapter": "DDIA Ch. 1 · Tail Latency Amplification",
+      "concept": "Gray Failures & p99 Slow Pods",
+      "whyItMatters": "A single slow backend pod inflates tail latency across callers unless latency-aware load balancers steer around it."
+    }
+  ],
+  "pragmaticTips": [
+    {
+      "principle": "Orthogonality (Decouple Ingress Concerns)",
+      "tip": "Keep TLS termination, auth verification, and canary routing in an orthogonal L7 gateway layer rather than copy-pasting middleware across 20 services.",
+      "application": "Upgrade TLS ciphers or swap routing weights once at Envoy without redeploying backend business pods."
+    }
+  ],
+  "keyTakeaways": [
+    "L4 load balancers handle millions of packets/sec via 5-tuple hashing; L7 proxies inspect HTTP routes, JWTs, and gRPC frames.",
+    "Real production architectures stack L4 (Anycast/ECMP VIP) in front of L7 Envoy/NGINX proxy fleets.",
+    "Latency-aware routing (Least Connections + PEWMA) outperforms static Round Robin when requests have uneven compute cost."
+  ],
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Client Fleet",
+      "sublabel": "HTTP/2 · Keep-Alive",
+      "kind": "client",
+      "layer": 1,
+      "gridPos": { "gx": 1, "gy": 5 },
+      "specs": { "protocol": "HTTPS", "port": "443", "maxQpsPerNode": 100, "baseLatencyMs": 1.0, "capProfile": "N/A", "scalingAxis": "Clients" },
+      "summary": "External API callers maintaining multiplexed TLS connections.",
+      "whenToUse": ["Public web/mobile API traffic"],
+      "failureModes": ["HTTP/2 long-lived TCP pinning starves new backend pods unless L7 re-balances per stream"]
+    },
+    {
+      "id": "l4-lb",
+      "label": "L4 Maglev / NLB",
+      "sublabel": "VIP 198.51.100.10 · ECMP",
+      "kind": "load_balancer",
+      "layer": 2,
+      "gridPos": { "gx": 4, "gy": 5 },
+      "specs": { "protocol": "TCP / Maglev Hash", "port": "443", "maxQpsPerNode": 2000000, "baseLatencyMs": 0.3, "capProfile": "AP", "scalingAxis": "BGP ECMP" },
+      "summary": "Stateless packet-level balancer distributing raw TCP flows across L7 proxy nodes.",
+      "whenToUse": ["First ingress tier handling multi-million PPS DDoS/TLS scale"],
+      "failureModes": ["Cannot route on URL path or HTTP headers"]
+    },
+    {
+      "id": "l7-proxy",
+      "label": "L7 Envoy Proxy",
+      "sublabel": "TLS Term · PEWMA LB",
+      "kind": "api_gateway",
+      "layer": 2,
+      "gridPos": { "gx": 7, "gy": 5 },
+      "specs": { "protocol": "HTTP/2 → gRPC", "port": "443 / 8080", "maxQpsPerNode": 120000, "baseLatencyMs": 1.2, "capProfile": "AP", "scalingAxis": "Horizontal proxy fleet" },
+      "summary": "Terminates TLS, enforces path routing, tracks active in-flight requests and EWMA backend latency.",
+      "whenToUse": ["Path-based microservice routing, canary traffic splitting, gRPC multiplexing"],
+      "failureModes": ["CPU bottleneck from TLS handshakes if session tickets aren't shared"]
+    },
+    {
+      "id": "app-a",
+      "label": "App Pod A",
+      "sublabel": "10.0.2.11 · 4 in-flight",
+      "kind": "compute",
+      "layer": 3,
+      "gridPos": { "gx": 10, "gy": 2 },
+      "specs": { "protocol": "gRPC / HTTP", "port": "8080", "maxQpsPerNode": 5000, "baseLatencyMs": 8.0, "capProfile": "N/A", "scalingAxis": "HPA replicas" },
+      "summary": "Healthy low-latency compute replica.",
+      "whenToUse": ["Stateless REST/gRPC handlers"],
+      "failureModes": ["GC pauses or thread pool saturation"]
+    },
+    {
+      "id": "app-b",
+      "label": "App Pod B (Slow)",
+      "sublabel": "10.0.2.12 · 48 in-flight",
+      "kind": "compute",
+      "layer": 3,
+      "gridPos": { "gx": 10, "gy": 5 },
+      "specs": { "protocol": "gRPC / HTTP", "port": "8080", "maxQpsPerNode": 5000, "baseLatencyMs": 140.0, "capProfile": "N/A", "scalingAxis": "HPA replicas" },
+      "summary": "Degraded replica experiencing elevated GC/CPU contention.",
+      "whenToUse": ["Demonstrates why static Round Robin hurts tail latency"],
+      "failureModes": ["Gray failure: returns 200 OK slowly, bypassing naive ping checks"]
+    },
+    {
+      "id": "app-c",
+      "label": "App Pod C",
+      "sublabel": "10.0.2.13 · 2 in-flight",
+      "kind": "compute",
+      "layer": 3,
+      "gridPos": { "gx": 10, "gy": 8 },
+      "specs": { "protocol": "gRPC / HTTP", "port": "8080", "maxQpsPerNode": 5000, "baseLatencyMs": 7.5, "capProfile": "N/A", "scalingAxis": "HPA replicas" },
+      "summary": "Under-utilized healthy replica selected by PEWMA / Power-of-2-Choices.",
+      "whenToUse": ["Stateless microservice pool"],
+      "failureModes": ["Pod startup cold JIT without warmup ramp"]
+    }
+  ],
+  "edges": [
+    { "id": "e-client-l4", "from": "client", "to": "l4-lb", "protocol": "TCP/TLS", "transport": "sync", "label": "4-Tuple ECMP" },
+    { "id": "e-l4-l7", "from": "l4-lb", "to": "l7-proxy", "protocol": "TCP", "transport": "sync", "label": "Consistent L4 Hash" },
+    { "id": "e-l7-a", "from": "l7-proxy", "to": "app-a", "protocol": "gRPC", "transport": "sync", "label": "Route /api/orders" },
+    { "id": "e-l7-b", "from": "l7-proxy", "to": "app-b", "protocol": "gRPC", "transport": "sync", "label": "Degraded Pod" },
+    { "id": "e-l7-c", "from": "l7-proxy", "to": "app-c", "protocol": "gRPC", "transport": "sync", "label": "PEWMA Pick" }
+  ],
+  "steps": [
+    {
+      "stepNo": 1,
+      "phaseTitle": "1. L4 ANYCAST INGRESS",
+      "timestampMs": 0.0,
+      "sourceNodeId": "client",
+      "targetNodeId": "l4-lb",
+      "edgeId": "e-client-l4",
+      "category": "network",
+      "protocol": "TCP/TLS",
+      "info": "SYN/HTTP2 stream arrives at Anycast VIP 198.51.100.10",
+      "payloadSize": "512 B",
+      "payloadInspector": "Src: 203.0.113.55:51422 -> VIP: 198.51.100.10:443 (ECMP L4)",
+      "latencyDeltaMs": 0.3,
+      "inspectorNote": "L4 balancer uses consistent Maglev hashing on the 5-tuple without touching encrypted TLS payloads."
+    },
+    {
+      "stepNo": 2,
+      "phaseTitle": "2. L4 → L7 PROXY FORWARD",
+      "timestampMs": 0.3,
+      "sourceNodeId": "l4-lb",
+      "targetNodeId": "l7-proxy",
+      "edgeId": "e-l4-l7",
+      "category": "network",
+      "protocol": "TCP",
+      "info": "Forwarded via DSR/GRE to healthy Envoy ingress node",
+      "payloadSize": "512 B",
+      "payloadInspector": "PROXY Protocol v2 header appended with real client IP",
+      "latencyDeltaMs": 0.4,
+      "inspectorNote": "Direct Server Return (DSR) or PROXY protocol preserves client IP while allowing horizontal L7 scaling."
+    },
+    {
+      "stepNo": 3,
+      "phaseTitle": "3. L7 TLS & P2C SELECTION",
+      "timestampMs": 0.7,
+      "sourceNodeId": "l7-proxy",
+      "targetNodeId": "app-c",
+      "edgeId": "e-l7-c",
+      "category": "read",
+      "protocol": "gRPC",
+      "info": "TLS terminated; Power-of-2-Choices (PEWMA) compares Pod B (score 6720) vs Pod C (score 15) -> picks Pod C",
+      "payloadSize": "640 B",
+      "payloadInspector": "POST /orders.OrderService/CreateQuote\nAuthorization: Bearer <verified>\nx-envoy-upstream-pick: app-c (ewma_ms=7.5, inflight=2)",
+      "latencyDeltaMs": 1.2,
+      "inspectorNote": "Unlike blind Round Robin, PEWMA combines active request count and exponentially weighted latency, automatically steering away from gray-failing Pod B.",
+      "predictPrompt": {
+        "prompt": "Why does Pod B's `/health` endpoint still returning `200 OK` fail to protect users under static Round Robin?",
+        "hint": "Think about what a simple liveness ping measures vs actual heavy business RPC latency.",
+        "reveal": "A shallow `/health` check returns `200 OK` quickly even when database pools or GC pauses stall real `/checkout` RPCs at 140ms+ (a gray failure). Latency-aware PEWMA + passive error tracking catches this immediately."
+      }
+    },
+    {
+      "stepNo": 4,
+      "phaseTitle": "4. BACKEND RESPONSE",
+      "timestampMs": 1.9,
+      "sourceNodeId": "app-c",
+      "targetNodeId": "l7-proxy",
+      "edgeId": "e-l7-c",
+      "category": "read",
+      "protocol": "gRPC",
+      "info": "200 OK in 7.5 ms; Envoy updates Pod C EWMA latency",
+      "payloadSize": "1.1 KB",
+      "payloadInspector": "grpc-status: 0 (OK) | upstream-service-time: 7.5ms",
+      "latencyDeltaMs": 7.5,
+      "inspectorNote": "Total proxy + compute latency stays under 10ms while Pod B would have caused a 140ms p99 spike."
+    }
+  ],
+  "chaosScenarios": [
+    {
+      "id": "pod-b-crash-ejection",
+      "title": "Passive Health Check & Outlier Ejection",
+      "faultType": "node_down",
+      "targetNodeId": "app-b",
+      "triggerSummary": "App Pod B starts returning consecutive 502/timeouts under memory pressure.",
+      "mitigationSummary": "Envoy passive outlier detection ejects Pod B for 30s after 5 consecutive 5xx errors and drains existing requests to Pod A/C.",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. POD B CONSECUTIVE 5XX",
+          "timestampMs": 0.0,
+          "sourceNodeId": "l7-proxy",
+          "targetNodeId": "app-b",
+          "edgeId": "e-l7-b",
+          "category": "failover",
+          "protocol": "gRPC",
+          "info": "5 consecutive 503/timeout failures detected on App Pod B",
+          "payloadSize": "128 B",
+          "payloadInspector": "OutlierDetector: consecutive_5xx=5 >= threshold(5) -> EJECT 10.0.2.12 for 30s",
+          "latencyDeltaMs": 20.0,
+          "inspectorNote": "Passive health checks react within milliseconds of real traffic errors, far faster than 10s periodic HTTP probes."
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "2. AUTOMATIC RETRY TO POD A",
+          "timestampMs": 20.0,
+          "sourceNodeId": "l7-proxy",
+          "targetNodeId": "app-a",
+          "edgeId": "e-l7-a",
+          "category": "read",
+          "protocol": "gRPC",
+          "info": "Idempotent GET safely retried on Pod A -> 200 OK (8 ms)",
+          "payloadSize": "1.1 KB",
+          "payloadInspector": "x-envoy-attempt-count: 2 | upstream: 10.0.2.11 | status: 200",
+          "latencyDeltaMs": 8.0,
+          "inspectorNote": "With retry budgets capped (e.g. 20% max retries), Pod A absorbs the request cleanly without retry amplification."
+        }
+      ]
+    }
+  ],
+  "tradeoffs": [
+    {
+      "option": "L4 Load Balancer (Maglev / AWS NLB)",
+      "pros": ["Ultra-low latency (~0.3ms)", "Handles millions of PPS", "Preserves end-to-end TCP/TLS if desired"],
+      "cons": ["No HTTP path/header inspection", "Cannot rebalance multiplexed HTTP/2 or gRPC streams mid-connection"],
+      "bestFor": "High-throughput ingress tier or non-HTTP TCP workloads"
+    },
+    {
+      "option": "L7 Load Balancer (Envoy / ALB)",
+      "pros": ["Smart per-request routing (HTTP/2 & gRPC)", "Canary splits, JWT auth, PEWMA latency routing", "Passive outlier ejection"],
+      "cons": ["Higher CPU/RAM cost for TLS termination and HTTP parsing"],
+      "bestFor": "Microservice ingress, API gateways, gRPC fleets"
+    }
+  ],
+  "quizQuestionIds": ["q-lb-1", "q-lb-2"],
+  "flashcardIds": ["fc-lb-1", "fc-lb-2"]
+}

@@ -1,0 +1,123 @@
+{
+  "id": "financial-auditing-ledger",
+  "tier": 4,
+  "title": "Design a High-Volume Financial Auditing Ledger",
+  "subtitle": "Hot LSM MemTable/SSTable ingestion -> Cold compressed Parquet columnar audit tier",
+  "levelTag": "L6-L7",
+  "estimatedMinutes": 45,
+  "tags": ["LSM-Tree", "Columnar OLAP", "Bloom Filter", "Compaction Stalls"],
+  "functionalReqs": [
+    "Record immutable cryptographically linked financial entries (`150k/s` baseline, `400k/s` burst) with monotonic account sequence numbers.",
+    "Reconstruct exact account state at any historical timestamp `T` in `< 25 ms` without scanning years of logs.",
+    "Run multi-billion-row regulatory quarterly audit range aggregations in `< 2 s` without slowing live writes."
+  ],
+  "nonFunctionalReqs": [
+    { "metric": "Ingest Latency", "target": "p99 <= 15 ms at 150k writes/sec", "rationale": "Sequential LSM WAL + MemTable avoids 4KB B-Tree random-write page splits." },
+    { "metric": "Audit Range Speed", "target": "< 2 seconds across 5B quarterly rows", "rationale": "Cold Dictionary/RLE-encoded Parquet cuts bytes scanned by >90%." },
+    { "metric": "Zero Data Loss", "target": "RPO = 0 via multi-AZ quorum WAL", "rationale": "Every committed audit tuple must survive whole-AZ failures." }
+  ],
+  "estimationPreset": {
+    "dau": 25000000,
+    "actionsPerUserPerDay": 518.4,
+    "peakMultiplier": 2.7,
+    "avgPayloadBytes": 350,
+    "readWriteRatio": "15:85",
+    "retentionYears": 5,
+    "workedSummary": {
+      "dailyRawIngest": "150,000/s × 86,400 × 350 B = 4.53 TB/day raw (220 TB cold compressed over 5y)",
+      "bloomFilterRam": "64 Hot LSM shards -> ~96 GB cluster RAM keeps absent-key disk seeks near zero",
+      "columnarScanSavings": "Dictionary + RLE encoding skips 88–92% of I/O for quarterly 3-column audits"
+    }
+  },
+  "coreEntities": [
+    {
+      "name": "AuditEntryHot",
+      "storageEngine": "LSM-Tree (WAL + SkipList MemTable + Leveled SSTables)",
+      "partitionKey": "(account_hash_prefix, account_id, seq DESC)",
+      "keyFields": ["account_id", "ledger_seq", "delta_minor_units", "balance_after", "prev_hash", "ts_utc"]
+    },
+    {
+      "name": "AuditArchiveColumnar",
+      "storageEngine": "Compressed Parquet Stripes on S3 + Iceberg Manifests",
+      "partitionKey": "(date_bucket, account_hash_bucket)",
+      "keyFields": ["account_id", "currency (dict)", "delta_minor_units", "checkpoint_balance", "ts_delta"]
+    }
+  ],
+  "apiContracts": [
+    {
+      "method": "POST",
+      "path": "/v1/audit/entries",
+      "purpose": "Append immutable audited ledger tuple into hot Raft-replicated LSM shard with hash chain check",
+      "idempotent": true,
+      "samplePayload": "{\"accountId\":\"acc_992\",\"seq\":4812,\"deltaMinor\":-5000,\"idempotencyKey\":\"tx_41\"}"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/audit/accounts/{id}/at",
+      "purpose": "Reconstruct point-in-time balance via nearest `balance_checkpoint` + <=1,000 delta tail replay"
+    }
+  ],
+  "explorerTopology": {
+    "id": "audit-ledger-flow",
+    "track": "hld",
+    "category": "building-blocks",
+    "layer": 4,
+    "title": "Hot LSM Write Shards -> Cold Columnar Audit Engine",
+    "subtitle": "Sequential WAL + MemTable -> Bloom-Indexed SSTables -> Parquet Compactor",
+    "difficulty": "L6-L7",
+    "estimatedMinutes": 22,
+    "overview": "Why financial auditing systems split workloads across write-optimized LSM engines (hot 7 days) and Dictionary/RLE compressed columnar stores (5-year audit scans).",
+    "keyTakeaways": [
+      "Sequential LSM writes eliminate B-Tree 4KB random-page write amplification.",
+      "Checkpoint snapshots every 1,000 rows guarantee bounded O(1,000) point-in-time balance reconstruction."
+    ],
+    "nodes": [
+      { "id": "writers", "label": "Ledger Writers", "sublabel": "150k–400k entries/s", "kind": "compute", "layer": 3, "gridPos": { "gx": 1, "gy": 5 }, "specs": { "protocol": "gRPC", "port": "9090", "maxQpsPerNode": 35000, "baseLatencyMs": 1.0, "capProfile": "N/A", "scalingAxis": "Stateless writers" }, "summary": "Receives verified settlement entries and routes cleanly by account hash.", "whenToUse": ["Write-heavy immutable ingestion"], "failureModes": ["Unordered concurrent timestamps corrupt point-in-time ordering without monotonic seq"] },
+      { "id": "lsm-hot", "label": "Hot LSM Shards (7d)", "sublabel": "WAL + MemTable + Bloom", "kind": "db_nosql", "layer": 4, "gridPos": { "gx": 4, "gy": 5 }, "specs": { "protocol": "RocksDB / Raft WAL", "port": "9042", "maxQpsPerNode": 50000, "baseLatencyMs": 4.0, "capProfile": "CP", "scalingAxis": "64 NVMe shards" }, "summary": "Buffers writes in SkipList MemTable + append-only quorum WAL; Bloom filters skip nonexistent SSTable disk reads.", "whenToUse": ["Write-heavy audit logs + recent lookups"], "failureModes": ["Unthrottled L0 SSTable bursts trigger write stalls unless compaction bandwidth is reserved"] },
+      { "id": "compactor", "label": "Flink Columnar Compactor", "sublabel": "Dictionary + RLE + ZSTD", "kind": "compute", "layer": 6, "gridPos": { "gx": 7, "gy": 3 }, "specs": { "protocol": "S3 Multipart", "port": "8080", "maxQpsPerNode": 20000, "baseLatencyMs": 15.0, "capProfile": "N/A", "scalingAxis": "Batch/stream workers" }, "summary": "Reads immutable flushed SSTables older than 7 days and encodes sorted columnar Parquet stripes.", "whenToUse": ["TPP Transforming Programming cold tiering"], "failureModes": ["Non-idempotent jobs duplicate rows into S3 archives"] },
+      { "id": "cold-s3", "label": "Cold Parquet + Iceberg", "sublabel": "5-Yr Object Archive", "kind": "object_store", "layer": 4, "gridPos": { "gx": 10, "gy": 3 }, "specs": { "protocol": "Parquet / S3", "port": "443", "maxQpsPerNode": null, "baseLatencyMs": 25.0, "capProfile": "CP", "scalingAxis": "Z-order partitions" }, "summary": "Stores 10x compressed columnar audit records with min/max zone-map statistics.", "whenToUse": ["Low-cost immutable multi-year compliance storage"], "failureModes": ["Thousands of tiny files hurt metadata scans without target 256MB stripe compaction"] },
+      { "id": "olap-reader", "label": "Vectorized Audit Query", "sublabel": "SIMD + Granule Pruning", "kind": "search_index", "layer": 7, "gridPos": { "gx": 7, "gy": 7 }, "specs": { "protocol": "SQL / ClickHouse", "port": "8123", "maxQpsPerNode": 5000, "baseLatencyMs": 12.0, "capProfile": "AP", "scalingAxis": "Stateless SIMD workers" }, "summary": "Scans only audited columns cleanly via SIMD CPU execution + checkpoint balance anchors.", "whenToUse": ["Quarterly multi-billion-row regulatory scans"], "failureModes": ["Running analytics directly on live OLTP B-Trees degrades active payment writes"] }
+    ],
+    "edges": [
+      { "id": "e1", "from": "writers", "to": "lsm-hot", "protocol": "Quorum WAL", "transport": "sync", "label": "Append MemTable + WAL" },
+      { "id": "e2", "from": "lsm-hot", "to": "compactor", "protocol": "SSTable Flush", "transport": "async", "label": "Transform >7d SSTables" },
+      { "id": "e3", "from": "compactor", "to": "cold-s3", "protocol": "Parquet Put", "transport": "async", "label": "Commit Iceberg Manifest" },
+      { "id": "e4", "from": "olap-reader", "to": "cold-s3", "protocol": "SIMD Scan", "transport": "sync", "label": "Prune + Read 3 cols" },
+      { "id": "e5", "from": "olap-reader", "to": "lsm-hot", "protocol": "Merge Tail", "transport": "sync", "label": "Read <7d checkpoints" }
+    ],
+    "steps": [
+      { "stepNo": 1, "phaseTitle": "Sequential WAL + SkipList MemTable Append", "timestampMs": 0, "sourceNodeId": "writers", "targetNodeId": "lsm-hot", "edgeId": "e1", "category": "write", "protocol": "Raft WAL", "info": "Writes entry to 3-AZ quorum WAL + SkipList MemTable sequentially—zero 4KB random B-Tree page dirtying.", "payloadSize": "350 B", "payloadInspector": "WAL Append: LSN #98112 | MemTable Insert O(log M)\nWrite Amp: 1x immediate, ~12x amortized", "latencyDeltaMs": 4.0, "inspectorNote": "Sequential commits unlock 150k+ writes/s sustainably with predictable NVMe endurance." },
+      { "stepNo": 2, "phaseTitle": "Deterministic Columnar Transformation", "timestampMs": 10, "sourceNodeId": "lsm-hot", "targetNodeId": "compactor", "edgeId": "e2", "category": "async", "protocol": "SSTable Read", "info": "Streams immutable L2 SSTables >7d old into Flink compactor without competing with live transactions.", "payloadSize": "256 MB", "payloadInspector": "Input: immutable SSTable chunk\nOutput Compression: Dictionary(currency) + RLE + ZSTD (5.4x ratio)", "latencyDeltaMs": 12.0, "inspectorNote": "Separating write-hot LSM from analytical columnar cold tier respects the RUM Conjecture." },
+      { "stepNo": 3, "phaseTitle": "Atomic Parquet + Iceberg Commit", "timestampMs": 22, "sourceNodeId": "compactor", "targetNodeId": "cold-s3", "edgeId": "e3", "category": "write", "protocol": "Iceberg CAS", "info": "Commits 256MB Z-ordered Parquet stripe with min/max zone maps atomically.", "payloadSize": "48 MB", "payloadInspector": "Min Account: acc_0001 | Max Account: acc_2500\nPoint-in-time checkpoint rows embedded", "latencyDeltaMs": 18.0, "inspectorNote": "Min/max statistics skip 95%+ of cold object-store stripes before touching S3 GET API." },
+      { "stepNo": 4, "phaseTitle": "Vectorized Audit Query (Merged Hot + Cold)", "timestampMs": 40, "sourceNodeId": "olap-reader", "targetNodeId": "cold-s3", "edgeId": "e4", "category": "read", "protocol": "SIMD Parquet", "info": "Reads ONLY 3 audited columns across 256MB Z-ordered stripes (<1.2s quarterly aggregation!).", "payloadSize": "18 MB", "payloadInspector": "Columns Projected: [account_id, delta_minor, ts_utc] (92% byte skip!)", "latencyDeltaMs": 25.0, "inspectorNote": "SIMD batch scans achieve gigabytes/sec analytical throughput cleanly isolated from hot writers." }
+    ],
+    "chaosScenarios": [
+      {
+        "id": "chaos-l0-compaction",
+        "title": "400k/s Write Burst L0 Compaction Stall",
+        "faultType": "qps_spike",
+        "targetNodeId": "lsm-hot",
+        "triggerSummary": "Market close floods 400k/s entries; unmerged L0 SSTables spike, threatening compaction write stalls & read amplification.",
+        "mitigationSummary": "Dedicated NVMe compaction rate-limiter reserves 35% disk IOPS while Bloom filters in RAM shield recent reads from touching disk.",
+        "steps": [
+          { "stepNo": 1, "phaseTitle": "Dedicated Compaction IOPS + Bloom Guard", "timestampMs": 0, "sourceNodeId": "writers", "targetNodeId": "lsm-hot", "edgeId": "e1", "category": "failover", "protocol": "RocksDB RateLimiter", "info": "Reserves 35% NVMe write bandwidth exclusively for L0->L1 compaction; 10-bit Bloom filters drop 99% of unnecessary L0 seeks.", "payloadSize": "350 B", "payloadInspector": "l0_files: 14 -> capped cleanly\nBloom Reject Rate: 99.1% (RAM only)", "latencyDeltaMs": 6.5, "inspectorNote": "Prevents catastrophic write-stall cascading pauses during market spikes." }
+        ]
+      }
+    ],
+    "tradeoffs": [
+      { "option": "Tiered LSM (Hot 7d) + Compressed Parquet (Cold 5y)", "pros": ["Optimal sequential write speed + 10x cheaper compressed audit storage", "Zero analytical interference with transactional writes"], "cons": ["Requires two query/merge layers and deterministic compaction job"], "bestFor": "High-volume immutable financial & compliance ledgers" }
+    ]
+  },
+  "deepDives": [
+    { "title": "Mitigating LSM Write Stalls & SSD Wear Amplification", "bottleneck": "Leveled compaction multiplies disk writes 10–30x; unpaced compactions choke live MemTable flushes.", "solution": "Use Size-Tiered L0/L1 intake paired with reserved NVMe I/O rate limits and large batch WAL group commits.", "tradeoff": "Higher transient space usage (20%) prevents hard latency stalls during 400k/s bursts." },
+    { "title": "O(1000) Point-in-Time Reconstruction Without Full Log Replay", "bottleneck": "Scanning millions of delta records to verify one account's historical balance breaks `<25ms` SLA.", "solution": "Emit immutable `balance_checkpoint` records every 1,000 events and index them cleanly in Parquet/SSTable.", "tradeoff": "<0.2% storage overhead eliminates variable linear log replays permanently." }
+  ],
+  "rubricChecklist": [
+    { "phase": "Storage Engine Selection", "weight": 25, "criteria": ["Quantifies B-Tree random-page write amplification vs LSM MemTable/WAL sequential writes"] },
+    { "phase": "Bloom Filters & Compaction", "weight": 25, "criteria": ["Sizes Bloom filter RAM (~10 bits/key) and handles leveled compaction stalls & write amplification"] },
+    { "phase": "OLTP vs Columnar Separation", "weight": 25, "criteria": ["Transforms flushed immutable data into Dictionary/RLE-compressed Parquet for sub-2s range audits"] },
+    { "phase": "Point-in-Time Checkpoints", "weight": 25, "criteria": ["Adds periodic checkpoint snapshots for bounded O(1000) historical state reconstruction"] }
+  ],
+  "quizQuestionIds": ["q-audit-1", "q-audit-2"],
+  "flashcardIds": ["fc-audit-1", "fc-audit-2"]
+}

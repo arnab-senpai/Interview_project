@@ -1,0 +1,302 @@
+{
+  "id": "url-shortener",
+  "tier": 1,
+  "title": "Design a URL Shortener (TinyURL / Bit.ly)",
+  "subtitle": "Base62 encoding, KGS pre-allocation, read-heavy caching & 301 vs 302 redirects",
+  "levelTag": "L3-L4",
+  "estimatedMinutes": 35,
+  "tags": ["Base62", "KGS", "Read-Heavy Cache", "301 vs 302"],
+  "functionalReqs": [
+    "Given a long URL, generate a globally unique short alias (7 chars from [a-zA-Z0-9]).",
+    "Redirect HTTP GET /:code to the original long URL with p99 latency < 20ms.",
+    "Support optional custom aliases and link expiration TTL.",
+    "Track basic click analytics asynchronously without slowing down redirects."
+  ],
+  "nonFunctionalReqs": [
+    { "metric": "Read:Write Ratio", "target": "100 : 1 (Read-Heavy)", "rationale": "Links are created once and clicked hundreds of times." },
+    { "metric": "Redirect p99 Latency", "target": "< 20 ms (regional)", "rationale": "Redirects sit on the user's critical page-navigation path." },
+    { "metric": "Availability", "target": "99.99%", "rationale": "Broken short links break external emails, QR codes, and social posts." },
+    { "metric": "Collision Rate", "target": "0%", "rationale": "Two distinct long URLs must never silently overwrite each other." }
+  ],
+  "estimationPreset": {
+    "dau": 20000000,
+    "actionsPerUserPerDay": 0.2,
+    "peakMultiplier": 3.0,
+    "avgPayloadBytes": 500,
+    "readWriteRatio": "100:1",
+    "retentionYears": 5,
+    "workedSummary": {
+      "newUrlsPerDay": "4M/day (~40 writes/sec avg, ~120 writes/sec peak)",
+      "redirectsPerSec": "~4,000 reads/sec avg, ~12,000 reads/sec peak",
+      "fiveYearStorage": "4M × 365 × 5 × 500 B ≈ 3.65 TB (single/lightly sharded DB)",
+      "hotCacheRam": "20% of daily reads (~80M links × 500 B ≈ 40 GB Redis RAM)"
+    }
+  },
+  "coreEntities": [
+    {
+      "name": "UrlMapping",
+      "storageEngine": "PostgreSQL / DynamoDB (sharded by short_code)",
+      "partitionKey": "short_code",
+      "keyFields": ["short_code (PK, char 7)", "long_url (text)", "user_id", "created_at", "expires_at"]
+    },
+    {
+      "name": "KeyLeaseBatch",
+      "storageEngine": "KGS Unused/Used DB + In-Mem Worker Leases",
+      "partitionKey": "batch_id",
+      "keyFields": ["short_code", "status (unused | leased | used)"]
+    }
+  ],
+  "apiContracts": [
+    {
+      "method": "POST",
+      "path": "/api/v1/urls",
+      "purpose": "Create a short link using KGS or custom alias",
+      "idempotent": false,
+      "samplePayload": "{\"longUrl\": \"https://systemcraft.dev/hld/roadmap\", \"ttlDays\": 365}"
+    },
+    {
+      "method": "GET",
+      "path": "/{shortCode}",
+      "purpose": "Resolve short code and return HTTP 302 (or 301) Location header",
+      "idempotent": true,
+      "samplePayload": "HTTP/1.1 302 Found | Location: https://systemcraft.dev/hld/roadmap"
+    }
+  ],
+  "explorerTopology": {
+    "id": "url-shortener-flow",
+    "track": "hld",
+    "category": "patterns",
+    "layer": 3,
+    "title": "URL Shortener Redirect & Creation Flow",
+    "subtitle": "Read-through Redis cache + Bloom filter + async click analytics",
+    "difficulty": "L3-L4",
+    "estimatedMinutes": 20,
+    "overview": "Writes fetch pre-generated collision-free Base62 keys from an in-memory KGS lease. Reads hit Redis (or edge cache) first, guarded by a Bloom filter against bogus codes, and emit click events asynchronously to Kafka.",
+    "keyTakeaways": [
+      "62^7 ≈ 3.52 trillion unique 7-char keys—enough for centuries at 4M links/day.",
+      "Use HTTP 302 (Found) when you need server-side click analytics or mutable targets; use 301 only for immutable zero-analytics links.",
+      "Pre-generating keys via KGS eliminates write-time hash collision retries."
+    ],
+    "nodes": [
+      {
+        "id": "client",
+        "label": "Browser Client",
+        "sublabel": "GET /aB9x2Kq",
+        "kind": "client",
+        "layer": 1,
+        "gridPos": { "gx": 1, "gy": 5 },
+        "specs": { "protocol": "HTTPS", "port": "443", "maxQpsPerNode": 50, "baseLatencyMs": 1.0, "capProfile": "N/A", "scalingAxis": "Clients" },
+        "summary": "User clicking a short URL or submitting a long URL to shorten.",
+        "whenToUse": ["Client ingress"],
+        "failureModes": ["Browser permanently caches 301 redirects, preventing later analytics"]
+      },
+      {
+        "id": "gateway",
+        "label": "API Gateway + Rate Limiter",
+        "sublabel": "Envoy · Port 443",
+        "kind": "api_gateway",
+        "layer": 2,
+        "gridPos": { "gx": 3, "gy": 5 },
+        "specs": { "protocol": "HTTPS", "port": "443", "maxQpsPerNode": 80000, "baseLatencyMs": 1.0, "capProfile": "AP", "scalingAxis": "Horizontal stateless" },
+        "summary": "Terminates TLS, throttles abusive link creators, routes reads vs writes.",
+        "whenToUse": ["Ingress protection"],
+        "failureModes": ["Unthrottled bot writes exhaust KGS key pool"]
+      },
+      {
+        "id": "url-svc",
+        "label": "Redirect & Shorten Service",
+        "sublabel": "Stateless · Port 8080",
+        "kind": "compute",
+        "layer": 3,
+        "gridPos": { "gx": 6, "gy": 5 },
+        "specs": { "protocol": "gRPC / HTTP", "port": "8080", "maxQpsPerNode": 15000, "baseLatencyMs": 1.5, "capProfile": "N/A", "scalingAxis": "HPA autoscaling" },
+        "summary": "Resolves short codes via Cache-Aside and holds leased 1,000-key blocks from KGS.",
+        "whenToUse": ["Core business logic"],
+        "failureModes": ["Crash drops unused in-memory key lease (acceptable <0.01% key waste)"]
+      },
+      {
+        "id": "redis",
+        "label": "Redis Hot Link Cache",
+        "sublabel": "LRU · 40 GB RAM",
+        "kind": "cache",
+        "layer": 3,
+        "gridPos": { "gx": 6, "gy": 1 },
+        "specs": { "protocol": "RESP3", "port": "6379", "maxQpsPerNode": 150000, "baseLatencyMs": 0.5, "capProfile": "AP", "scalingAxis": "Consistent hash shards" },
+        "summary": "Serves >85% of redirects directly from RAM in <1ms.",
+        "whenToUse": ["Hot link redirects"],
+        "failureModes": ["Random non-existent code scans bypass cache unless Bloom filter guards"]
+      },
+      {
+        "id": "db",
+        "label": "Sharded UrlMapping DB",
+        "sublabel": "Hash(short_code)",
+        "kind": "db_nosql",
+        "layer": 4,
+        "gridPos": { "gx": 9, "gy": 3 },
+        "specs": { "protocol": "Dynamo / Sharded PG", "port": "5432", "maxQpsPerNode": 25000, "baseLatencyMs": 6.0, "capProfile": "AP", "scalingAxis": "Partition by short_code" },
+        "summary": "Durable authoritative mapping partitioned evenly by short_code.",
+        "whenToUse": ["3.65 TB persistent mappings"],
+        "failureModes": ["Hot viral link hits single DB partition if Redis misses"]
+      },
+      {
+        "id": "kafka",
+        "label": "Analytics Kafka Topic",
+        "sublabel": "url.clicks · Async",
+        "kind": "queue",
+        "layer": 6,
+        "gridPos": { "gx": 9, "gy": 7 },
+        "specs": { "protocol": "Kafka TCP", "port": "9092", "maxQpsPerNode": 200000, "baseLatencyMs": 1.0, "capProfile": "CP", "scalingAxis": "Partitions" },
+        "summary": "Records referrer, geo, and timestamp asynchronously without blocking redirect response.",
+        "whenToUse": ["Non-blocking clickstream tracking"],
+        "failureModes": ["Synchronous DB counter increment on every redirect causes row-lock contention"]
+      }
+    ],
+    "edges": [
+      { "id": "e1", "from": "client", "to": "gateway", "protocol": "HTTPS", "transport": "sync", "label": "GET /aB9x2Kq" },
+      { "id": "e2", "from": "gateway", "to": "url-svc", "protocol": "HTTP/2", "transport": "sync", "label": "Route redirect" },
+      { "id": "e3", "from": "url-svc", "to": "redis", "protocol": "RESP3", "transport": "sync", "label": "GET url:aB9x2Kq" },
+      { "id": "e4", "from": "url-svc", "to": "db", "protocol": "SQL/KV", "transport": "sync", "label": "Fallback on miss" },
+      { "id": "e5", "from": "url-svc", "to": "kafka", "protocol": "Kafka", "transport": "async", "label": "Emit ClickEvent" }
+    ],
+    "steps": [
+      {
+        "stepNo": 1,
+        "phaseTitle": "1. INGRESS & RATE CHECK",
+        "timestampMs": 0.0,
+        "sourceNodeId": "client",
+        "targetNodeId": "gateway",
+        "edgeId": "e1",
+        "category": "network",
+        "protocol": "HTTPS",
+        "info": "GET /aB9x2Kq arrives at regional API Gateway",
+        "payloadSize": "340 B",
+        "payloadInspector": "GET /aB9x2Kq HTTP/2\nUser-Agent: Mozilla/5.0",
+        "latencyDeltaMs": 1.0,
+        "inspectorNote": "Gateway validates short-code regex `[a-zA-Z0-9]{7}` before forwarding—bad syntax fails at edge."
+      },
+      {
+        "stepNo": 2,
+        "phaseTitle": "2. REDIS HOT LINK HIT",
+        "timestampMs": 1.0,
+        "sourceNodeId": "url-svc",
+        "targetNodeId": "redis",
+        "edgeId": "e3",
+        "category": "cache_hit",
+        "protocol": "RESP3",
+        "info": "GET url:aB9x2Kq -> HIT (https://systemcraft.dev/hld/roadmap)",
+        "payloadSize": "120 B",
+        "payloadInspector": "REDIS HIT in 0.5ms -> skip DB query completely",
+        "latencyDeltaMs": 0.5,
+        "inspectorNote": "80%+ of clicks target the top 20% viral/recent links, kept warm in Redis."
+      },
+      {
+        "stepNo": 3,
+        "phaseTitle": "3. ASYNC CLICK ANALYTICS",
+        "timestampMs": 1.5,
+        "sourceNodeId": "url-svc",
+        "targetNodeId": "kafka",
+        "edgeId": "e5",
+        "category": "async",
+        "protocol": "Kafka",
+        "info": "Fire-and-forget buffered ClickEvent emitted to url.clicks",
+        "payloadSize": "210 B",
+        "payloadInspector": "{\"code\":\"aB9x2Kq\", \"ts\":1794905233, \"country\":\"IN\"}",
+        "latencyDeltaMs": 0.2,
+        "inspectorNote": "Click counting is buffered asynchronously so redirect latency stays under 5ms inside the datacenter."
+      },
+      {
+        "stepNo": 4,
+        "phaseTitle": "4. HTTP 302 REDIRECT",
+        "timestampMs": 1.7,
+        "sourceNodeId": "gateway",
+        "targetNodeId": "client",
+        "edgeId": "e1",
+        "category": "read",
+        "protocol": "HTTPS",
+        "info": "HTTP 302 Found -> Location: https://systemcraft.dev/hld/roadmap",
+        "payloadSize": "260 B",
+        "payloadInspector": "HTTP/2 302 Found\nLocation: https://systemcraft.dev/hld/roadmap\nCache-Control: private, max-age=0",
+        "latencyDeltaMs": 1.0,
+        "inspectorNote": "302 ensures repeat clicks hit our gateway for analytics and lets link owners update or expire URLs."
+      }
+    ],
+    "chaosScenarios": [
+      {
+        "id": "viral-link-cache-eviction",
+        "title": "Viral Link Cold Miss + Bogus 404 Scan Flood",
+        "faultType": "cache_expiry",
+        "targetNodeId": "redis",
+        "triggerSummary": "10,000 req/s arrive for bogus random codes AND an expired viral link simultaneously.",
+        "mitigationSummary": "In-process Bloom Filter drops bogus 404 scans before DB; Singleflight collapses viral miss into 1 DB lookup.",
+        "steps": [
+          {
+            "stepNo": 1,
+            "phaseTitle": "1. BLOOM BLOCKS FAKE CODES",
+            "timestampMs": 0.0,
+            "sourceNodeId": "gateway",
+            "targetNodeId": "url-svc",
+            "edgeId": "e2",
+            "category": "failover",
+            "protocol": "HTTP/2",
+            "info": "Random scan /zzzz999 rejected by Bloom filter -> instant 404 (0 DB calls)",
+            "payloadSize": "90 B",
+            "payloadInspector": "BloomFilter.mightContain('zzzz999') == false -> HTTP 404",
+            "latencyDeltaMs": 0.2,
+            "inspectorNote": "Prevents cache penetration attacks from flooding the primary DB."
+          },
+          {
+            "stepNo": 2,
+            "phaseTitle": "2. SINGLEFLIGHT BACKFILLS DB",
+            "timestampMs": 0.2,
+            "sourceNodeId": "url-svc",
+            "targetNodeId": "db",
+            "edgeId": "e4",
+            "category": "read",
+            "protocol": "SQL/KV",
+            "info": "1 coalesced DB fetch restores Redis cache for viral code",
+            "payloadSize": "500 B",
+            "payloadInspector": "Singleflight DB read (1 query) -> SETEX url:aB9x2Kq 86400",
+            "latencyDeltaMs": 6.0,
+            "inspectorNote": "Primary DB handles just 1 read instead of 10,000."
+          }
+        ]
+      }
+    ],
+    "tradeoffs": [
+      {
+        "option": "Key Generation Service (KGS) Pre-Allocation",
+        "pros": ["Zero collisions on write", "Predictable non-sequential random codes (prevents URL scraping)"],
+        "cons": ["Needs background job to replenish unused key pool", "Small key loss if pod crashes mid-lease"],
+        "bestFor": "High-scale shorteners needing non-guessable aliases"
+      },
+      {
+        "option": "MD5/SHA256 Truncation + Retry",
+        "pros": ["Stateless compute, no KGS service"],
+        "cons": ["Must check DB and salt/retry on prefix collision", "Adds extra DB round-trip under load"],
+        "bestFor": "Low-write internal tools"
+      }
+    ],
+    "quizQuestionIds": ["q-url-1"],
+    "flashcardIds": ["fc-url-1"]
+  },
+  "deepDives": [
+    {
+      "title": "301 Permanent vs 302 Temporary Redirect",
+      "bottleneck": "301 caches permanently inside browsers, blinding click analytics and preventing expiry updates.",
+      "solution": "Return 302 (or 307) when analytics, A/B routing, or link deactivation matter; reserve 301 for static zero-analytics traffic.",
+      "tradeoff": "302 increases server QPS compared to 301 browser caching, so Redis + CDN shielding absorb the extra reads."
+    },
+    {
+      "title": "Preventing Sequential Scraping & DB Hotspots",
+      "bottleneck": "Auto-increment Base62 IDs (`0000001`, `0000002`) let scrapers enumerate all private links and skew range partitions.",
+      "solution": "Shuffle pre-generated KGS batches or XOR/Feistel-permute counter IDs before Base62 encoding, and hash-partition DB by `short_code`.",
+      "tradeoff": "Random keys reduce B-Tree insert locality slightly on write, acceptable at only 40–120 writes/sec."
+    }
+  ],
+  "rubricChecklist": [
+    { "phase": "Requirements & Math", "weight": 20, "criteria": ["Identifies 100:1 read/write ratio", "Proves 62^7 keyspace size", "Sizes ~40 GB hot Redis RAM"] },
+    { "phase": "API & Data Model", "weight": 20, "criteria": ["Defines POST create + GET redirect", "Explains 301 vs 302 trade-off", "Picks short_code as partition key"] },
+    { "phase": "Architecture & Deep Dives", "weight": 40, "criteria": ["Avoids write-time collisions via KGS/counter", "Adds Bloom filter + Redis cache", "Keeps analytics async via Kafka"] },
+    { "phase": "Operations & Edge Cases", "weight": 20, "criteria": ["Addresses expiration cleanup", "Handles custom aliases & rate limits"] }
+  ]
+}

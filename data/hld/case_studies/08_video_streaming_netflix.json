@@ -1,0 +1,258 @@
+{
+  "id": "video-streaming",
+  "tier": 3,
+  "title": "Design YouTube / Netflix Video Streaming",
+  "subtitle": "Pre-signed S3 upload, DAG chunk transcoding, HLS/ABR & Edge CDN",
+  "levelTag": "L5-L6",
+  "estimatedMinutes": 45,
+  "tags": ["DAG Transcoding", "HLS/ABR", "CDN Edge", "Pre-Signed S3"],
+  "functionalReqs": [
+    "Creators upload multi-GB raw 4K videos reliably with pause/resume.",
+    "Transcode videos asynchronously into multi-bitrate HLS/DASH segments (360p, 720p, 1080p, 4K).",
+    "Viewers stream smoothly via Adaptive Bitrate (ABR) switching based on live bandwidth.",
+    "Serve popular catalog videos at sub-50ms Time-to-First-Frame globally via CDN."
+  ],
+  "nonFunctionalReqs": [
+    { "metric": "Upload Reliability", "target": "Resumable chunked direct-to-S3", "rationale": "Multi-GB uploads over unstable Wi-Fi must never route through API pods or restart from 0%." },
+    { "metric": "Playback Start (TTFF)", "target": "< 300 ms globally", "rationale": "Buffering stalls cause immediate viewer drop-off." },
+    { "metric": "Bandwidth Scale", "target": "Tbps global egress offloaded to CDN", "rationale": "Origin servers cannot handle millions of concurrent video streams directly." }
+  ],
+  "estimationPreset": {
+    "dau": 200000000,
+    "actionsPerUserPerDay": 5.0,
+    "peakMultiplier": 2.5,
+    "avgPayloadBytes": 500000,
+    "readWriteRatio": "99:1",
+    "retentionYears": 5,
+    "workedSummary": {
+      "videoViewsPerDay": "1B views/day (~10k stream starts/sec avg, ~25k peak)",
+      "uploadVolume": "500k new videos/day (~50 TB raw/day -> ~100 TB/day across ABR encodings)",
+      "cdnOffload": "95%+ of segment fetches served directly from Edge/ISP Open-Connect CDN PoPs"
+    }
+  },
+  "coreEntities": [
+    {
+      "name": "VideoMetadata",
+      "storageEngine": "Sharded PostgreSQL + Redis Cache",
+      "partitionKey": "video_id",
+      "keyFields": ["video_id", "creator_id", "title", "status (UPLOADING|TRANSCODING|READY)", "manifest_url"]
+    },
+    {
+      "name": "VideoSegmentBlob",
+      "storageEngine": "Object Storage (S3) + Global Pull/Push CDN",
+      "partitionKey": "video_id / resolution / seg_idx",
+      "keyFields": ["s3_key", "bitrate_kbps", "duration_sec (4s)", "codec (AV1|H264)"]
+    }
+  ],
+  "apiContracts": [
+    {
+      "method": "POST",
+      "path": "/v1/videos/upload-init",
+      "purpose": "Mint VideoMetadata record and return chunked Pre-Signed S3 Multipart Upload URLs",
+      "idempotent": true,
+      "samplePayload": "{\"title\":\"DDIA Ch3 Deep Dive\",\"sizeBytes\":2147483648,\"chunks\":256}"
+    },
+    {
+      "method": "GET",
+      "path": "/cdn/v/{videoId}/master.m3u8",
+      "purpose": "Return HLS Adaptive Bitrate manifest listing available resolution playlists",
+      "idempotent": true,
+      "samplePayload": "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\n1080p/index.m3u8"
+    }
+  ],
+  "explorerTopology": {
+    "id": "video-streaming-flow",
+    "track": "hld",
+    "category": "patterns",
+    "layer": 1,
+    "title": "Chunked Upload, Parallel DAG Transcoding & Edge ABR Streaming",
+    "subtitle": "Pre-signed S3 multipart -> GOP split workers -> HLS manifest -> Edge CDN PoP",
+    "difficulty": "L5-L6",
+    "estimatedMinutes": 22,
+    "overview": "Proxying a 4 GB creator upload through app servers exhausts pod RAM and bandwidth, while encoding a 2-hour movie on one CPU takes hours. Pre-signed S3 multipart uploads bypass API servers completely, a DAG splits the video by Group-of-Pictures (GOP) chunks across 50 parallel encoding workers, and Edge CDNs deliver 4-second HLS/DASH segments globally.",
+    "keyTakeaways": [
+      "Upload chunks directly from browser/mobile to S3 via Pre-Signed URLs—API pods handle only metadata.",
+      "Parallelize transcoding by splitting raw video at GOP keyframes into 4s chunks encoded concurrently across a DAG.",
+      "Adaptive Bitrate (ABR) clients dynamically switch between 360p/720p/1080p per 4-second segment as network throughput fluctuates."
+    ],
+    "nodes": [
+      {
+        "id": "creator",
+        "label": "Creator / Viewer App",
+        "sublabel": "Multipart + HLS Player",
+        "kind": "client",
+        "layer": 1,
+        "gridPos": { "gx": 1, "gy": 5 },
+        "specs": { "protocol": "HTTPS / HLS", "port": "443", "maxQpsPerNode": 20, "baseLatencyMs": 10.0, "capProfile": "N/A", "scalingAxis": "Viewers & creators" },
+        "summary": "Uploads 8 MB parts directly to S3 or streams 4s HLS chunks from closest CDN.",
+        "whenToUse": ["Client upload & ABR playback"],
+        "failureModes": ["Monolithic MP4 playback stalls completely on mobile bandwidth drops"]
+      },
+      {
+        "id": "cdn",
+        "label": "Global Edge CDN / ISP PoP",
+        "sublabel": "Caches master.m3u8 & .m4s",
+        "kind": "cdn",
+        "layer": 1,
+        "gridPos": { "gx": 4, "gy": 2 },
+        "specs": { "protocol": "HTTP/3", "port": "443", "maxQpsPerNode": 500000, "baseLatencyMs": 12.0, "capProfile": "AP", "scalingAxis": "Edge NVMe + ISP appliances" },
+        "summary": "Absorbs 95%+ of Tbps global video playback traffic right inside local ISP/Edge PoPs.",
+        "whenToUse": ["High-bandwidth video segment delivery"],
+        "failureModes": ["Cold long-tail videos miss cache and fall back via Origin Shield"]
+      },
+      {
+        "id": "raw-s3",
+        "label": "S3 Raw + Encoded Store",
+        "sublabel": "Pre-Signed Direct Target",
+        "kind": "object_store",
+        "layer": 4,
+        "gridPos": { "gx": 5, "gy": 7 },
+        "specs": { "protocol": "S3 HTTPS", "port": "443", "maxQpsPerNode": 50000, "baseLatencyMs": 30.0, "capProfile": "CP", "scalingAxis": "Prefix object store" },
+        "summary": "Receives resumable multipart uploads directly without tying up app servers; stores final `.m4s` segments.",
+        "whenToUse": ["PB-scale durable media blobs"],
+        "failureModes": ["Routing uploads through app servers creates immediate OOM/NIC bottlenecks"]
+      },
+      {
+        "id": "dag-workers",
+        "label": "Parallel DAG Transcoders",
+        "sublabel": "GOP Split · 360p/1080p/AV1",
+        "kind": "compute",
+        "layer": 6,
+        "gridPos": { "gx": 9, "gy": 6 },
+        "specs": { "protocol": "Kafka + FFmpeg", "port": "8080", "maxQpsPerNode": 500, "baseLatencyMs": 150.0, "capProfile": "N/A", "scalingAxis": "Spot GPU/CPU farm" },
+        "summary": "Triggered by S3 completion event; splits video into 4s GOP chunks and encodes all bitrates in parallel.",
+        "whenToUse": ["Cutting 2-hour transcode time down to minutes"],
+        "failureModes": ["Unbounded queue backlog—prioritize lower resolutions (360p/720p) first so playback goes live fast"]
+      },
+      {
+        "id": "meta-db",
+        "label": "Video Metadata DB",
+        "sublabel": "Postgres · status=READY",
+        "kind": "db_sql",
+        "layer": 4,
+        "gridPos": { "gx": 10, "gy": 2 },
+        "specs": { "protocol": "SQL", "port": "5432", "maxQpsPerNode": 15000, "baseLatencyMs": 4.0, "capProfile": "CP", "scalingAxis": "Read replicas + Redis" },
+        "summary": "Tracks upload state, DRM keys, and publishes video live once 360p/720p/1080p manifests finish.",
+        "whenToUse": ["Structured video metadata & permissions"],
+        "failureModes": ["Coupling large binary reads with metadata SQL queries"]
+      }
+    ],
+    "edges": [
+      { "id": "e1", "from": "creator", "to": "raw-s3", "protocol": "HTTPS PUT", "transport": "sync", "label": "Pre-Signed Chunk Upload" },
+      { "id": "e2", "from": "raw-s3", "to": "dag-workers", "protocol": "Kafka", "transport": "async", "label": "UploadComplete -> DAG" },
+      { "id": "e3", "from": "dag-workers", "to": "meta-db", "protocol": "SQL", "transport": "sync", "label": "Mark READY + manifest" },
+      { "id": "e4", "from": "creator", "to": "cdn", "protocol": "HTTP/3 HLS", "transport": "stream", "label": "Stream 4s ABR chunks" },
+      { "id": "e5", "from": "cdn", "to": "raw-s3", "protocol": "HTTPS", "transport": "sync", "label": "Edge miss fetch" }
+    ],
+    "steps": [
+      {
+        "stepNo": 1,
+        "phaseTitle": "1. DIRECT PRE-SIGNED MULTIPART UPLOAD",
+        "timestampMs": 0.0,
+        "sourceNodeId": "creator",
+        "targetNodeId": "raw-s3",
+        "edgeId": "e1",
+        "category": "write",
+        "protocol": "HTTPS PUT",
+        "info": "Creator uploads 256 × 8MB parts straight to S3 using pre-signed URLs (0 proxy load!)",
+        "payloadSize": "8.0 MB",
+        "payloadInspector": "PUT https://raw-bucket.s3.../part=14?X-Amz-Signature=... -> 200 ETag",
+        "latencyDeltaMs": 30.0,
+        "inspectorNote": "Chunking allows automatic resume of just Part #14 on Wi-Fi hiccups without restarting a 2 GB file."
+      },
+      {
+        "stepNo": 2,
+        "phaseTitle": "2. PARALLEL GOP DAG TRANSCODING",
+        "timestampMs": 30.0,
+        "sourceNodeId": "raw-s3",
+        "targetNodeId": "dag-workers",
+        "edgeId": "e2",
+        "category": "async",
+        "protocol": "Kafka",
+        "info": "Video split into 4s GOP chunks -> encoded across 48 parallel workers -> 360p/720p/1080p",
+        "payloadSize": "1.2 KB",
+        "payloadInspector": "DAG Tasks: [Split GOP] -> [Encode 360p..4K] -> [Assemble master.m3u8]",
+        "latencyDeltaMs": 120.0,
+        "inspectorNote": "Publishing 360p/720p immediately makes the video playable within seconds while 4K finishes asynchronously."
+      },
+      {
+        "stepNo": 3,
+        "phaseTitle": "3. MARK READY & EDGE ABR PLAYBACK",
+        "timestampMs": 150.0,
+        "sourceNodeId": "creator",
+        "targetNodeId": "cdn",
+        "edgeId": "e4",
+        "category": "cache_hit",
+        "protocol": "HTTP/3 HLS",
+        "info": "Viewer fetches master.m3u8 -> 1080p/seg_01.m4s served from Edge PoP in 12ms",
+        "payloadSize": "640 KB",
+        "payloadInspector": "Player measures throughput=18Mbps -> selects 1080p variant seamlessly",
+        "latencyDeltaMs": 12.0,
+        "inspectorNote": "Notice how each 4s segment is immutable and content-addressed, giving >95% global CDN hit ratio."
+      }
+    ],
+    "chaosScenarios": [
+      {
+        "id": "viewer-bandwidth-drop-abr",
+        "title": "Viewer Bandwidth Plummets Mid-Stream -> Seamless ABR Downshift",
+        "faultType": "latency_injection",
+        "targetNodeId": "cdn",
+        "triggerSummary": "Mobile viewer enters an elevator; measured bandwidth drops from 25 Mbps to 1.2 Mbps.",
+        "mitigationSummary": "HLS player checks buffer + last segment download speed and immediately requests the next 4s segment (`seg_02.m4s`) from the `480p` playlist—zero rebuffer stall.",
+        "steps": [
+          {
+            "stepNo": 1,
+            "phaseTitle": "1. CLIENT ABR SWITCH TO 480P",
+            "timestampMs": 0.0,
+            "sourceNodeId": "creator",
+            "targetNodeId": "cdn",
+            "edgeId": "e4",
+            "category": "failover",
+            "protocol": "HTTP/3 HLS",
+            "info": "Throughput dropped -> player fetches 480p/seg_02.m4s (140 KB instead of 1.8 MB)",
+            "payloadSize": "140 KB",
+            "payloadInspector": "ABR Controller: bw=1.2Mbps -> Downshift 1080p -> 480p on seg_02 boundary",
+            "latencyDeltaMs": 14.0,
+            "inspectorNote": "Because all resolution variants share identical 4-second GOP segment boundaries, switching quality mid-playback is frame-accurate."
+          }
+        ]
+      }
+    ],
+    "tradeoffs": [
+      {
+        "option": "Pull CDN + ISP Push Open-Connect (Hybrid)",
+        "pros": ["Top 5% viral titles pushed to ISP PoPs overnight (zero backbone cost)", "Long-tail titles cached lazily on Pull CDN"],
+        "cons": ["Needs popularity predictor + edge storage management"],
+        "bestFor": "Netflix / YouTube planetary-scale video catalogs"
+      },
+      {
+        "option": "Single-Worker Sequential FFmpeg Encode",
+        "pros": ["Minimal orchestration"],
+        "cons": ["Hours-long Creator wait time before video goes live"],
+        "bestFor": "Tiny internal demos only"
+      }
+    ],
+    "quizQuestionIds": ["q-vid-1", "q-vid-2"],
+    "flashcardIds": ["fc-vid-1", "fc-vid-2"]
+  },
+  "deepDives": [
+    {
+      "title": "Per-Title Encoding Optimization",
+      "bottleneck": "Using fixed bitrate ladders wastes 4K bitrate on simple cartoons while starving fast-action sports.",
+      "solution": "Run lightweight scene-complexity analysis inside the DAG to compute a custom bitrate-resolution ladder per title (Netflix approach), cutting bandwidth 20–40% at equal VMAF quality.",
+      "tradeoff": "Slightly higher upfront transcode CPU cost saved thousands of times over in CDN egress."
+    },
+    {
+      "title": "Handling Viral Long-Tail Cache Misses",
+      "bottleneck": "A sudden tweet sends 50k viewers to an obscure 5-year-old video absent from Edge PoPs.",
+      "solution": "Shield S3 Origin behind a regional Origin Shield tier with request coalescing so Edge PoPs never stampede S3.",
+      "tradeoff": "First cold viewers see +15ms shield hop before edge caches warm."
+    }
+  ],
+  "rubricChecklist": [
+    { "phase": "Upload & Bandwidth Math", "weight": 20, "criteria": ["Uses Pre-Signed S3 Multipart directly from client", "Estimates PB storage & Tbps CDN offload"] },
+    { "phase": "DAG Transcoding Pipeline", "weight": 30, "criteria": ["Splits video by GOP keyframes into parallel chunks", "Publishes lower bitrates first for fast live time"] },
+    { "phase": "ABR Playback & CDN", "weight": 30, "criteria": ["Explains HLS/DASH manifests + 4s aligned segments", "Uses Origin Shield + Push/Pull hybrid CDN"] },
+    { "phase": "Cost & Failure Modes", "weight": 20, "criteria": ["Handles resumable chunk retries", "Separates metadata SQL from blob S3 reads"] }
+  ]
+}

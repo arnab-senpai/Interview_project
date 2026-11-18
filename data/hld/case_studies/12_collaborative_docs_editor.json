@@ -1,0 +1,122 @@
+{
+  "id": "collaborative-docs",
+  "tier": 5,
+  "title": "Design Collaborative Real-Time Editing (Docs / Figma)",
+  "subtitle": "Multi-leader CRDT state-vector sync, offline local-first queue, Read-Your-Writes & Consistent Hashing",
+  "levelTag": "L6-L7",
+  "estimatedMinutes": 50,
+  "tags": ["CRDT", "Multi-Leader", "Consistent Hashing", "Offline Sync", "WebSocket"],
+  "functionalReqs": [
+    "Support 100+ simultaneous editors per document across Tokyo, London, and Virginia with `<1ms` local keystrokes and `<80ms` peer delta sync.",
+    "Allow full offline editing cleanly stored locally and converged identically without lost writes upon network reconnection.",
+    "Maintain session-level Read-Your-Own-Writes consistency when browsing workspaces right after renaming/saving documents."
+  ],
+  "nonFunctionalReqs": [
+    { "metric": "Peer Convergence", "target": "Strong Eventual Consistency (identical state on all peers)", "rationale": "Associative, commutative, idempotent Sequence CRDT merges any arrival order." },
+    { "metric": "Shard Routing", "target": "Consistent Hashing w/ 1,024 virtual buckets", "rationale": "Only `K/N` documents shift during node autoscale without cluster storms." },
+    { "metric": "Cross-Region Lag", "target": "< 80ms intra-region, < 200ms global delta mesh", "rationale": "Edge WebSocket hubs sync delta frames directly before async cold compaction." }
+  ],
+  "estimationPreset": {
+    "dau": 50000000,
+    "actionsPerUserPerDay": 240.0,
+    "peakMultiplier": 2.5,
+    "avgPayloadBytes": 40,
+    "readWriteRatio": "40:60",
+    "retentionYears": 5,
+    "workedSummary": {
+      "wsFootprint": "5M concurrent connected editors / 100k conns/pod = ~50–65 edge WebSocket pods",
+      "deltaTraffic": "~250k batched WebSocket CRDT delta ops/sec at peak (~10–25 MB/s global sync mesh)",
+      "compactedGrowth": "100M active docs/day compacted after tombstone GC -> ~250 GB/day long-term growth"
+    }
+  },
+  "coreEntities": [
+    {
+      "name": "DocumentDeltaOpLog",
+      "storageEngine": "ScyllaDB / Partitioned LSM Op-Log + Snapshot Checkpoints",
+      "partitionKey": "consistent_hash(doc_id) -> bucket_0..1023",
+      "keyFields": ["doc_id", "region_epoch", "lamport_clock", "client_id", "crdt_op_bytes"]
+    },
+    {
+      "name": "WorkspaceIndexGlobal",
+      "storageEngine": "Async Global Term Index + Causal Session Cookie",
+      "partitionKey": "workspace_id",
+      "keyFields": ["workspace_id", "doc_id", "title", "min_causal_epoch", "updated_at"]
+    }
+  ],
+  "apiContracts": [
+    {
+      "method": "WS",
+      "path": "/v2/sync/docs/{docId}",
+      "purpose": "Exchange binary Yjs/RGA CRDT state vectors on connect and stream real-time edits across peers",
+      "samplePayload": "{\"type\":\"crdt_delta\",\"stateVector\":[12,99],\"opHex\":\"01a4f2...\"}"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/docs/{docId}/metadata",
+      "purpose": "Update document title/permissions returning `X-Min-Causal-Epoch` session token for Read-Your-Own-Writes",
+      "idempotent": true
+    }
+  ],
+  "explorerTopology": {
+    "id": "collab-docs-flow",
+    "track": "hld",
+    "category": "patterns",
+    "layer": 5,
+    "title": "Global CRDT Multi-Leader Collaboration Mesh",
+    "subtitle": "Offline Client CRDT -> Consistent-Hashed WS Hub -> Kafka Cross-Region -> LSM Op-Log",
+    "difficulty": "L6-L7",
+    "estimatedMinutes": 24,
+    "overview": "How collaborative tools guarantee lock-free offline editing and deterministic cross-region convergence without single-leader round-trip bottlenecks.",
+    "keyTakeaways": [
+      "Sequence CRDTs (`(lamport_clock, client_id)`) make edits commutative & idempotent even over arbitrary network partitions.",
+      "Logical virtual buckets (1,024 partitions via etcd) decouple physical server scaling from global document rehashing."
+    ],
+    "nodes": [
+      { "id": "peer-us", "label": "US & EU Browser Peers", "sublabel": "Local Yjs CRDT + IndexedDB", "kind": "client", "layer": 1, "gridPos": { "gx": 1, "gy": 5 }, "specs": { "protocol": "IndexedDB + WSS", "port": "443", "maxQpsPerNode": null, "baseLatencyMs": 1.0, "capProfile": "AP", "scalingAxis": "End-user browsers" }, "summary": "Applies keystrokes locally in <1ms; buffers offline ops safely in IndexedDB.", "whenToUse": ["Offline-capable real-time collaborative UX"], "failureModes": ["Central lockstep server sync freezes UI when Wi-Fi drops"] },
+      { "id": "ws-hub", "label": "Consistent-Hashed WS Hub", "sublabel": "Virtual Buckets + Room Broadcast", "kind": "api_gateway", "layer": 2, "gridPos": { "gx": 4, "gy": 5 }, "specs": { "protocol": "WebSocket Binary", "port": "443", "maxQpsPerNode": 50000, "baseLatencyMs": 12.0, "capProfile": "AP", "scalingAxis": "256 VNodes across pods" }, "summary": "Pins active document rooms via Consistent Hashing + broadcasts deltas across live peers.", "whenToUse": ["Sub-80ms real-time multiplayer state rooms"], "failureModes": ["Uncoordinated naive modulo sharding drops all room sockets on autoscale"] },
+      { "id": "kafka-mesh", "label": "Multi-Region Delta Relay", "sublabel": "Kafka Multi-Leader Mirror", "kind": "queue", "layer": 6, "gridPos": { "gx": 7, "gy": 3 }, "specs": { "protocol": "Kafka Binary", "port": "9092", "maxQpsPerNode": 120000, "baseLatencyMs": 45.0, "capProfile": "AP", "scalingAxis": "Regional topic partitions" }, "summary": "Replicates CRDT deltas across US/EU/APAC hubs cleanly without distributed 2PC locks.", "whenToUse": ["Cross-continent active-active collaboration"], "failureModes": ["Cross-WAN consumer lag causes transient view divergence before convergence"] },
+      { "id": "oplog-db", "label": "LSM Op-Log + Checkpoints", "sublabel": "Scoped by bucket_0..1023", "kind": "db_nosql", "layer": 4, "gridPos": { "gx": 7, "gy": 7 }, "specs": { "protocol": "ScyllaDB Quorum W+R>N", "port": "9042", "maxQpsPerNode": 80000, "baseLatencyMs": 5.0, "capProfile": "AP", "scalingAxis": "Fixed 1,024 logical buckets" }, "summary": "Stores append-only ops + compacted snapshot binaries after periodic tombstone GC.", "whenToUse": ["Append-heavy collaborative edit durability"], "failureModes": ["Accumulated deleted-char CRDT tombstones bloat snapshots unless periodically compacted"] },
+      { "id": "global-idx", "label": "Global Workspace Index", "sublabel": "Causal Epoch Guard", "kind": "search_index", "layer": 4, "gridPos": { "gx": 10, "gy": 5 }, "specs": { "protocol": "Async CDC Projection", "port": "9200", "maxQpsPerNode": 30000, "baseLatencyMs": 8.0, "capProfile": "AP", "scalingAxis": "Workspace partitions" }, "summary": "Serves fast workspace doc queries asynchronously while honoring `X-Min-Causal-Epoch` for Read-Your-Own-Writes.", "whenToUse": ["Avoiding scatter-gather index reads across 1,024 shards"], "failureModes": ["Zero-lag stale sidebar displays after immediate doc rename"] }
+    ],
+    "edges": [
+      { "id": "e1", "from": "peer-us", "to": "ws-hub", "protocol": "WSS Binary", "transport": "stream", "label": "Sync State Vector & Delta" },
+      { "id": "e2", "from": "ws-hub", "to": "kafka-mesh", "protocol": "Kafka Cross-DC", "transport": "async", "label": "Broadcast Peer Region" },
+      { "id": "e3", "from": "ws-hub", "to": "oplog-db", "protocol": "LSM Append", "transport": "async", "label": "Persist Op Batch" },
+      { "id": "e4", "from": "oplog-db", "to": "global-idx", "protocol": "CDC Stream", "transport": "async", "label": "Update Workspace View" }
+    ],
+    "steps": [
+      { "stepNo": 1, "phaseTitle": "Local <1ms Edit & State Vector Exchange", "timestampMs": 0, "sourceNodeId": "peer-us", "targetNodeId": "ws-hub", "edgeId": "e1", "category": "write", "protocol": "CRDT WSS", "info": "Client applies edit locally in IndexedDB and streams compact binary delta + causal Lamport ID.", "payloadSize": "64 B", "payloadInspector": "op_id: (clock=182, peer=us_44)\nstate_vector diff: 64 bytes binary", "latencyDeltaMs": 12.0, "inspectorNote": "Separating local UI application from network sync ensures silky <1ms keystroke feedback even offline." },
+      { "stepNo": 2, "phaseTitle": "Async Op-Log Persistence (Fixed Logical Buckets)", "timestampMs": 12, "sourceNodeId": "ws-hub", "targetNodeId": "oplog-db", "edgeId": "e3", "category": "write", "protocol": "LSM Quorum", "info": "Flushes batched deltas into bucket `consistent_hash(doc_id)` cleanly via `W=2, R=2, N=3`.", "payloadSize": "420 B", "payloadInspector": "Bucket: 412 / 1024 | Quorum W+R > N (2+2>3)\nDecoupled physical hosts via etcd", "latencyDeltaMs": 5.0, "inspectorNote": "Fixed virtual buckets prevent cluster-wide key rehashing when adding new storage hosts." },
+      { "stepNo": 3, "phaseTitle": "Multi-Region Mesh Delta Convergence", "timestampMs": 17, "sourceNodeId": "ws-hub", "targetNodeId": "kafka-mesh", "edgeId": "e2", "category": "async", "protocol": "Kafka Multi-DC", "info": "Forwards commutative CRDT ops across continent regions with zero central coordinator locks.", "payloadSize": "64 B", "payloadInspector": "Converges deterministically regardless of EU vs US arrival sequence!", "latencyDeltaMs": 45.0, "inspectorNote": "Associative/commutative merges guarantee all editors see identical document trees without central OT bottlenecks." },
+      { "stepNo": 4, "phaseTitle": "Global Index Update + Causal Read Guard", "timestampMs": 62, "sourceNodeId": "oplog-db", "targetNodeId": "global-idx", "edgeId": "e4", "category": "read", "protocol": "Async CDC", "info": "Updates global Workspace Index; author sessions carry `X-Min-Causal-Epoch` so Read-Your-Own-Writes never sees stale titles.", "payloadSize": "280 B", "payloadInspector": "Index: Global Term-Partitioned\nAuthor Session Epoch Guard: PASS", "latencyDeltaMs": 8.0, "inspectorNote": "Global workspace index eliminates scatter-gather search spikes across 1,024 document buckets." }
+    ],
+    "chaosScenarios": [
+      {
+        "id": "chaos-offline-merge",
+        "title": "Trans-Atlantic Network Partition + Offline Concurrent Edits",
+        "faultType": "partition",
+        "targetNodeId": "kafka-mesh",
+        "triggerSummary": "Undersea link severs between EU & US for 15 minutes while 40 editors continue typing concurrently in both regions and offline planes.",
+        "mitigationSummary": "Both regions keep serving local WebSockets (`AP` availability). When link heals, State Vector diffing merges every causal CRDT operation deterministically in milliseconds with zero lost text.",
+        "steps": [
+          { "stepNo": 1, "phaseTitle": "Partition Heals -> State-Vector Merkle Merge", "timestampMs": 0, "sourceNodeId": "peer-us", "targetNodeId": "ws-hub", "edgeId": "e1", "category": "failover", "protocol": "CRDT Reconcile", "info": "Exchanges missing causal intervals cleanly; both London & New York converge byte-for-byte without central OT lock.", "payloadSize": "1.8 KB", "payloadInspector": "Diverged epochs reconciled cleanly | Lost edits: 0", "latencyDeltaMs": 18.0, "inspectorNote": "CRDTs convert terrifying partition splits into ordinary async state synchronization." }
+        ]
+      }
+    ],
+    "tradeoffs": [
+      { "option": "CRDT (Sequence RGA/Yjs) + Fixed Logical Buckets", "pros": ["Peer-to-peer / offline convergence without central OT lock", "Scales cleanly across regions"], "cons": ["Tombstones accumulate per deleted character until periodic epoch compaction"], "bestFor": "Multi-region Google Docs / Figma / Notion collaboration" }
+    ]
+  },
+  "deepDives": [
+    { "title": "Tombstone Garbage Collection & Snapshot Compaction", "bottleneck": "Deleting 100k chars in a long doc leaves invisible CRDT tombstone IDs inflating memory & sync handshake size.", "solution": "Track global minimum synced state vector across active checkpoints; fold settled history into clean compacted binary snapshots periodically.", "tradeoff": "Requires brief offline clients reconnecting after 30+ days to pull a fresh snapshot rebase if old tombstones pruned." },
+    { "title": "Local vs Global Secondary Index Rebalancing", "bottleneck": "Scanning 1,024 doc shards (`Local Index`) blows up p99 latency when rendering user workspace dashboards.", "solution": "Use async Global Term Index partitioned by `workspace_id`, paired with `X-Min-Causal-Epoch` session tokens for Read-Your-Own-Writes.", "tradeoff": "Tiny async CDC lag (<250ms) replaced scatter-gather fan-out tail explosion." }
+  ],
+  "rubricChecklist": [
+    { "phase": "Conflict Resolution (CRDT vs LWW)", "weight": 25, "criteria": ["Rejects naive LWW & single-leader bottlenecks; designs associative CRDT/OT state-vector convergence"] },
+    { "phase": "Partitioning & Virtual Buckets", "weight": 25, "criteria": ["Uses consistent hashing (VNodes) / decoupled fixed logical buckets to avoid full cluster rehashing"] },
+    { "phase": "Consistency Anomalies & Quorums", "weight": 25, "criteria": ["Covers `W+R>N`, Read-Your-Own-Writes session epochs, Monotonic & Consistent Prefix reads"] },
+    { "phase": "Tombstone GC & Index Architecture", "weight": 25, "criteria": ["Addresses CRDT tombstone compaction AND local vs global secondary index scatter-gather trade-offs"] }
+  ],
+  "quizQuestionIds": ["q-crdt-1", "q-crdt-2"],
+  "flashcardIds": ["fc-crdt-1", "fc-crdt-2"]
+}

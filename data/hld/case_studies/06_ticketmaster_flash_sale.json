@@ -1,0 +1,257 @@
+{
+  "id": "ticketmaster-flash-sale",
+  "tier": 3,
+  "title": "Design Ticketmaster / Flash-Sale Booking",
+  "subtitle": "Virtual waiting room, atomic Redis seat holds with TTL & ACID checkout finalization",
+  "levelTag": "L5-L6",
+  "estimatedMinutes": 45,
+  "tags": ["Virtual Waiting Room", "Seat Hold TTL", "Concurrency", "ACID"],
+  "functionalReqs": [
+    "Browse upcoming events, venues, and live interactive seat map.",
+    "Select seats and hold them exclusively for 10 minutes while entering payment details.",
+    "Finalize booking atomically—never oversell or double-book a seat.",
+    "Absorb 500k+ concurrent users hammering a concert drop at 10:00:00 AM without crashing DB."
+  ],
+  "nonFunctionalReqs": [
+    { "metric": "Zero Overselling", "target": "Strict strong consistency on seat assignment", "rationale": "Two buyers paying for Seat A12 ruins customer trust and creates legal refunds." },
+    { "metric": "Spike Absorption", "target": "500k–1M concurrent waiting-room requests", "rationale": "Ticket drops concentrate months of demand into 30 seconds." },
+    { "metric": "Hold Expiration", "target": "Automatic release after 10 min abandonment", "rationale": "Abandoned carts must return seats to inventory automatically." }
+  ],
+  "estimationPreset": {
+    "dau": 10000000,
+    "actionsPerUserPerDay": 2.0,
+    "peakMultiplier": 5.0,
+    "avgPayloadBytes": 1024,
+    "readWriteRatio": "95:5",
+    "retentionYears": 5,
+    "workedSummary": {
+      "dropSpike": "500k waiting users × seat-map polling -> absorbed at Edge Waiting Room & CDN",
+      "actualCheckoutQps": "Limited to ~2,000 admitted buyers/sec matching venue inventory",
+      "seatMapSize": "50,000 stadium seats × 100 B = ~5 MB (fits trivially in Redis / CDN edge JSON!)"
+    }
+  },
+  "coreEntities": [
+    {
+      "name": "SeatInventory",
+      "storageEngine": "PostgreSQL (ACID) + Redis Atomic Hold Overlay",
+      "partitionKey": "event_id",
+      "keyFields": ["event_id", "seat_id", "status (AVAILABLE | HELD | BOOKED)", "hold_token", "hold_expires_at"]
+    },
+    {
+      "name": "BookingOrder",
+      "storageEngine": "PostgreSQL (Sharded by event_id / order_id)",
+      "partitionKey": "order_id",
+      "keyFields": ["order_id", "user_id", "event_id", "seat_ids[]", "payment_status", "idempotency_key"]
+    }
+  ],
+  "apiContracts": [
+    {
+      "method": "POST",
+      "path": "/v1/events/{eventId}/holds",
+      "purpose": "Acquire atomic 10-minute Redis + DB hold for selected seat_ids (requires waiting-room JWT)",
+      "idempotent": true,
+      "samplePayload": "{\"seatIds\":[\"A12\",\"A13\"],\"queueToken\":\"jwt_q_881\"}"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/orders/confirm",
+      "purpose": "Verify hold token, charge card via PSP, and atomically transition seats HELD -> BOOKED",
+      "idempotent": true,
+      "samplePayload": "{\"holdId\":\"h_442\",\"paymentToken\":\"tok_visa\",\"idempotencyKey\":\"chk_91\"}"
+    }
+  ],
+  "explorerTopology": {
+    "id": "ticketmaster-flash-flow",
+    "track": "hld",
+    "category": "patterns",
+    "layer": 7,
+    "title": "Flash-Sale Waiting Room & Atomic Seat Hold Flow",
+    "subtitle": "Edge queue admission -> Redis Lua seat hold -> ACID Postgres booking",
+    "difficulty": "L5-L6",
+    "estimatedMinutes": 22,
+    "overview": "Letting 500,000 users lock rows in Postgres simultaneously creates catastrophic lock queues. Instead, an Edge Virtual Waiting Room admits bounded batches via signed queue tokens, CDN caches static seat maps, Redis Lua grants sub-millisecond 10-minute seat holds, and Postgres enforces final ACID booking + idempotency.",
+    "keyTakeaways": [
+      "Put a Virtual Waiting Room at the CDN/Edge tier to throttle admission to what downstream checkout can sustain.",
+      "Hold seats atomically in Redis (`SET seat:e1:A12 hold_id NX EX 600`) before touching Postgres payment flows.",
+      "Verify `hold_token` AND `status != BOOKED` inside Postgres ACID checkout so an expired Redis hold can never double-sell."
+    ],
+    "nodes": [
+      {
+        "id": "fan",
+        "label": "500k Concert Fans",
+        "sublabel": "10:00 AM Drop Spike",
+        "kind": "client",
+        "layer": 1,
+        "gridPos": { "gx": 1, "gy": 5 },
+        "specs": { "protocol": "HTTPS / SSE", "port": "443", "maxQpsPerNode": 10, "baseLatencyMs": 10.0, "capProfile": "N/A", "scalingAxis": "Global users" },
+        "summary": "Fans entering queue, watching live SSE queue position, then picking seats.",
+        "whenToUse": ["High-demand flash drops"],
+        "failureModes": ["Bot scripts flooding `/holds` without waiting-room token"]
+      },
+      {
+        "id": "waiting-room",
+        "label": "Edge Waiting Room",
+        "sublabel": "Token Gate · 2k/sec Drip",
+        "kind": "cdn",
+        "layer": 2,
+        "gridPos": { "gx": 4, "gy": 5 },
+        "specs": { "protocol": "HTTPS / JWT", "port": "443", "maxQpsPerNode": 500000, "baseLatencyMs": 8.0, "capProfile": "AP", "scalingAxis": "Global Edge PoPs" },
+        "summary": "Assigns randomized/FIFO queue number, absorbs 99% spike at edge, and issues short-lived signed admission JWTs.",
+        "whenToUse": ["Protecting finite inventory from 100x demand spikes"],
+        "failureModes": ["Sharing leaked admission JWTs unless bound to user_id"]
+      },
+      {
+        "id": "booking-svc",
+        "label": "Booking & Hold Service",
+        "sublabel": "Admitted Checkout Tier",
+        "kind": "compute",
+        "layer": 3,
+        "gridPos": { "gx": 7, "gy": 5 },
+        "specs": { "protocol": "gRPC / SQL", "port": "8080", "maxQpsPerNode": 15000, "baseLatencyMs": 2.0, "capProfile": "CP", "scalingAxis": "Event-sharded pods" },
+        "summary": "Validates queue JWT, runs multi-seat Redis Lua hold, and orchestrates PSP charge + SQL commit.",
+        "whenToUse": ["Bounded seat holding & checkout"],
+        "failureModes": ["Slow PSP call after hold nears 600s expiry unless checked inside final SQL commit"]
+      },
+      {
+        "id": "hold-redis",
+        "label": "Redis Hold & Map Cache",
+        "sublabel": "Lua Atomic NX EX 600",
+        "kind": "cache",
+        "layer": 3,
+        "gridPos": { "gx": 7, "gy": 1 },
+        "specs": { "protocol": "RESP3 / Lua", "port": "6379", "maxQpsPerNode": 150000, "baseLatencyMs": 0.5, "capProfile": "CP", "scalingAxis": "Shard by event_id" },
+        "summary": "All-or-nothing Lua script atomically locks all requested seats (`A12, A13`) for 600s.",
+        "whenToUse": ["Fast temporary cart locks with auto-TTL"],
+        "failureModes": ["Redis node loss without persistence could forget active holds—Postgres final check guards!"]
+      },
+      {
+        "id": "seat-db",
+        "label": "Postgres Event Ledger",
+        "sublabel": "ACID Seat & Order Truth",
+        "kind": "db_sql",
+        "layer": 4,
+        "gridPos": { "gx": 10, "gy": 5 },
+        "specs": { "protocol": "PostgreSQL", "port": "5432", "maxQpsPerNode": 10000, "baseLatencyMs": 5.0, "capProfile": "CP", "scalingAxis": "Shard by event_id" },
+        "summary": "Authoritative ACID state enforcing `status IN ('AVAILABLE', 'HELD')` -> `'BOOKED'`.",
+        "whenToUse": ["Final financial & seat truth"],
+        "failureModes": ["Never let unthrottled 500k users execute `SELECT FOR UPDATE` directly here"]
+      }
+    ],
+    "edges": [
+      { "id": "e1", "from": "fan", "to": "waiting-room", "protocol": "HTTPS/SSE", "transport": "stream", "label": "Queue & admit JWT" },
+      { "id": "e2", "from": "waiting-room", "to": "booking-svc", "protocol": "HTTPS", "transport": "sync", "label": "POST /holds (JWT)" },
+      { "id": "e3", "from": "booking-svc", "to": "hold-redis", "protocol": "RESP/Lua", "transport": "sync", "label": "Atomic multi-seat NX" },
+      { "id": "e4", "from": "booking-svc", "to": "seat-db", "protocol": "SQL", "transport": "sync", "label": "Commit HELD -> BOOKED" }
+    ],
+    "steps": [
+      {
+        "stepNo": 1,
+        "phaseTitle": "1. EDGE WAITING ROOM ADMISSION",
+        "timestampMs": 0.0,
+        "sourceNodeId": "fan",
+        "targetNodeId": "waiting-room",
+        "edgeId": "e1",
+        "category": "network",
+        "protocol": "HTTPS/SSE",
+        "info": "500k fans wait at Edge; batch #1 receives signed queueToken (valid 15m)",
+        "payloadSize": "420 B",
+        "payloadInspector": "AdmissionJWT { sub: 'u_55', event: 'ev_99', exp: +15m }",
+        "latencyDeltaMs": 8.0,
+        "inspectorNote": "498,000 queued fans never touch origin compute or SQL—saving infrastructure from collapse."
+      },
+      {
+        "stepNo": 2,
+        "phaseTitle": "2. ATOMIC MULTI-SEAT LUA HOLD",
+        "timestampMs": 8.0,
+        "sourceNodeId": "booking-svc",
+        "targetNodeId": "hold-redis",
+        "edgeId": "e3",
+        "category": "consensus",
+        "protocol": "RESP/Lua",
+        "info": "Lua script verifies [A12, A13] are free and sets EX=600s hold atomically",
+        "payloadSize": "180 B",
+        "payloadInspector": "EVALSHA hold_seats 2 seat:ev99:A12 seat:ev99:A13 -> OK (hold_id=h_442, ttl=600s)",
+        "latencyDeltaMs": 0.6,
+        "inspectorNote": "Using a Lua script ensures either BOTH adjacent seats A12 & A13 are held together or NEITHER is locked."
+      },
+      {
+        "stepNo": 3,
+        "phaseTitle": "3. ACID FINAL CHECKOUT COMMIT",
+        "timestampMs": 8.6,
+        "sourceNodeId": "booking-svc",
+        "targetNodeId": "seat-db",
+        "edgeId": "e4",
+        "category": "write",
+        "protocol": "SQL",
+        "info": "Payment succeeds -> UPDATE seats SET status='BOOKED' WHERE status!='BOOKED' -> COMMIT!",
+        "payloadSize": "510 B",
+        "payloadInspector": "ACID Tx: 2 seats confirmed BOOKED | Idempotency-Key chk_91 committed",
+        "latencyDeltaMs": 5.0,
+        "inspectorNote": "Checking `status != 'BOOKED'` inside Postgres guarantees zero double-booking even if a user took 10m05s to submit payment!"
+      }
+    ],
+    "chaosScenarios": [
+      {
+        "id": "expired-hold-checkout-race",
+        "title": "User Pays Right After 10-Min Hold Expires (Zero Double-Sell)",
+        "faultType": "cache_expiry",
+        "targetNodeId": "hold-redis",
+        "triggerSummary": "User A's Redis TTL (600s) expires at 10:10:00 while User B immediately grabs A12 and checks out; at 10:10:02 User A's slow checkout hits Postgres.",
+        "mitigationSummary": "Postgres ACID conditional update (`WHERE status='AVAILABLE' OR (status='HELD' AND hold_id=$1)`) detects A12 is already BOOKED by User B and triggers an instant refund/re-pick to User A.",
+        "steps": [
+          {
+            "stepNo": 1,
+            "phaseTitle": "1. POSTGRES BLOCKS LATE COMMIT",
+            "timestampMs": 0.0,
+            "sourceNodeId": "booking-svc",
+            "targetNodeId": "seat-db",
+            "edgeId": "e4",
+            "category": "failover",
+            "protocol": "SQL",
+            "info": "UPDATE seats WHERE seat_id='A12' AND status!='BOOKED' -> 0 rows updated!",
+            "payloadSize": "280 B",
+            "payloadInspector": "Seat A12 already BOOKED by User B -> Return 409 Conflict + auto-void PSP auth",
+            "latencyDeltaMs": 5.0,
+            "inspectorNote": "Never rely solely on Redis TTL for financial finality—Postgres ACID acts as the unbreakable final invariant."
+          }
+        ]
+      }
+    ],
+    "tradeoffs": [
+      {
+        "option": "Edge Waiting Room + Redis Lua Hold + SQL Finalize",
+        "pros": ["Protects DB during 100x drops", "Automatic 10m hold cleanup via TTL", "Zero overselling"],
+        "cons": ["Needs signed queue tokens + eventual seat map UI refresh (1–2s lag ok)"],
+        "bestFor": "Concerts, sports drops, limited sneaker/flash-sale launches"
+      },
+      {
+        "option": "Pure Postgres Pessimistic Locking (`SELECT FOR UPDATE`)",
+        "pros": ["Single data store"],
+        "cons": ["Connection pool collapses immediately at >10k concurrent drop users"],
+        "bestFor": "Small internal booking apps"
+      }
+    ],
+    "quizQuestionIds": ["q-tkt-1", "q-tkt-2"],
+    "flashcardIds": ["fc-tkt-1", "fc-tkt-2"]
+  },
+  "deepDives": [
+    {
+      "title": "Broadcasting Live Seat Map Availability Without Hammering DB",
+      "bottleneck": "50,000 admitted fans refreshing the stadium SVG map every 2 seconds = 25,000 read QPS on seat status.",
+      "solution": "Represent an event's 50,000 seat statuses as a compact bitset/hash in Redis (`~5 MB`), pushed/cached at CDN/SSE edge every 1–2s—while checkout validates exact availability atomically.",
+      "tradeoff": "A seat can show green for 1 second after someone grabs it, caught cleanly in <1ms by the atomic Redis Lua hold."
+    },
+    {
+      "title": "Preventing Bot Cart Hoarding",
+      "bottleneck": "Scalper bots grab and renew 10-minute holds forever to lock out real fans.",
+      "solution": "Limit max holds per `user_id`/`device_fp`, deny hold extensions, require payment-intent pre-check or Edge bot challenge before granting queue token.",
+      "tradeoff": "Tighter anti-bot gates add minor friction while ensuring fair fan inventory rotation."
+    }
+  ],
+  "rubricChecklist": [
+    { "phase": "Spike Protection & Waiting Room", "weight": 25, "criteria": ["Adds Edge Virtual Waiting Room before origin", "Explains signed queue token + rate shaping"] },
+    { "phase": "Atomic Seat Holds", "weight": 30, "criteria": ["Uses Redis Lua multi-seat NX lock + TTL", "Sizes ~5 MB seat map cache cleanly"] },
+    { "phase": "Zero Oversell Guarantee", "weight": 30, "criteria": ["Guards final checkout with Postgres ACID condition", "Handles expired-hold payment race cleanly"] },
+    { "phase": "Anti-Abuse & Map Caching", "weight": 15, "criteria": ["Caches seat map reads at edge/Redis", "Addresses bot hoarding caps"] }
+  ]
+}

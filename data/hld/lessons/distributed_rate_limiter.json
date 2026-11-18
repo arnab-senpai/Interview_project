@@ -1,0 +1,201 @@
+{
+  "id": "distributed-rate-limiter",
+  "track": "hld",
+  "category": "patterns",
+  "layer": 2,
+  "title": "Distributed Rate Limiter",
+  "subtitle": "Token Bucket, Sliding Window Log & atomic Redis Lua enforcement",
+  "difficulty": "L4-L5",
+  "estimatedMinutes": 18,
+  "overview": "Rate limiters protect downstream databases and GPU clusters from abuse, noisy neighbors, and cascading traffic spikes. In distributed fleets, local in-memory counters drift across nodes—requiring atomic Redis Lua scripts (Token Bucket or Sliding Window Counter) paired with explicit fail-open vs fail-closed policies.",
+  "firstPrinciplesStory": "A single misconfigured partner retry script wakes up at 3 AM firing 10,000 POST /checkout calls per second. Your API pods auto-scale eagerly, which only multiplies the thundering wave hitting your single Postgres Primary until connection pools exhaust and paying customers get 503s. Putting a fixed-window counter in app memory fails because 20 gateway pods don't share state—and a naive Redis GET+SET races under concurrency. Thus you need atomic central accounting plus graceful failure boundaries.",
+  "adaptiveLenses": {
+    "intuition": "A Token Bucket is a coffee punch card that automatically adds 10 punches per second up to a max of 20. Short legitimate bursts spend saved punches smoothly, while sustained spam hits empty and politely gets told 'come back in 1 second' (HTTP 429).",
+    "mechanics": "Gateways execute an atomic `EVALSHA` Lua script on Redis that reads `(tokens, last_ts)`, refills proportional to `now - last_ts`, checks `tokens >= cost`, and decrements in one single-threaded operation (~0.6ms). Headers (`X-RateLimit-Remaining`, `Retry-After`) guide client backoff.",
+    "staffTradeoffs": "Redis round-trips on every request add ~0.6–1.5ms and risk turning Redis into a critical outage choke point. Staff engineers add local fast-reject caches for already-throttled keys, batch/sync quotas for ultra-high QPS, and explicit fail-open local caps for revenue endpoints vs fail-closed for security endpoints."
+  },
+  "ddiaAnchors": [
+    {
+      "chapter": "DDIA Ch. 8 · Clocks & Distributed State",
+      "concept": "Why Time Calculations Belong Inside One Authoritative Clock",
+      "whyItMatters": "Using Redis `TIME` or single-node Lua timestamps avoids gateway clock skew across 50 API pods."
+    }
+  ],
+  "pragmaticTips": [
+    {
+      "principle": "Fail Fast & Contain Blast Radius",
+      "tip": "Reject abusive traffic at the outermost gateway edge before wasting downstream CPU, auth joins, or DB connections.",
+      "application": "Attach clear Retry-After headers + fail-open circuit breaker around Redis itself."
+    }
+  ],
+  "keyTakeaways": [
+    "Token Bucket permits controlled bursts up to bucket capacity while enforcing a steady refill rate.",
+    "Executing read-compute-write inside a single Redis Lua script eliminates race conditions without distributed locks.",
+    "Return HTTP 429 with X-RateLimit-Remaining and Retry-After headers so well-behaved clients back off."
+  ],
+  "nodes": [
+    {
+      "id": "client",
+      "label": "API Caller",
+      "sublabel": "user_8841 · 120 req/s",
+      "kind": "client",
+      "layer": 1,
+      "gridPos": { "gx": 1, "gy": 5 },
+      "specs": { "protocol": "HTTPS", "port": "443", "maxQpsPerNode": 500, "baseLatencyMs": 1.0, "capProfile": "N/A", "scalingAxis": "Clients" },
+      "summary": "Mobile or B2B client hitting rate-limited REST endpoints.",
+      "whenToUse": ["External API consumers"],
+      "failureModes": ["Aggressive retry loops without Retry-After jitter"]
+    },
+    {
+      "id": "gateway",
+      "label": "API Gateway Fleet",
+      "sublabel": "Middleware · Token Bucket",
+      "kind": "api_gateway",
+      "layer": 2,
+      "gridPos": { "gx": 4, "gy": 5 },
+      "specs": { "protocol": "HTTPS + RESP", "port": "443", "maxQpsPerNode": 80000, "baseLatencyMs": 1.0, "capProfile": "AP", "scalingAxis": "Stateless gateway replicas" },
+      "summary": "Extracts tenant/IP key, applies local fast-reject cache if already throttled, and queries Redis atomically.",
+      "whenToUse": ["Centralized edge throttling before auth-heavy or DB-heavy services"],
+      "failureModes": ["Blocking request threads synchronously if Redis connection pool stalls"]
+    },
+    {
+      "id": "redis-rl",
+      "label": "Redis Cluster (Lua)",
+      "sublabel": "Port 6379 · Atomic Bucket",
+      "kind": "cache",
+      "layer": 3,
+      "gridPos": { "gx": 6, "gy": 2 },
+      "specs": { "protocol": "RESP3 / Lua", "port": "6379", "maxQpsPerNode": 150000, "baseLatencyMs": 0.6, "capProfile": "AP", "scalingAxis": "Hash-slot sharding by user_id" },
+      "summary": "Stores `(tokens, last_refill_ts)` per key and runs atomic Lua token-bucket transitions in <1ms.",
+      "whenToUse": ["Shared global rate limits across stateless gateway instances"],
+      "failureModes": ["Single hot tenant key hammering one Redis shard"]
+    },
+    {
+      "id": "backend",
+      "label": "Core Orders Service",
+      "sublabel": "Protected Upstream",
+      "kind": "compute",
+      "layer": 3,
+      "gridPos": { "gx": 9, "gy": 5 },
+      "specs": { "protocol": "gRPC", "port": "8080", "maxQpsPerNode": 10000, "baseLatencyMs": 12.0, "capProfile": "N/A", "scalingAxis": "App replicas" },
+      "summary": "Downstream business service shielded from burst overload.",
+      "whenToUse": ["Expensive write paths, LLM inference, payment APIs"],
+      "failureModes": ["Exhausts DB connections if unthrottled bursts leak through"]
+    }
+  ],
+  "edges": [
+    { "id": "e-c-gw", "from": "client", "to": "gateway", "protocol": "HTTPS", "transport": "sync", "label": "POST /v1/checkout" },
+    { "id": "e-gw-redis", "from": "gateway", "to": "redis-rl", "protocol": "RESP/Lua", "transport": "sync", "label": "EVALSHA token_bucket" },
+    { "id": "e-gw-be", "from": "gateway", "to": "backend", "protocol": "gRPC", "transport": "sync", "label": "Allowed Forward" }
+  ],
+  "steps": [
+    {
+      "stepNo": 1,
+      "phaseTitle": "1. GATEWAY KEY EXTRACTION",
+      "timestampMs": 0.0,
+      "sourceNodeId": "client",
+      "targetNodeId": "gateway",
+      "edgeId": "e-c-gw",
+      "category": "network",
+      "protocol": "HTTPS",
+      "info": "POST /v1/checkout arrives from tenant user_8841",
+      "payloadSize": "620 B",
+      "payloadInspector": "Rate Key: rl:checkout:user_8841 | Rule: capacity=20, refill=10/sec",
+      "latencyDeltaMs": 0.8,
+      "inspectorNote": "Gateway extracts user ID from verified JWT (or IP for anonymous routes) to construct the Redis key."
+    },
+    {
+      "stepNo": 2,
+      "phaseTitle": "2. ATOMIC LUA TOKEN CHECK",
+      "timestampMs": 0.8,
+      "sourceNodeId": "gateway",
+      "targetNodeId": "redis-rl",
+      "edgeId": "e-gw-redis",
+      "category": "cache_hit",
+      "protocol": "RESP/Lua",
+      "info": "EVALSHA refills +8 tokens, decrements 1 -> ALLOWED (14 remaining)",
+      "payloadSize": "110 B",
+      "payloadInspector": "HMGET rl:checkout:user_8841 tokens ts -> refill(elapsed=0.8s) -> tokens=14 -> return {1, 14}",
+      "latencyDeltaMs": 0.6,
+      "inspectorNote": "Because Redis runs Lua scripts single-threadedly, concurrent requests across 50 gateway pods cannot double-spend the last token.",
+      "predictPrompt": {
+        "prompt": "Why does implementing Token Bucket as `GET tokens` followed by `DECRBY` in Python/Go fail under concurrent gateway pods?",
+        "hint": "Two gateways read `tokens = 1` at the exact same millisecond.",
+        "reveal": "Check-then-act across separate network calls creates a classic race condition where multiple requests both observe `tokens = 1` and both pass. Putting the entire refill+check+decrement inside one Redis Lua script guarantees atomicity."
+      }
+    },
+    {
+      "stepNo": 3,
+      "phaseTitle": "3. FORWARD WITH HEADERS",
+      "timestampMs": 1.4,
+      "sourceNodeId": "gateway",
+      "targetNodeId": "backend",
+      "edgeId": "e-gw-be",
+      "category": "write",
+      "protocol": "gRPC",
+      "info": "Request forwarded; response attaches X-RateLimit-Remaining: 14",
+      "payloadSize": "920 B",
+      "payloadInspector": "X-RateLimit-Limit: 20\nX-RateLimit-Remaining: 14\nX-RateLimit-Reset: 1794905299",
+      "latencyDeltaMs": 12.0,
+      "inspectorNote": "Rate limiter adds <1.5ms overhead while returning transparent quota telemetry headers."
+    }
+  ],
+  "chaosScenarios": [
+    {
+      "id": "burst-429-and-redis-timeout",
+      "title": "Burst Exhaustion (HTTP 429) & Redis Timeout Fail-Open",
+      "faultType": "qps_spike",
+      "targetNodeId": "redis-rl",
+      "triggerSummary": "Bot script fires 250 req/sec, draining bucket to 0; subsequently Redis experiences a 50ms network blip.",
+      "mitigationSummary": "Burst traffic receives immediate HTTP 429 + Retry-After; during Redis timeout, gateway switches to local fallback counter (fail-open) so legitimate users aren't blocked.",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. BUCKET EXHAUSTED (HTTP 429)",
+          "timestampMs": 0.0,
+          "sourceNodeId": "gateway",
+          "targetNodeId": "redis-rl",
+          "edgeId": "e-gw-redis",
+          "category": "failover",
+          "protocol": "RESP/Lua",
+          "info": "tokens=0 -> REJECTED (Retry-After: 1s)",
+          "payloadSize": "96 B",
+          "payloadInspector": "HTTP/1.1 429 Too Many Requests\nRetry-After: 1\nX-RateLimit-Remaining: 0",
+          "latencyDeltaMs": 0.6,
+          "inspectorNote": "Gateway caches blocked flag locally for 100ms so subsequent bot spam doesn't even hit Redis."
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "2. REDIS TIMEOUT → FAIL-OPEN",
+          "timestampMs": 0.6,
+          "sourceNodeId": "gateway",
+          "targetNodeId": "backend",
+          "edgeId": "e-gw-be",
+          "category": "write",
+          "protocol": "gRPC",
+          "info": "Redis timed out (>5ms) -> Gateway applies local emergency cap & fails open",
+          "payloadSize": "620 B",
+          "payloadInspector": "CircuitBreaker: redis-rl OPEN -> using in-process per-pod soft limit",
+          "latencyDeltaMs": 5.0,
+          "inspectorNote": "For revenue APIs, fail-open with a conservative in-memory pod cap prevents a Redis outage from taking down checkout."
+        }
+      ]
+    }
+  ],
+  "tradeoffs": [
+    {
+      "option": "Token Bucket",
+      "pros": ["Memory efficient (2 numbers per key)", "Allows controlled traffic bursts", "Simple atomic Lua implementation"],
+      "cons": ["Needs tuning of both burst size and steady refill rate"],
+      "bestFor": "General API gateways and user-facing quotas"
+    },
+    {
+      "option": "Sliding Window Log / Counter",
+      "pros": ["Eliminates boundary burst spikes seen in Fixed Window", "Precise rolling window enforcement"],
+      "cons": ["Log stores every timestamp (high RAM); Counter approximates previous window"],
+      "bestFor": "Strict compliance or anti-abuse windows"
+    }
+  ],
+  "quizQuestionIds": ["q-rl-1", "q-rl-2"],
+  "flashcardIds": ["fc-rl-1", "fc-rl-2"]
+}

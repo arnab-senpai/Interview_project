@@ -1,0 +1,199 @@
+{
+  "id": "consistent-hashing",
+  "track": "hld",
+  "category": "patterns",
+  "layer": 5,
+  "title": "Consistent Hashing & Virtual Nodes",
+  "subtitle": "Minimizing key movement when nodes join, fail, or scale",
+  "difficulty": "L4-L5",
+  "estimatedMinutes": 16,
+  "overview": "Naive modulo partitioning (`hash(key) % N`) remaps almost every key whenever a cache or database node is added or crashes, triggering massive cache miss avalanches. Consistent Hashing maps both servers and keys onto a 0..2^32-1 hash ring using Virtual Nodes (vnodes) so adding/removing 1 node moves only ~K/N keys.",
+  "firstPrinciplesStory": "You shard 100 million user profiles across 10 cache servers using `hash(user_id) % 10`. Everything runs smoothly until Server #4 overheats on Friday afternoon and drops out. Changing the divisor from 10 to 9 changes the remainder for ~90% of all keys! Overnight, 90 million cache lookups turn into misses, slamming your primary database straight into collapse. Consistent Hashing solves that exact topological fragility by decoupling key positions from the total node count.",
+  "adaptiveLenses": {
+    "intuition": "Imagine seats around a circular clock face (`0` to `12`). Each server puts 150 colored name tags randomly around the clock. To find who owns a key, find its number on the clock and walk clockwise until you hit the first tag. If one server disappears, only the guests sitting right before its tags shift clockwise to the next tag—everyone else stays put.",
+    "mechanics": "Both server vnodes (`shard-a#0..149`) and keys pass through a uniform hash (MurmurHash3 / xxHash) into a sorted 32-bit integer array. Routing binary-searches clockwise in `O(log V)`. Removing a node deletes its vnode slices, shifting only `~K/N` keys evenly across all remaining neighbors.",
+    "staffTradeoffs": "Consistent hashing with vnodes guarantees even key *counts*, NOT even *QPS*—a viral celebrity profile still hashes to one single vnode and melts that shard! Mitigate hot keys via key salting (`celeb:id#0..7`) or local in-process L1 caches; note also that hash partitioning sacrifices efficient range scans (DDIA Ch. 6)."
+  },
+  "ddiaAnchors": [
+    {
+      "chapter": "DDIA Ch. 6 · Partitioning & Rebalancing",
+      "concept": "Hash Partitioning, Skew & Fixed Logical Partitions",
+      "whyItMatters": "Explains why modulo hashing breaks on resize and how virtual nodes/fixed logical slots keep rebalancing bounded."
+    }
+  ],
+  "pragmaticTips": [
+    {
+      "principle": "ETC (Easier To Change Cluster Size)",
+      "tip": "Hardcoding `N` inside a modulo formula couples every stored key to static cluster capacity—design partition placement to survive elastic scaling.",
+      "application": "Use virtual nodes (150–200/node) or fixed logical hash slots (like Redis's 16,384 slots) before cluster growth demands it."
+    }
+  ],
+  "keyTakeaways": [
+    "Modulo hashing remaps ~(N-1)/N keys on cluster resize; consistent hashing remaps only ~1/N keys.",
+    "Virtual nodes (e.g., 150–200 tokens per physical server) prevent non-uniform data skew and smooth heterogeneous hardware.",
+    "Hot keys (celebrities) still saturate a single shard unless mitigated by key salting or local L1 caching."
+  ],
+  "nodes": [
+    {
+      "id": "router",
+      "label": "Partition Router",
+      "sublabel": "Ring Map · MurmurHash3",
+      "kind": "api_gateway",
+      "layer": 2,
+      "gridPos": { "gx": 1, "gy": 5 },
+      "specs": { "protocol": "gRPC / RESP", "port": "8080", "maxQpsPerNode": 150000, "baseLatencyMs": 0.2, "capProfile": "AP", "scalingAxis": "Client/Proxy library" },
+      "summary": "Hashes incoming key onto 32-bit ring and binary-searches clockwise for first vnode.",
+      "whenToUse": ["Distributed Redis/Memcached clusters, Dynamo/Cassandra partitioning"],
+      "failureModes": ["Stale ring topology view during rapid node membership churn"]
+    },
+    {
+      "id": "ring-vnodes",
+      "label": "Hash Ring Directory",
+      "sublabel": "0..2^32-1 · 450 vnodes",
+      "kind": "compute",
+      "layer": 5,
+      "gridPos": { "gx": 5, "gy": 5 },
+      "specs": { "protocol": "Gossip / etcd", "port": "7946", "maxQpsPerNode": 300000, "baseLatencyMs": 0.1, "capProfile": "AP", "scalingAxis": "Ring metadata sync" },
+      "summary": "Logical sorted array of virtual token positions pointing to physical storage shards.",
+      "whenToUse": ["Mapping keys deterministically without a centralized lookup hop"],
+      "failureModes": ["Split ring views cause temporary read misses until gossip converges"]
+    },
+    {
+      "id": "shard-a",
+      "label": "Cache Shard A",
+      "sublabel": "vnodes 150 · 33% keys",
+      "kind": "cache",
+      "layer": 5,
+      "gridPos": { "gx": 9, "gy": 2 },
+      "specs": { "protocol": "RESP3", "port": "6379", "maxQpsPerNode": 120000, "baseLatencyMs": 0.5, "capProfile": "AP", "scalingAxis": "Add shards + vnodes" },
+      "summary": "Physical node owning 150 distributed intervals across the hash ring.",
+      "whenToUse": ["Horizontal memory/storage sharding"],
+      "failureModes": ["Hardware crash shifts its vnodes clockwise to immediate neighbors"]
+    },
+    {
+      "id": "shard-b",
+      "label": "Cache Shard B",
+      "sublabel": "vnodes 150 · 33% keys",
+      "kind": "cache",
+      "layer": 5,
+      "gridPos": { "gx": 9, "gy": 5 },
+      "specs": { "protocol": "RESP3", "port": "6379", "maxQpsPerNode": 120000, "baseLatencyMs": 0.5, "capProfile": "AP", "scalingAxis": "Add shards + vnodes" },
+      "summary": "Physical node owning 150 interleaved intervals.",
+      "whenToUse": ["Balanced key distribution"],
+      "failureModes": ["Hot key skew if one tenant exceeds single-shard NIC"]
+    },
+    {
+      "id": "shard-c",
+      "label": "Cache Shard C",
+      "sublabel": "vnodes 150 · 33% keys",
+      "kind": "cache",
+      "layer": 5,
+      "gridPos": { "gx": 9, "gy": 8 },
+      "specs": { "protocol": "RESP3", "port": "6379", "maxQpsPerNode": 120000, "baseLatencyMs": 0.5, "capProfile": "AP", "scalingAxis": "Add shards + vnodes" },
+      "summary": "Physical node owning 150 interleaved intervals (plus fallback for Shard B clockwise).",
+      "whenToUse": ["Balanced shard topology"],
+      "failureModes": ["Receives extra load when clockwise predecessor fails"]
+    }
+  ],
+  "edges": [
+    { "id": "e-r-ring", "from": "router", "to": "ring-vnodes", "protocol": "Local O(log V)", "transport": "sync", "label": "Hash(key) lookup" },
+    { "id": "e-ring-a", "from": "ring-vnodes", "to": "shard-a", "protocol": "RESP3", "transport": "sync", "label": "Route token [0..1.4B]" },
+    { "id": "e-ring-b", "from": "ring-vnodes", "to": "shard-b", "protocol": "RESP3", "transport": "sync", "label": "Route token [1.4B..2.8B]" },
+    { "id": "e-ring-c", "from": "ring-vnodes", "to": "shard-c", "protocol": "RESP3", "transport": "sync", "label": "Route token [2.8B..4.2B]" }
+  ],
+  "steps": [
+    {
+      "stepNo": 1,
+      "phaseTitle": "1. MURMURHASH3 KEY COMPUTATION",
+      "timestampMs": 0.0,
+      "sourceNodeId": "router",
+      "targetNodeId": "ring-vnodes",
+      "edgeId": "e-r-ring",
+      "category": "read",
+      "protocol": "Hash",
+      "info": "MurmurHash3('session:u_9402') = 2,140,884,102",
+      "payloadSize": "64 B",
+      "payloadInspector": "Key: session:u_9402 -> Ring Pos: 0x7F9C3216 -> Binary Search 450 sorted vnodes",
+      "latencyDeltaMs": 0.1,
+      "inspectorNote": "Router computes a fast non-cryptographic hash in nanoseconds and performs binary search over the cached ring array."
+    },
+    {
+      "stepNo": 2,
+      "phaseTitle": "2. CLOCKWISE VNODE MATCH",
+      "timestampMs": 0.1,
+      "sourceNodeId": "ring-vnodes",
+      "targetNodeId": "shard-b",
+      "edgeId": "e-ring-b",
+      "category": "cache_hit",
+      "protocol": "RESP3",
+      "info": "Next clockwise vnode is shard-b#47 (pos 2,145,000,010) -> HIT",
+      "payloadSize": "410 B",
+      "payloadInspector": "GET session:u_9402 on 10.0.4.12:6379 -> 200 OK (0.5ms)",
+      "latencyDeltaMs": 0.5,
+      "inspectorNote": "Virtual nodes spread Shard B across 150 positions so standard deviation of keys per shard drops below ~5%.",
+      "predictPrompt": {
+        "prompt": "Why do 150 virtual nodes per physical server matter when Shard B crashes, compared to putting only 1 point per server on the ring?",
+        "hint": "Look at who absorbs Shard B's orphaned keys in both cases.",
+        "reveal": "With only 1 point per server, Shard B's entire 33% traffic shifts onto ONE neighbor (doubling Shard C's load and potentially cascading). With 150 interleaved vnodes, Shard B's load splits ~50/50 across Shard A and Shard C."
+      }
+    }
+  ],
+  "chaosScenarios": [
+    {
+      "id": "shard-b-node-loss",
+      "title": "Shard B Crashes (Minimal ~33% Remap vs 100% Modulo Churn)",
+      "faultType": "node_down",
+      "targetNodeId": "shard-b",
+      "triggerSummary": "Cache Shard B dies unexpectedly; gossip removes its 150 vnodes from the ring.",
+      "mitigationSummary": "Only Shard B's keys walk clockwise to Shard A and Shard C (~16.5% extra load each), leaving 67% of cluster cache completely untouched.",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. SHARD B EVICTED FROM RING",
+          "timestampMs": 0.0,
+          "sourceNodeId": "router",
+          "targetNodeId": "ring-vnodes",
+          "edgeId": "e-r-ring",
+          "category": "failover",
+          "protocol": "Gossip",
+          "info": "Shard B heartbeat missed -> 150 vnodes removed; 67% of existing keys unaffected",
+          "payloadSize": "128 B",
+          "payloadInspector": "Modulo hash would invalidate ~67-99% of keys; Consistent Hash invalidates only keys owned by Shard B (~33%).",
+          "latencyDeltaMs": 0.2,
+          "inspectorNote": "Vnodes distribute Shard B's orphaned keys evenly across BOTH Shard A and Shard C instead of overloading a single neighbor."
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "2. CLOCKWISE HANDOFF TO SHARD C",
+          "timestampMs": 0.2,
+          "sourceNodeId": "ring-vnodes",
+          "targetNodeId": "shard-c",
+          "edgeId": "e-ring-c",
+          "category": "cache_miss",
+          "protocol": "RESP3",
+          "info": "session:u_9402 remaps clockwise to shard-c#89 -> cold miss refills cleanly",
+          "payloadSize": "410 B",
+          "payloadInspector": "Re-routed to 10.0.4.13:6379 -> miss -> re-populated from DB",
+          "latencyDeltaMs": 1.2,
+          "inspectorNote": "Because only K/N keys move, the origin DB easily absorbs the partial cache warm-up."
+        }
+      ]
+    }
+  ],
+  "tradeoffs": [
+    {
+      "option": "Consistent Hashing + Vnodes",
+      "pros": ["Minimal K/N key movement on scaling/failure", "Even key distribution with 150+ vnodes", "Decentralized O(log V) lookup"],
+      "cons": ["Hot keys still hit a single shard", "Range scans (e.g. BETWEEN timestamps) cannot use single-shard locality"],
+      "bestFor": "Distributed caches (Memcached/Redis), Dynamo/Cassandra key-value partitioning"
+    },
+    {
+      "option": "Rendezvous (HRW) / Hash-Slot Directory (Redis Cluster)",
+      "pros": ["Explicit 16,384 hash slots allow atomic live slot migration", "Simple deterministic placement"],
+      "cons": ["Needs cluster bus or config coordinator for slot-to-node table"],
+      "bestFor": "Managed stateful clusters requiring deterministic resharding"
+    }
+  ],
+  "quizQuestionIds": ["q-ch-1", "q-ch-2"],
+  "flashcardIds": ["fc-ch-1", "fc-ch-2"]
+}

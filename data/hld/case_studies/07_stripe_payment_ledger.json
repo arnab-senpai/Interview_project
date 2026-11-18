@@ -1,0 +1,272 @@
+{
+  "id": "payment-gateway",
+  "tier": 4,
+  "title": "Design a Payment Gateway & Ledger (Stripe)",
+  "subtitle": "Double-entry ledger, idempotency, Outbox + PSP reconciliation",
+  "levelTag": "L6-L7",
+  "estimatedMinutes": 50,
+  "tags": ["Double-Entry Ledger", "Idempotency", "PSP Reconciliation", "ACID"],
+  "functionalReqs": [
+    "Process checkout payments safely with strict exactly-once financial effect despite network retries.",
+    "Maintain an immutable, auditable Double-Entry Accounting Ledger (`SUM(debits) == SUM(credits)`).",
+    "Orchestrate async external Payment Service Provider (Visa/Stripe/Bank) calls cleanly.",
+    "Run automated T+1 reconciliation against external PSP settlement files to catch silent discrepancies."
+  ],
+  "nonFunctionalReqs": [
+    { "metric": "Financial Correctness", "target": "100% zero lost or duplicated money", "rationale": "Any silent divergence creates real financial & regulatory liability." },
+    { "metric": "Auditability", "target": "Immutable append-only journal", "rationale": "Financial auditors require tracing every cent across every timestamp." },
+    { "metric": "Availability", "target": "99.999% with multi-PSP fallback", "rationale": "Down checkout directly halts merchant revenue." }
+  ],
+  "estimationPreset": {
+    "dau": 10000000,
+    "actionsPerUserPerDay": 1.0,
+    "peakMultiplier": 4.0,
+    "avgPayloadBytes": 1024,
+    "readWriteRatio": "20:80",
+    "retentionYears": 7,
+    "workedSummary": {
+      "paymentWritesPerSec": "10M/day ≈ 100 QPS avg, ~400 QPS peak (2,000+ on Black Friday)",
+      "ledgerEntriesPerPayment": "2+ immutable rows per transfer (debit buyer / credit merchant + fee)",
+      "sevenYearCompliance": "10M × 3 rows × 365 × 7 × 300 B ≈ 23 TB immutable ledger history"
+    }
+  },
+  "coreEntities": [
+    {
+      "name": "PaymentIntent",
+      "storageEngine": "PostgreSQL (ACID, partitioned by merchant_id)",
+      "partitionKey": "payment_id",
+      "keyFields": ["payment_id", "idempotency_key (UNIQUE)", "amount_cents", "currency", "state (INIT|PENDING_PSP|SUCCEEDED|FAILED)"]
+    },
+    {
+      "name": "LedgerEntry",
+      "storageEngine": "PostgreSQL Append-Only Journal (Zero UPDATE/DELETE)",
+      "partitionKey": "journal_tx_id",
+      "keyFields": ["entry_id", "journal_tx_id", "account_id", "direction (DEBIT|CREDIT)", "amount_cents", "created_at"]
+    }
+  ],
+  "apiContracts": [
+    {
+      "method": "POST",
+      "path": "/v1/payments",
+      "purpose": "Create/execute idempotent payment intent, forward to PSP, and commit double-entry journal",
+      "idempotent": true,
+      "samplePayload": "{\"amountCents\":4999,\"currency\":\"USD\",\"idempotencyKey\":\"pay_8841\"}"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/webhooks/psp",
+      "purpose": "Verify HMAC signature and record async PSP settlement/chargeback callbacks idempotently",
+      "idempotent": true,
+      "samplePayload": "{\"pspTxId\":\"ch_9912\",\"status\":\"settled\",\"signature\":\"...\"}"
+    }
+  ],
+  "explorerTopology": {
+    "id": "stripe-ledger-flow",
+    "track": "hld",
+    "category": "patterns",
+    "layer": 4,
+    "title": "Idempotent Payment Execution & Double-Entry Ledger",
+    "subtitle": "Idempotency lock -> External PSP call (outside SQL tx!) -> Atomic Ledger + Outbox",
+    "difficulty": "L6-L7",
+    "estimatedMinutes": 25,
+    "overview": "Never hold a SQL transaction open while calling an external bank/PSP over the internet (a 5-second bank stall exhausts DB connections instantly!). Instead: 1) Persist `PaymentIntent(INIT)` with `idempotency_key`, 2) Call the PSP with the SAME key, 3) Atomically commit `SUCCEEDED` + balanced Double-Entry Ledger rows + Outbox event, and reconcile async bank files nightly.",
+    "keyTakeaways": [
+      "Store monetary amounts strictly as integer minor units (`amount_cents`), never floating-point `float/double`.",
+      "Never hold database row locks across slow external HTTP calls to banks/PSPs.",
+      "Every transfer writes balanced `DEBIT` + `CREDIT` immutable rows (`SUM == 0`) instead of mutating a bare `balance` integer."
+    ],
+    "nodes": [
+      {
+        "id": "merchant-app",
+        "label": "Checkout Client",
+        "sublabel": "Idempotency-Key: pay_8841",
+        "kind": "client",
+        "layer": 1,
+        "gridPos": { "gx": 1, "gy": 5 },
+        "specs": { "protocol": "HTTPS", "port": "443", "maxQpsPerNode": 20, "baseLatencyMs": 1.0, "capProfile": "N/A", "scalingAxis": "Clients" },
+        "summary": "Submits payment request with persistent UUID idempotency key.",
+        "whenToUse": ["All monetary mutations"],
+        "failureModes": ["Retrying without idempotency key double-charges customers"]
+      },
+      {
+        "id": "pay-svc",
+        "label": "Payment Executor",
+        "sublabel": "State Machine · Integer Cents",
+        "kind": "compute",
+        "layer": 3,
+        "gridPos": { "gx": 4, "gy": 5 },
+        "specs": { "protocol": "gRPC / SQL", "port": "8080", "maxQpsPerNode": 5000, "baseLatencyMs": 2.0, "capProfile": "CP", "scalingAxis": "Merchant-sharded pods" },
+        "summary": "Claims idempotency key, calls PSP outside DB lock, then commits ledger + outbox.",
+        "whenToUse": ["Orchestrating external PSPs safely"],
+        "failureModes": ["Holding DB connection open during 3s PSP call drains DB pool"]
+      },
+      {
+        "id": "ledger-db",
+        "label": "Double-Entry Ledger DB",
+        "sublabel": "Postgres · Immutable Journal",
+        "kind": "db_sql",
+        "layer": 4,
+        "gridPos": { "gx": 7, "gy": 2 },
+        "specs": { "protocol": "PostgreSQL SERIALIZABLE", "port": "5432", "maxQpsPerNode": 10000, "baseLatencyMs": 4.0, "capProfile": "CP", "scalingAxis": "Shard by account_id / merchant" },
+        "summary": "Enforces unique `idempotency_key` and balanced debit/credit entries + `outbox_events`.",
+        "whenToUse": ["Auditable zero-loss financial truth"],
+        "failureModes": ["Hot single platform fee account causes row lock contention—solve by sharding fee sub-accounts!"]
+      },
+      {
+        "id": "psp-ext",
+        "label": "External PSP / Card Network",
+        "sublabel": "Visa / Acquirer Bank",
+        "kind": "external",
+        "layer": 7,
+        "gridPos": { "gx": 8, "gy": 7 },
+        "specs": { "protocol": "HTTPS + Idempotency", "port": "443", "maxQpsPerNode": 2000, "baseLatencyMs": 180.0, "capProfile": "N/A", "scalingAxis": "Multi-PSP failover" },
+        "summary": "Authorizes card funds and emits async settlement files + webhooks.",
+        "whenToUse": ["Card network settlement"],
+        "failureModes": ["Timeout leaves payment status ambiguous—must query PSP or reconcile later"]
+      },
+      {
+        "id": "reconcile",
+        "label": "Outbox & T+1 Reconciler",
+        "sublabel": "Kafka + Settlement Audit",
+        "kind": "queue",
+        "layer": 6,
+        "gridPos": { "gx": 10, "gy": 4 },
+        "specs": { "protocol": "Kafka / Batch", "port": "9092", "maxQpsPerNode": 100000, "baseLatencyMs": 3.0, "capProfile": "CP", "scalingAxis": "Daily batch + CDC" },
+        "summary": "Emits receipt/webhook events via CDC and diffs internal ledger vs bank settlement files nightly.",
+        "whenToUse": ["Guaranteed eventuality & audit safety"],
+        "failureModes": ["Unreconciled PSP timeout charges stay orphaned without automated polling"]
+      }
+    ],
+    "edges": [
+      { "id": "e1", "from": "merchant-app", "to": "pay-svc", "protocol": "HTTPS", "transport": "sync", "label": "POST /payments" },
+      { "id": "e2", "from": "pay-svc", "to": "ledger-db", "protocol": "SQL", "transport": "sync", "label": "Claim / Commit Ledger" },
+      { "id": "e3", "from": "pay-svc", "to": "psp-ext", "protocol": "HTTPS", "transport": "sync", "label": "Charge (Outside SQL Tx)" },
+      { "id": "e4", "from": "ledger-db", "to": "reconcile", "protocol": "CDC/Kafka", "transport": "async", "label": "Outbox + T+1 Audit" }
+    ],
+    "steps": [
+      {
+        "stepNo": 1,
+        "phaseTitle": "1. CLAIM IDEMPOTENCY & INIT ROW",
+        "timestampMs": 0.0,
+        "sourceNodeId": "pay-svc",
+        "targetNodeId": "ledger-db",
+        "edgeId": "e2",
+        "category": "write",
+        "protocol": "SQL",
+        "info": "INSERT payment_intents (idempotency_key='pay_8841', state='PENDING_PSP') -> COMMIT (release SQL conn!)",
+        "payloadSize": "320 B",
+        "payloadInspector": "Unique Key Claimed -> SQL connection immediately returned to pool BEFORE calling PSP",
+        "latencyDeltaMs": 4.0,
+        "inspectorNote": "Quickly committing `PENDING_PSP` prevents concurrent duplicate requests from executing while keeping DB locks open 0ms during network calls."
+      },
+      {
+        "stepNo": 2,
+        "phaseTitle": "2. EXTERNAL PSP AUTHORIZATION",
+        "timestampMs": 4.0,
+        "sourceNodeId": "pay-svc",
+        "targetNodeId": "psp-ext",
+        "edgeId": "e3",
+        "category": "network",
+        "protocol": "HTTPS",
+        "info": "Call Visa/PSP passing forward `Idempotency-Key: pay_8841` -> Authorized (180ms)",
+        "payloadSize": "540 B",
+        "payloadInspector": "PSP Response: {pspTxId: 'ch_9912', status: 'AUTHORIZED', cents: 4999}",
+        "latencyDeltaMs": 180.0,
+        "inspectorNote": "Passing our idempotency key upstream guarantees even if our pod crashes post-charge, retrying won't double-charge at the bank!"
+      },
+      {
+        "stepNo": 3,
+        "phaseTitle": "3. ATOMIC DOUBLE-ENTRY JOURNAL COMMIT",
+        "timestampMs": 184.0,
+        "sourceNodeId": "pay-svc",
+        "targetNodeId": "ledger-db",
+        "edgeId": "e2",
+        "category": "write",
+        "protocol": "SQL",
+        "info": "Write DEBIT buyer (-$49.99), CREDIT merchant (+$48.50), CREDIT fee (+$1.49) + Outbox",
+        "payloadSize": "680 B",
+        "payloadInspector": "ASSERT SUM(debits)==SUM(credits) -> State=SUCCEEDED -> Commit + CDC Outbox",
+        "latencyDeltaMs": 5.0,
+        "inspectorNote": "Immutable journal entries + Outbox notify Merchant webhooks cleanly."
+      }
+    ],
+    "chaosScenarios": [
+      {
+        "id": "psp-timeout-unknown-outcome",
+        "title": "PSP Read Timeout (Ambiguous Outcome -> Async Reconciler Recovery)",
+        "faultType": "latency_injection",
+        "targetNodeId": "psp-ext",
+        "triggerSummary": "Visa/PSP network call times out at 5s after debiting the customer card, leaving PaymentIntent stuck in `PENDING_PSP`.",
+        "mitigationSummary": "Payment stays `PENDING_PSP` (not naively marked FAILED!), background status-poller & T+1 Settlement Reconciler query PSP by `pay_8841`, observe `AUTHORIZED`, and complete the ledger safely.",
+        "steps": [
+          {
+            "stepNo": 1,
+            "phaseTitle": "1. PSP TIMEOUT -> MARK PENDING (DO NOT FAIL)",
+            "timestampMs": 0.0,
+            "sourceNodeId": "pay-svc",
+            "targetNodeId": "psp-ext",
+            "edgeId": "e3",
+            "category": "failover",
+            "protocol": "HTTPS",
+            "info": "PSP socket timeout at 5,000ms -> Payment remains PENDING_PSP; polling job scheduled",
+            "payloadSize": "180 B",
+            "payloadInspector": "CRITICAL: Do NOT tell user 'Failed' without confirming PSP status—bank might have succeeded!",
+            "latencyDeltaMs": 50.0,
+            "inspectorNote": "Treating ambiguous timeouts as `PENDING` prevents double-charges when users try another card."
+          },
+          {
+            "stepNo": 2,
+            "phaseTitle": "2. RECONCILER RESOLVES TRUE BANK STATE",
+            "timestampMs": 50.0,
+            "sourceNodeId": "reconcile",
+            "targetNodeId": "ledger-db",
+            "edgeId": "e4",
+            "category": "write",
+            "protocol": "CDC/Kafka",
+            "info": "Poller queries PSP(`pay_8841`) -> finds `ch_9912 AUTHORIZED` -> commits ledger cleanly!",
+            "payloadSize": "440 B",
+            "payloadInspector": "Reconciled: PENDING_PSP -> SUCCEEDED + Double-Entry Ledger balanced",
+            "latencyDeltaMs": 6.0,
+            "inspectorNote": "Automated reconciliation + T+1 settlement file diffs close every distributed consistency gap."
+          }
+        ]
+      }
+    ],
+    "tradeoffs": [
+      {
+        "option": "Double-Entry Immutable Ledger + Out-of-Tx PSP Call",
+        "pros": ["Complete financial audit trail", "Zero held DB locks during slow bank RPCs", "Deterministic reconciliation"],
+        "cons": ["Higher row write volume (2–3 rows per tx)", "Needs async poller/reconciler for ambiguous timeouts"],
+        "bestFor": "Payment gateways, digital wallets, marketplace payouts, billing systems"
+      },
+      {
+        "option": "Mutable `balance` Column Update",
+        "pros": ["Simpler schema"],
+        "cons": ["No audit history, prone to silent race conditions, impossible to verify historical balances"],
+        "bestFor": "Non-financial game points only"
+      }
+    ],
+    "quizQuestionIds": ["q-pay-1", "q-pay-2"],
+    "flashcardIds": ["fc-pay-1", "fc-pay-2"]
+  },
+  "deepDives": [
+    {
+      "title": "Eliminating Hot Row Contention on Platform Fee Accounts",
+      "bottleneck": "Every payment credits the single `platform_revenue` account row—creating severe row lock contention at 2,000 QPS.",
+      "solution": "Shard hot system accounts into `platform_revenue#0..31` (pick random bucket per transaction) and sum all 32 buckets when reporting total platform revenue.",
+      "tradeoff": "Reads aggregate 32 sub-accounts in exchange for 32x higher concurrent write throughput."
+    },
+    {
+      "title": "Integer Minor Units vs Floating Point",
+      "bottleneck": "`0.1 + 0.2 = 0.30000000000000004` in IEEE-754 floats causes penny drift during millions of ledger sums.",
+      "solution": "Store every amount as `BIGINT amount_minor_units` alongside ISO-4217 currency scale (e.g. USD cents, JPY yen).",
+      "tradeoff": "Display layer formats decimals explicitly per currency precision."
+    }
+  ],
+  "rubricChecklist": [
+    { "phase": "Data Safety & Types", "weight": 20, "criteria": ["Uses integer minor units (no floats)", "Explains Double-Entry immutable journal"] },
+    { "phase": "Idempotency & Locking", "weight": 30, "criteria": ["Persists client idempotency key & forwards to PSP", "Releases SQL lock BEFORE calling external PSP"] },
+    { "phase": "Ambiguous Failure Recovery", "weight": 30, "criteria": ["Handles PSP timeouts as PENDING, not failed", "Adds async poller + T+1 settlement reconciliation"] },
+    { "phase": "Scale & Hot Accounts", "weight": 20, "criteria": ["Uses Outbox/CDC for webhooks", "Shards hot platform fee accounts"] }
+  ]
+}

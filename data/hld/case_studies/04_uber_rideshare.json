@@ -1,0 +1,300 @@
+{
+  "id": "uber-rideshare",
+  "tier": 3,
+  "title": "Design Uber / Lyft Ride-Sharing Backend",
+  "subtitle": "Geospatial H3/Geohash indexing, high-write driver GPS pings & lock-safe dispatch",
+  "levelTag": "L5-L6",
+  "estimatedMinutes": 45,
+  "tags": ["Geospatial H3", "High-Write GPS", "Distributed Lock", "Matching"],
+  "functionalReqs": [
+    "Active drivers stream GPS coordinates every 4 seconds.",
+    "Riders view nearby drivers and request a ride with upfront ETA/fare.",
+    "Match engine dispatches the best nearby driver atomically (zero double-booking).",
+    "Track live trip state transitions (REQUESTED → ACCEPTED → IN_PROGRESS → COMPLETED)."
+  ],
+  "nonFunctionalReqs": [
+    { "metric": "Driver Location Ingest", "target": "~250k–500k GPS updates/sec", "rationale": "1M–2M active online drivers pinging every 4 seconds." },
+    { "metric": "Match Latency", "target": "< 1–2 seconds", "rationale": "Riders expect instant dispatch feedback." },
+    { "metric": "Consistency on Match", "target": "Strong per-driver / per-ride lock", "rationale": "Two riders must never be assigned the exact same driver concurrently." }
+  ],
+  "estimationPreset": {
+    "dau": 30000000,
+    "actionsPerUserPerDay": 1.0,
+    "peakMultiplier": 3.0,
+    "avgPayloadBytes": 128,
+    "readWriteRatio": "Write-heavy GPS pings (500k/s) vs Match reads (5k/s)",
+    "retentionYears": 3,
+    "workedSummary": {
+      "activeDriverGpsQps": "2,000,000 drivers ÷ 4s = 500,000 location writes/sec!",
+      "gpsBandwidth": "500,000 × 128 B ≈ 64 MB/s (~512 Mbps) ingress",
+      "spatialIndexMemory": "2M drivers × 64 B ≈ 128 MB active spatial index (fits easily in sharded regional RAM!)"
+    }
+  },
+  "coreEntities": [
+    {
+      "name": "DriverLiveLocation",
+      "storageEngine": "Region-Sharded In-Memory Spatial Index (Redis GEO / Uber H3 Grid)",
+      "partitionKey": "city_region_id / h3_res5_parent",
+      "keyFields": ["driver_id", "h3_cell_res8", "lat", "lng", "status (available | on_trip)", "ttl_15s"]
+    },
+    {
+      "name": "TripLedger",
+      "storageEngine": "Regional Sharded Postgres (ACID state machine)",
+      "partitionKey": "trip_id (partitioned by city)",
+      "keyFields": ["trip_id", "rider_id", "driver_id", "state", "fare_cents", "updated_at"]
+    }
+  ],
+  "apiContracts": [
+    {
+      "method": "WS",
+      "path": "/v1/driver/location",
+      "purpose": "Stream driver lat/lng pings every 4 seconds into regional Location Service",
+      "idempotent": true,
+      "samplePayload": "{\"driverId\":\"d_901\",\"lat\":19.0760,\"lng\":72.8777,\"ts\":1794905233}"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/trips/request",
+      "purpose": "Idempotent ride request triggering H3 k-ring search and sequential driver offers",
+      "idempotent": true,
+      "samplePayload": "{\"idempotencyKey\":\"req_442\",\"pickup\":[19.076,72.877],\"dropoff\":[19.113,72.869]}"
+    }
+  ],
+  "explorerTopology": {
+    "id": "uber-dispatch-flow",
+    "track": "hld",
+    "category": "patterns",
+    "layer": 4,
+    "title": "High-Write GPS Ingestion & Atomic Driver Dispatch",
+    "subtitle": "Regional H3 spatial grid + Redis lock to guarantee single-rider matching",
+    "difficulty": "L5-L6",
+    "estimatedMinutes": 24,
+    "overview": "Updating a disk SQL database 500,000 times/sec for moving drivers would destroy B-Tree indexes. Instead, Location Service updates an in-memory city-sharded H3/Geohash index (only 128 MB RAM globally!) and emits a Kafka trail for offline analytics, while Dispatch uses atomic locks (`SET NX EX`) so a driver only sees one ride offer at a time.",
+    "keyTakeaways": [
+      "Keep active moving driver locations in RAM (H3 / Geohash) with short TTLs; flush raw GPS breadcrumbs asynchronously via Kafka to cold/TSDB storage.",
+      "Hexagonal H3 cells eliminate corner-distance distortion vs square grids and support instant `kRing(1)` neighbor lookup.",
+      "Region-shard by `city_id` so Mumbai traffic never shares database or lock contention with London."
+    ],
+    "nodes": [
+      {
+        "id": "driver-app",
+        "label": "Driver App (2M Active)",
+        "sublabel": "GPS Ping / 4s",
+        "kind": "client",
+        "layer": 1,
+        "gridPos": { "gx": 1, "gy": 2 },
+        "specs": { "protocol": "WSS / gRPC", "port": "443", "maxQpsPerNode": 1, "baseLatencyMs": 15.0, "capProfile": "N/A", "scalingAxis": "Active drivers" },
+        "summary": "Streams live coordinates and accepts/declines dispatched ride offers.",
+        "whenToUse": ["Driver telemetry & dispatch"],
+        "failureModes": ["Driver loses cell signal in tunnel -> 15s TTL auto-expires stale availability"]
+      },
+      {
+        "id": "rider-app",
+        "label": "Rider App",
+        "sublabel": "POST /trips/request",
+        "kind": "client",
+        "layer": 1,
+        "gridPos": { "gx": 1, "gy": 7 },
+        "specs": { "protocol": "HTTPS / WSS", "port": "443", "maxQpsPerNode": 5, "baseLatencyMs": 15.0, "capProfile": "N/A", "scalingAxis": "Riders" },
+        "summary": "Requests pickup and receives live driver location updates over WebSocket.",
+        "whenToUse": ["Rider trip flow"],
+        "failureModes": ["Double-tap request without idempotencyKey creates duplicate trips"]
+      },
+      {
+        "id": "loc-svc",
+        "label": "Location Ingestion Service",
+        "sublabel": "500k Pings/sec · H3 Encode",
+        "kind": "compute",
+        "layer": 3,
+        "gridPos": { "gx": 4, "gy": 2 },
+        "specs": { "protocol": "gRPC + RESP", "port": "8080", "maxQpsPerNode": 60000, "baseLatencyMs": 1.0, "capProfile": "AP", "scalingAxis": "Sharded by city region" },
+        "summary": "Converts `(lat, lng)` -> H3 cell ID, updates in-memory index, and streams trail to Kafka.",
+        "whenToUse": ["High-frequency telemetry ingestion"],
+        "failureModes": ["Sync SQL writes would collapse DB IOPS"]
+      },
+      {
+        "id": "h3-redis",
+        "label": "In-Mem H3 Spatial & Lock Store",
+        "sublabel": "Redis · City-Sharded RAM",
+        "kind": "cache",
+        "layer": 4,
+        "gridPos": { "gx": 7, "gy": 3 },
+        "specs": { "protocol": "RESP3", "port": "6379", "maxQpsPerNode": 200000, "baseLatencyMs": 0.5, "capProfile": "CP", "scalingAxis": "City cells" },
+        "summary": "Holds driver-per-H3-cell sets + atomic 15s driver offer locks (`SET lock:driver:d_901 trip_77 NX EX 15`).",
+        "whenToUse": ["Sub-millisecond spatial radius & exclusive driver locking"],
+        "failureModes": ["Cell boundary misses unless kRing(1) neighbors are queried"]
+      },
+      {
+        "id": "dispatch-svc",
+        "label": "Dispatch & Matching Engine",
+        "sublabel": "ETA Rank + Atomic Offer",
+        "kind": "compute",
+        "layer": 3,
+        "gridPos": { "gx": 6, "gy": 7 },
+        "specs": { "protocol": "gRPC", "port": "8082", "maxQpsPerNode": 15000, "baseLatencyMs": 12.0, "capProfile": "CP", "scalingAxis": "City-scoped pods" },
+        "summary": "Queries H3 k-ring neighbors, ranks top drivers by road-network ETA, and locks candidate sequentially.",
+        "whenToUse": ["Concurrency-safe supply/demand matching"],
+        "failureModes": ["Lock leak if driver disconnects without explicit TTL"]
+      },
+      {
+        "id": "trip-db",
+        "label": "Trip ACID Ledger (Postgres)",
+        "sublabel": "Region-Sharded State",
+        "kind": "db_sql",
+        "layer": 4,
+        "gridPos": { "gx": 10, "gy": 7 },
+        "specs": { "protocol": "PostgreSQL", "port": "5432", "maxQpsPerNode": 10000, "baseLatencyMs": 5.0, "capProfile": "CP", "scalingAxis": "City shard" },
+        "summary": "Records durable trip state transitions and billing milestones with ACID guarantees.",
+        "whenToUse": ["Financial & safety-critical trip records"],
+        "failureModes": ["Cross-region latency if routed outside rider's city shard"]
+      }
+    ],
+    "edges": [
+      { "id": "e1", "from": "driver-app", "to": "loc-svc", "protocol": "WSS", "transport": "stream", "label": "GPS every 4s" },
+      { "id": "e2", "from": "loc-svc", "to": "h3-redis", "protocol": "RESP3", "transport": "sync", "label": "Update H3 cell + TTL" },
+      { "id": "e3", "from": "rider-app", "to": "dispatch-svc", "protocol": "HTTPS", "transport": "sync", "label": "POST /trips/request" },
+      { "id": "e4", "from": "dispatch-svc", "to": "h3-redis", "protocol": "RESP3", "transport": "sync", "label": "kRing + SET NX lock" },
+      { "id": "e5", "from": "dispatch-svc", "to": "trip-db", "protocol": "SQL", "transport": "sync", "label": "Commit trip state" }
+    ],
+    "steps": [
+      {
+        "stepNo": 1,
+        "phaseTitle": "1. STREAMING GPS TO H3 INDEX",
+        "timestampMs": 0.0,
+        "sourceNodeId": "driver-app",
+        "targetNodeId": "loc-svc",
+        "edgeId": "e1",
+        "category": "write",
+        "protocol": "WSS",
+        "info": "Driver d_901 pings (19.076, 72.877) -> mapped to H3 cell 88608b123ffffff",
+        "payloadSize": "128 B",
+        "payloadInspector": "Driver d_901 -> H3 Res-8 cell (~0.7 km² hex) | TTL=15s refreshed",
+        "latencyDeltaMs": 2.0,
+        "inspectorNote": "Storing active positions in RAM with a 15s TTL automatically drops offline drivers without cleanup jobs."
+      },
+      {
+        "stepNo": 2,
+        "phaseTitle": "2. IN-MEMORY INDEX UPDATE",
+        "timestampMs": 2.0,
+        "sourceNodeId": "loc-svc",
+        "targetNodeId": "h3-redis",
+        "edgeId": "e2",
+        "category": "write",
+        "protocol": "RESP3",
+        "info": "Driver moves from old cell to new H3 cell atomically in 0.5ms",
+        "payloadSize": "96 B",
+        "payloadInspector": "H3 index update in city:bom shard (SQL DB untouched!)",
+        "latencyDeltaMs": 0.5,
+        "inspectorNote": "Zero SQL disk writes during routine movement lets 500k pings/sec scale effortlessly."
+      },
+      {
+        "stepNo": 3,
+        "phaseTitle": "3. K-RING LOOKUP & DRIVER LOCK",
+        "timestampMs": 2.5,
+        "sourceNodeId": "dispatch-svc",
+        "targetNodeId": "h3-redis",
+        "edgeId": "e4",
+        "category": "consensus",
+        "protocol": "RESP3",
+        "info": "Query pickup H3 + 6 ring neighbors -> 14 drivers -> SET lock:driver:d_901 NX EX 15",
+        "payloadSize": "380 B",
+        "payloadInspector": "ETA Service picks d_901 (3 min) -> atomic Redis lock acquired for 15s offer window",
+        "latencyDeltaMs": 4.0,
+        "inspectorNote": "Atomic `SET NX EX 15` guarantees no competing rider dispatch can offer d_901 another trip during the 15s prompt."
+      },
+      {
+        "stepNo": 4,
+        "phaseTitle": "4. ACID TRIP CONFIRMATION",
+        "timestampMs": 6.5,
+        "sourceNodeId": "dispatch-svc",
+        "targetNodeId": "trip-db",
+        "edgeId": "e5",
+        "category": "write",
+        "protocol": "SQL",
+        "info": "Driver accepts -> BEGIN; INSERT/UPDATE trips SET status='ACCEPTED', driver_id='d_901'; COMMIT",
+        "payloadSize": "450 B",
+        "payloadInspector": "Strong ACID transaction records trip contract & switches driver status=on_trip",
+        "latencyDeltaMs": 5.0,
+        "inspectorNote": "Only significant state transitions (Request/Accept/Complete) touch Postgres—keeping relational load <5k QPS."
+      }
+    ],
+    "chaosScenarios": [
+      {
+        "id": "concurrent-ride-race",
+        "title": "Two Riders Compete for Last Driver + Offer Timeout",
+        "faultType": "qps_spike",
+        "targetNodeId": "h3-redis",
+        "triggerSummary": "Rider A and Rider B both query the same sparse H3 cell with only Driver d_901 nearby; d_901 then ignores Rider A's offer.",
+        "mitigationSummary": "Rider A wins atomic `SET NX` lock (Rider B skips to next candidate); after 15s timeout or decline, lock deletes and Dispatch expands search to `kRing(2)`.",
+        "steps": [
+          {
+            "stepNo": 1,
+            "phaseTitle": "1. ATOMIC LOCK REJECTS RACE",
+            "timestampMs": 0.0,
+            "sourceNodeId": "dispatch-svc",
+            "targetNodeId": "h3-redis",
+            "edgeId": "e4",
+            "category": "failover",
+            "protocol": "RESP3",
+            "info": "Rider A acquires lock:driver:d_901; Rider B receives NIL -> immediately skips to candidate #2",
+            "payloadSize": "84 B",
+            "payloadInspector": "SET lock:driver:d_901 trip_B NX EX 15 -> (nil) -> zero double-booking",
+            "latencyDeltaMs": 0.5,
+            "inspectorNote": "Fails fast in <1ms rather than blocking on a slow SQL row lock."
+          },
+          {
+            "stepNo": 2,
+            "phaseTitle": "2. OFFER DECLINED -> KRING(2) EXPAND",
+            "timestampMs": 0.5,
+            "sourceNodeId": "dispatch-svc",
+            "targetNodeId": "h3-redis",
+            "edgeId": "e4",
+            "category": "read",
+            "protocol": "RESP3",
+            "info": "Driver d_901 declined -> lock released -> Dispatch widens radius to kRing(2) (19 H3 cells)",
+            "payloadSize": "220 B",
+            "payloadInspector": "Expanding spatial search ring from 0.7km to ~2.1km radius",
+            "latencyDeltaMs": 2.0,
+            "inspectorNote": "Hierarchical H3 grids make radius expansion deterministic without expensive trigonometric full-table scans."
+          }
+        ]
+      }
+    ],
+    "tradeoffs": [
+      {
+        "option": "Uber H3 Hexagonal Grid vs Geohash",
+        "pros": ["Uniform distance to all 6 neighbors (no square diagonal distortion)", "Multi-resolution parent/child hierarchy"],
+        "cons": ["Needs H3 library bindings vs simple bit-interleaved Geohash strings"],
+        "bestFor": "Ride-sharing, delivery ETA grids, surge pricing heatmaps"
+      },
+      {
+        "option": "Quadtree",
+        "pros": ["Adapts dynamically to dense downtowns vs sparse rural zones"],
+        "cons": ["Expensive rebalancing when 500k moving coordinates update every 4s"],
+        "bestFor": "Static POIs (Yelp restaurants, Google Maps landmarks)"
+      }
+    ],
+    "quizQuestionIds": ["q-uber-1"],
+    "flashcardIds": ["fc-uber-1"]
+  },
+  "deepDives": [
+    {
+      "title": "Why H3 Beats Quadtree for Moving Drivers",
+      "bottleneck": "Re-splitting and merging dynamic Quadtree nodes under 500k coordinate mutations/sec causes heavy lock contention.",
+      "solution": "Fixed-resolution H3 cells act as O(1) hash buckets—moving a driver is just `SREM old_cell` + `SADD new_cell`.",
+      "tradeoff": "Downtown cells hold more drivers than rural cells, handled by sub-filtering top N or choosing resolution 8/9."
+    },
+    {
+      "title": "Road-Network ETA vs Straight-Line Distance",
+      "bottleneck": "A driver 300m away across a river or highway divider might take 14 minutes to reach pickup.",
+      "solution": "Use H3 spatial search to shortlist top-20 nearby candidates cheaply, then call a Routing/ETA Graph Engine (OSRM / contraction hierarchies) only on those 20.",
+      "tradeoff": "Two-stage funnel avoids running expensive graph shortest-path across thousands of drivers."
+    }
+  ],
+  "rubricChecklist": [
+    { "phase": "Scale & Telemetry Math", "weight": 20, "criteria": ["Calculates ~500k GPS updates/sec", "Recognizes active spatial state fits in RAM"] },
+    { "phase": "Geospatial Modeling", "weight": 30, "criteria": ["Contrasts H3/Geohash vs Quadtree for moving objects", "Queries neighbor rings to avoid boundary misses"] },
+    { "phase": "Concurrency & Matching", "weight": 30, "criteria": ["Prevents double-dispatch with atomic driver locks + TTL", "Keeps trip transitions ACID in regional SQL"] },
+    { "phase": "Real-World Nuances", "weight": 20, "criteria": ["Shards by city region", "Distinguishes H3 straight-line recall vs road-network ETA"] }
+  ]
+}

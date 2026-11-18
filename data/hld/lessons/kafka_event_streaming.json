@@ -1,0 +1,214 @@
+{
+  "id": "kafka-event-streaming",
+  "track": "hld",
+  "category": "building-blocks",
+  "layer": 6,
+  "title": "Kafka Event Streaming & Consumer Groups",
+  "subtitle": "Append-only logs, ISR durability, partition offsets, backpressure & DLQs",
+  "difficulty": "L4-L5",
+  "estimatedMinutes": 20,
+  "overview": "Apache Kafka decouples fast producers from slower downstream consumers using partitioned, immutable append-only logs. By preserving ordering within a partition key, using sequential disk I/O + zero-copy `sendfile`, and tracking consumer group offsets, Kafka sustains millions of events/sec with replayability.",
+  "firstPrinciplesStory": "Checkout succeeds in Postgres, then calls Billing synchronously, then calls Email, then updates Analytics Search. Soon one slow Email provider stalls Checkout threads until customers double-click Pay. Worse, publishing to a naive in-memory queue deletes messages on delivery—so when an Analytics bug corrupts Tuesday's totals, yesterday's events are gone forever! Treating events as an immutable partitioned disk log (DDIA Ch. 11) gives you both real-time decoupling AND time-travel replay.",
+  "adaptiveLenses": {
+    "intuition": "A traditional queue is a whiteboard where each task gets erased as soon as a worker grabs it. Kafka is a ledger notebook with numbered pages divided into separate binders (partitions): Billing, Fraud, and Analytics can all read from the exact same immutable binder independently at their own reading speed using bookmarks (offsets).",
+    "mechanics": "Producers hash partition keys (`order_id`) to route events into append-only partition segments flushed sequentially via OS page cache. `acks=all` commits once all In-Sync Replicas (`ISR`) persist the batch, advancing the High Watermark. Consumer groups assign 1 partition to at most 1 worker and commit offsets after idempotent writes.",
+    "staffTradeoffs": "Never dual-write directly to Postgres and Kafka inside separate network calls—use the Transactional Outbox + CDC (DDIA Ch. 11) so DB state and event log never diverge. Also plan for poison-pill payloads via bounded retries + Dead-Letter Topics (`orders.dlq`), because blocking an infinite retry stalls every healthy message behind it in that partition."
+  },
+  "ddiaAnchors": [
+    {
+      "chapter": "DDIA Ch. 11 · Stream Processing & Event Logs",
+      "concept": "Log-Based Message Brokers & Consumer Offsets",
+      "whyItMatters": "Retaining an immutable partitioned log allows multi-consumer fan-out, backpressure isolation, and deterministic replay."
+    }
+  ],
+  "pragmaticTips": [
+    {
+      "principle": "Orthogonality (Decouple Temporal Coupling)",
+      "tip": "Design workflows so services interact through immutable events rather than synchronous temporal chains whenever immediate response isn't strictly required.",
+      "application": "Emit `OrderPaid` once; let Billing, Notifications, and Search indexers evolve independently."
+    }
+  ],
+  "keyTakeaways": [
+    "Strict message ordering is guaranteed ONLY within a single partition—choose partition keys carefully (e.g., `order_id` or `user_id`).",
+    "Set `acks=all` + `min.insync.replicas=2` for zero-data-loss durability on critical events.",
+    "Consumers must be idempotent because rebalance/crash recovery guarantees at-least-once delivery, not magic exactly-once across external DBs."
+  ],
+  "nodes": [
+    {
+      "id": "producer",
+      "label": "Checkout Producer",
+      "sublabel": "acks=all · Murmur Partitioner",
+      "kind": "compute",
+      "layer": 3,
+      "gridPos": { "gx": 1, "gy": 5 },
+      "specs": { "protocol": "Kafka Binary TCP", "port": "9092", "maxQpsPerNode": 80000, "baseLatencyMs": 1.0, "capProfile": "N/A", "scalingAxis": "Producer instances" },
+      "summary": "Batches events per partition and waits for In-Sync Replica acknowledgment.",
+      "whenToUse": ["Order events, clickstreams, CDC pipelines"],
+      "failureModes": ["Retry without enable.idempotence=true can duplicate messages in log"]
+    },
+    {
+      "id": "broker-leader",
+      "label": "Kafka Partition 0 (Leader)",
+      "sublabel": "Append Log · ISR=[1,2]",
+      "kind": "queue",
+      "layer": 6,
+      "gridPos": { "gx": 5, "gy": 5 },
+      "specs": { "protocol": "Kafka Protocol", "port": "9092", "maxQpsPerNode": 250000, "baseLatencyMs": 2.0, "capProfile": "CP", "scalingAxis": "Partition count" },
+      "summary": "Appends batches sequentially to OS page cache / segment file and replicates to ISR followers.",
+      "whenToUse": ["High-throughput durable streaming & event replay"],
+      "failureModes": ["Hot partition key concentrates all load onto one broker"]
+    },
+    {
+      "id": "broker-isr",
+      "label": "ISR Follower Replica",
+      "sublabel": "Broker 2 · Offset Sync",
+      "kind": "queue",
+      "layer": 6,
+      "gridPos": { "gx": 5, "gy": 1 },
+      "specs": { "protocol": "Kafka Fetch", "port": "9092", "maxQpsPerNode": 250000, "baseLatencyMs": 1.5, "capProfile": "CP", "scalingAxis": "Replication factor 3" },
+      "summary": "Continuously pulls batches from Partition Leader to stay inside In-Sync Replicas.",
+      "whenToUse": ["Broker failure durability"],
+      "failureModes": ["Slow GC falls behind replica.lag.time.max.ms and drops out of ISR"]
+    },
+    {
+      "id": "consumer",
+      "label": "Billing Consumer Group",
+      "sublabel": "Worker-0 · Offset 98412",
+      "kind": "compute",
+      "layer": 6,
+      "gridPos": { "gx": 9, "gy": 5 },
+      "specs": { "protocol": "Zero-Copy sendfile", "port": "9092", "maxQpsPerNode": 15000, "baseLatencyMs": 5.0, "capProfile": "N/A", "scalingAxis": "Up to N consumers = N partitions" },
+      "summary": "Pulls records at its own pace (natural backpressure) and commits offset after idempotent DB upsert.",
+      "whenToUse": ["Independent consumer microservices reading the same event stream"],
+      "failureModes": ["Max concurrency capped by partition count; poison pill blocks partition unless routed to DLQ"]
+    },
+    {
+      "id": "dlq",
+      "label": "Dead-Letter Topic (DLQ)",
+      "sublabel": "orders.dlq · Alerting",
+      "kind": "queue",
+      "layer": 6,
+      "gridPos": { "gx": 9, "gy": 8 },
+      "specs": { "protocol": "Kafka Protocol", "port": "9092", "maxQpsPerNode": 50000, "baseLatencyMs": 2.0, "capProfile": "CP", "scalingAxis": "Isolated retention" },
+      "summary": "Quarantines malformed events after bounded retries so healthy messages keep flowing.",
+      "whenToUse": ["Preventing single corrupt schema payload from halting an entire partition"],
+      "failureModes": ["Forgotten unmonitored DLQ silently drops business records"]
+    }
+  ],
+  "edges": [
+    { "id": "e-prod-leader", "from": "producer", "to": "broker-leader", "protocol": "Kafka TCP", "transport": "async", "label": "ProduceBatch(key=ord_7)" },
+    { "id": "e-leader-isr", "from": "broker-leader", "to": "broker-isr", "protocol": "Kafka Repl", "transport": "async", "label": "Replicate to ISR" },
+    { "id": "e-leader-cons", "from": "broker-leader", "to": "consumer", "protocol": "Zero-Copy", "transport": "async", "label": "Poll Partition 0" },
+    { "id": "e-cons-dlq", "from": "consumer", "to": "dlq", "protocol": "Kafka TCP", "transport": "async", "label": "Route Poison Pill" }
+  ],
+  "steps": [
+    {
+      "stepNo": 1,
+      "phaseTitle": "1. BATCHED PRODUCE BY KEY",
+      "timestampMs": 0.0,
+      "sourceNodeId": "producer",
+      "targetNodeId": "broker-leader",
+      "edgeId": "e-prod-leader",
+      "category": "async",
+      "protocol": "Kafka TCP",
+      "info": "ProduceRequest(topic=orders, key=ord_7 -> P0, offset=98413)",
+      "payloadSize": "1.4 KB",
+      "payloadInspector": "Batch { linger.ms: 5, compression: lz4, acks: all, idempotent: true }",
+      "latencyDeltaMs": 1.5,
+      "inspectorNote": "Hashing by order_id pins every event for ord_7 to Partition 0, guaranteeing strict per-order ordering."
+    },
+    {
+      "stepNo": 2,
+      "phaseTitle": "2. ISR REPLICATION & ACK",
+      "timestampMs": 1.5,
+      "sourceNodeId": "broker-leader",
+      "targetNodeId": "broker-isr",
+      "edgeId": "e-leader-isr",
+      "category": "write",
+      "protocol": "Kafka Repl",
+      "info": "Partition 0 Leader replicates offset 98413 to ISR Broker 2 -> High Watermark advances",
+      "payloadSize": "1.4 KB",
+      "payloadInspector": "min.insync.replicas=2 satisfied -> HighWatermark=98413 -> Producer ACK",
+      "latencyDeltaMs": 2.0,
+      "inspectorNote": "Consumers can only read up to the High Watermark (fully replicated across ISR), preventing dirty reads on leader crash."
+    },
+    {
+      "stepNo": 3,
+      "phaseTitle": "3. PULL & IDEMPOTENT COMMIT",
+      "timestampMs": 3.5,
+      "sourceNodeId": "broker-leader",
+      "targetNodeId": "consumer",
+      "edgeId": "e-leader-cons",
+      "category": "async",
+      "protocol": "Zero-Copy",
+      "info": "Worker-0 pulls offset 98413, writes idempotent DB row, commits offset",
+      "payloadSize": "1.4 KB",
+      "payloadInspector": "ON CONFLICT (event_id) DO NOTHING -> OffsetCommit(orders-P0, 98414)",
+      "latencyDeltaMs": 5.0,
+      "inspectorNote": "Pull-based polling lets consumers absorb spikes safely—if Billing slows down, lag grows in Kafka instead of crashing Billing.",
+      "predictPrompt": {
+        "prompt": "Why must Billing's consumer write use `ON CONFLICT (event_id) DO NOTHING` even when Kafka has `acks=all`?",
+        "hint": "Think about what happens if Billing updates Postgres and crashes 5ms BEFORE committing its Kafka offset.",
+        "reveal": "When the crashed consumer restarts or rebalances, Kafka redelivers from the last committed offset (at-least-once delivery). Making the consumer sink idempotent guarantees end-to-end effective-once state without brittle distributed 2PC transactions."
+      }
+    }
+  ],
+  "chaosScenarios": [
+    {
+      "id": "poison-pill-and-rebalance",
+      "title": "Poison-Pill Payload Quarantined to DLQ + Worker Crash Rebalance",
+      "faultType": "node_down",
+      "targetNodeId": "consumer",
+      "triggerSummary": "Offset 98415 contains a corrupted JSON payload that throws an unrecoverable schema exception.",
+      "mitigationSummary": "After 3 exponential retries, consumer emits event + stacktrace to `orders.dlq`, advances offset to 98416, and unblocks the partition.",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. RETRIES EXHAUSTED ON OFFSET 98415",
+          "timestampMs": 0.0,
+          "sourceNodeId": "broker-leader",
+          "targetNodeId": "consumer",
+          "edgeId": "e-leader-cons",
+          "category": "failover",
+          "protocol": "Zero-Copy",
+          "info": "DeserializationError on offset 98415 (attempt 3/3) -> Head-of-line partition block!",
+          "payloadSize": "900 B",
+          "payloadInspector": "SchemaMismatch: missing required field 'currency_code'",
+          "latencyDeltaMs": 5.0,
+          "inspectorNote": "Without a DLQ, an unhandled exception crashes the worker in an infinite retry loop, stalling every order behind it."
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "2. ROUTE TO DLQ & UNBLOCK",
+          "timestampMs": 5.0,
+          "sourceNodeId": "consumer",
+          "targetNodeId": "dlq",
+          "edgeId": "e-cons-dlq",
+          "category": "async",
+          "protocol": "Kafka TCP",
+          "info": "Published to orders.dlq with error headers; Partition 0 offset committed to 98416",
+          "payloadSize": "1.2 KB",
+          "payloadInspector": "Topic: orders.dlq | x-original-offset: 98415 | x-error: SchemaMismatch",
+          "latencyDeltaMs": 2.0,
+          "inspectorNote": "On-call alerts inspect orders.dlq while healthy orders continue processing uninterrupted."
+        }
+      ]
+    }
+  ],
+  "tradeoffs": [
+    {
+      "option": "Kafka (Partitioned Event Log)",
+      "pros": ["Million+ msg/sec throughput", "Durable replayable history for multiple consumer groups", "Strict per-partition ordering"],
+      "cons": ["Higher operational complexity", "Max active workers per group bounded by partition count"],
+      "bestFor": "Event sourcing, analytics pipelines, CDC, multi-consumer domain events"
+    },
+    {
+      "option": "SQS / RabbitMQ (Traditional Message Queue)",
+      "pros": ["Per-message ack & independent worker scaling", "Managed simplicity (SQS) & complex routing (RabbitMQ)"],
+      "cons": ["Messages deleted after ack (no time-travel replay)", "Global strict ordering limits throughput"],
+      "bestFor": "Background task queues (emails, PDF generation, video job dispatch)"
+    }
+  ],
+  "quizQuestionIds": ["q-kafka-1", "q-kafka-2"],
+  "flashcardIds": ["fc-kafka-1", "fc-kafka-2"]
+}

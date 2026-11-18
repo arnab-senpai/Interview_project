@@ -1,0 +1,186 @@
+{
+  "id": "sharding-and-hot-keys",
+  "track": "hld",
+  "category": "patterns",
+  "layer": 4,
+  "title": "Database Sharding, Resharding & Hot-Key Mitigation",
+  "subtitle": "Range vs Hash partitioning, key salting & directory routers",
+  "difficulty": "L5-L6",
+  "estimatedMinutes": 20,
+  "overview": "When data outgrows one machine's disk, memory, or write IOPS, you split tables horizontally into shards (partitions). Picking the wrong shard key creates hot spots where one shard melts at 100% CPU while seven other shards sit mostly idle—and cross-shard joins become slow scatter-gather headaches.",
+  "firstPrinciplesStory": "You partition your social posts table by `created_at` date range so recent feeds stay fast. Every day at midnight, 100% of new writes hit ONE shard—today's date shard—while yesterday's 15 shards handle almost zero writes! Switching to `hash(author_id)` balances writes nicely, until a viral celebrity tweets and 40,000 reads/sec hammer Shard #3 alone. Sharding is as much about skew mitigation and secondary indexes as raw data volume.",
+  "adaptiveLenses": {
+    "intuition": "Range sharding is shelving books alphabetically A–Z across 4 rooms: finding 'all M authors' is easy, yet if everyone writes books starting with 'S', Room 3 overflows. Hash sharding shuffles books evenly across all 4 rooms—great balance, though finding a whole alphabet range now checks every room. Salting a hot book copies/splits it across all 4 rooms on purpose.",
+    "mechanics": "Shard routers (Vitess, Citus, Dynamo) hash partition keys to logical vshards (`hash(key) % 1024`) mapped to physical DB hosts so live resharding moves vshards without rehashing rows. Hot keys append a bounded random salt (`hot_key#0..7`) across shards for writes/reads, or replicate behind an in-memory pod L1 cache.",
+    "staffTradeoffs": "Keep queries single-shard wherever possible—cross-shard distributed transactions and scatter-gather secondary indexes crush p99 tail latency (DDIA Ch. 6). Compare local document-partitioned secondary indexes (fast writes, scatter-gather reads) vs global term-partitioned indexes (single-shard reads, async CDC write lag)."
+  },
+  "ddiaAnchors": [
+    {
+      "chapter": "DDIA Ch. 6 · Partitioning (Sharding)",
+      "concept": "Skewed Workloads, Hot Spots & Secondary Indexes",
+      "whyItMatters": "Even uniform hash partitioning fails under extreme celebrity key skew unless explicitly salted or cached."
+    }
+  ],
+  "pragmaticTips": [
+    {
+      "principle": "Delay Sharding Until Vertical + Read Replicas + Caching Exhausted",
+      "tip": "Sharding sacrifices multi-row joins and simple transactions (ETC warning!). Squeeze caching, indexing, and partitioning single Postgres tables first.",
+      "application": "When write IOPS or multi-TB storage forces horizontal split, pick a shard key aligned with your #1 query path (`tenant_id`, `user_id`, or `chat_id`)."
+    }
+  ],
+  "keyTakeaways": [
+    "Range partitioning accelerates time/range scans (`BETWEEN`) but risks write hot spots on monotonic timestamps.",
+    "Hash partitioning spreads load evenly across shards yet disables single-shard range queries.",
+    "Mitigate single hot keys with bounded key salting (`key#0..N`) or local read caching; never allow unbounded scatter-gather on hot paths."
+  ],
+  "nodes": [
+    {
+      "id": "client",
+      "label": "App Service",
+      "sublabel": "Query by user_id",
+      "kind": "compute",
+      "layer": 3,
+      "gridPos": { "gx": 1, "gy": 5 },
+      "specs": { "protocol": "SQL / gRPC", "port": "8080", "maxQpsPerNode": 20000, "baseLatencyMs": 1.0, "capProfile": "N/A", "scalingAxis": "App pods" },
+      "summary": "Issues shard-key-aware queries and bounded salted hot-key fan-out.",
+      "whenToUse": ["Multi-TB OLTP or KV workloads"],
+      "failureModes": ["Queries omitting the partition key trigger expensive full-cluster scatter-gather"]
+    },
+    {
+      "id": "shard-router",
+      "label": "Vitess / Shard Router",
+      "sublabel": "1024 Virtual Shards",
+      "kind": "api_gateway",
+      "layer": 4,
+      "gridPos": { "gx": 5, "gy": 5 },
+      "specs": { "protocol": "MySQL / PG Wire", "port": "6432", "maxQpsPerNode": 120000, "baseLatencyMs": 0.4, "capProfile": "CP", "scalingAxis": "Stateless proxy + etcd map" },
+      "summary": "Hashes key -> virtual bucket -> physical shard host, supporting zero-downtime live vshard splits.",
+      "whenToUse": ["Abstracting shard topology away from application code"],
+      "failureModes": ["Stale routing table during cutover unless brief drain/barrier is used"]
+    },
+    {
+      "id": "shard-0",
+      "label": "DB Shard 0 (Primary)",
+      "sublabel": "Buckets [0..511]",
+      "kind": "db_sql",
+      "layer": 4,
+      "gridPos": { "gx": 9, "gy": 2 },
+      "specs": { "protocol": "PostgreSQL", "port": "5432", "maxQpsPerNode": 12000, "baseLatencyMs": 4.0, "capProfile": "CP", "scalingAxis": "Split vshards when hot" },
+      "summary": "Owns lower half of keyspace cleanly isolated from Shard 1.",
+      "whenToUse": ["Single-shard ACID transactions"],
+      "failureModes": ["Celebrity hot key inside bucket #42 saturates Shard 0 CPU"]
+    },
+    {
+      "id": "shard-1",
+      "label": "DB Shard 1 (Primary)",
+      "sublabel": "Buckets [512..1023]",
+      "kind": "db_sql",
+      "layer": 4,
+      "gridPos": { "gx": 9, "gy": 8 },
+      "specs": { "protocol": "PostgreSQL", "port": "5432", "maxQpsPerNode": 12000, "baseLatencyMs": 4.0, "capProfile": "CP", "scalingAxis": "Split vshards when hot" },
+      "summary": "Owns upper half of keyspace; absorbs salted hot-key replicas.",
+      "whenToUse": ["Evenly balanced storage & IOPS"],
+      "failureModes": ["Cross-shard joins with Shard 0 require app-side merge or 2PC"]
+    }
+  ],
+  "edges": [
+    { "id": "e-c-r", "from": "client", "to": "shard-router", "protocol": "SQL", "transport": "sync", "label": "Query w/ shard key" },
+    { "id": "e-r-s0", "from": "shard-router", "to": "shard-0", "protocol": "SQL", "transport": "sync", "label": "Route bucket [0..511]" },
+    { "id": "e-r-s1", "from": "shard-router", "to": "shard-1", "protocol": "SQL", "transport": "sync", "label": "Route bucket [512..1023]" }
+  ],
+  "steps": [
+    {
+      "stepNo": 1,
+      "phaseTitle": "1. SHARD KEY ROUTING",
+      "timestampMs": 0.0,
+      "sourceNodeId": "client",
+      "targetNodeId": "shard-router",
+      "edgeId": "e-c-r",
+      "category": "read",
+      "protocol": "SQL",
+      "info": "SELECT * FROM orders WHERE user_id = 48120 -> hash(48120) % 1024 = vshard 719",
+      "payloadSize": "180 B",
+      "payloadInspector": "ShardKey: user_id=48120 -> vshard 719 -> mapped to Shard 1",
+      "latencyDeltaMs": 0.4,
+      "inspectorNote": "Routing through a fixed 1024-vshard directory keeps key assignments stable while physical machines scale."
+    },
+    {
+      "stepNo": 2,
+      "phaseTitle": "2. SINGLE-SHARD EXECUTION",
+      "timestampMs": 0.4,
+      "sourceNodeId": "shard-router",
+      "targetNodeId": "shard-1",
+      "edgeId": "e-r-s1",
+      "category": "read",
+      "protocol": "SQL",
+      "info": "Executes single-shard query on Shard 1 in 4ms (Shard 0 untouched)",
+      "payloadSize": "1.2 KB",
+      "payloadInspector": "Shard 1 returns 12 rows; zero cross-shard scatter-gather overhead",
+      "latencyDeltaMs": 4.0,
+      "inspectorNote": "Co-locating a user's rows on one shard preserves local ACID transactions and fast indexed scans.",
+      "predictPrompt": {
+        "prompt": "Why does omitting `user_id` and running `SELECT * FROM orders WHERE status = 'PENDING'` hurt severely in a sharded database?",
+        "hint": "Think about which shard holds orders with `status = 'PENDING'` when sharded by `user_id`.",
+        "reveal": "Because `status` isn't the shard key, the router must scatter-gather across ALL shards and wait for the slowest tail shard (p99 amplification!). Fix with an async global secondary index in Elasticsearch or a term-partitioned index."
+      }
+    }
+  ],
+  "chaosScenarios": [
+    {
+      "id": "celebrity-hot-shard-salting",
+      "title": "Celebrity Hot Key Melts Shard 0 -> Key Salting Mitigation",
+      "faultType": "qps_spike",
+      "targetNodeId": "shard-0",
+      "triggerSummary": "One viral merchant (`merchant_99`) receives 95% of flash-sale writes, pushing Shard 0 to 100% CPU while Shard 1 idles at 12%.",
+      "mitigationSummary": "Hot-key detector flags `merchant_99` and salts writes across `merchant_99#0..3`, spreading writes evenly across Shard 0 and Shard 1 (reads merge 4 buckets).",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. HOT SHARD SKEW DETECTED",
+          "timestampMs": 0.0,
+          "sourceNodeId": "shard-router",
+          "targetNodeId": "shard-0",
+          "edgeId": "e-r-s0",
+          "category": "failover",
+          "protocol": "SQL",
+          "info": "All writes for merchant_99 land on vshard 42 -> Shard 0 CPU=99%",
+          "payloadSize": "220 B",
+          "payloadInspector": "Skew Alert: merchant_99 generating 38,000 QPS on Shard 0 alone",
+          "latencyDeltaMs": 45.0,
+          "inspectorNote": "More shards don't fix a single unsalted hot key!"
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "2. BOUNDED KEY SALTING SPREADS LOAD",
+          "timestampMs": 45.0,
+          "sourceNodeId": "shard-router",
+          "targetNodeId": "shard-1",
+          "edgeId": "e-r-s1",
+          "category": "write",
+          "protocol": "SQL",
+          "info": "Salted key `merchant_99#2` hashes to Shard 1 -> write throughput doubles cleanly",
+          "payloadSize": "220 B",
+          "payloadInspector": "HotKeyConfig['merchant_99'].saltBuckets = 4 -> writes distributed across Shard 0 & Shard 1",
+          "latencyDeltaMs": 4.0,
+          "inspectorNote": "Only flagged hot keys pay the 4-bucket read merge cost; 99.99% of normal merchants stay unsalted."
+        }
+      ]
+    }
+  ],
+  "tradeoffs": [
+    {
+      "option": "Hash Partitioning (+ Virtual Shards)",
+      "pros": ["Uniform key distribution across servers", "Avoids monotonic timestamp write hotspots"],
+      "cons": ["Destroys range-scan locality (`WHERE ts BETWEEN ...` hits every shard)"],
+      "bestFor": "High-QPS user-centric OLTP and key-value workloads"
+    },
+    {
+      "option": "Key-Range Partitioning",
+      "pros": ["Lightning-fast range queries & time-series scans on contiguous keys"],
+      "cons": ["Severe hotspot risk on sequential inserts (e.g., today's timestamp)"],
+      "bestFor": "Time-series buckets (combined with sensor/tenant prefix) or sorted analytics"
+    }
+  ],
+  "quizQuestionIds": ["q-shard-1", "q-shard-2"],
+  "flashcardIds": ["fc-shard-1", "fc-shard-2"]
+}

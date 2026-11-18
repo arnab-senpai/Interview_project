@@ -1,0 +1,50 @@
+{
+  "version": "1.0.0",
+  "appTitle": "SystemCraft Studio",
+  "appSubtitle": "Interactive Interview Prep · Isometric Explorer · Practice Arena",
+  "tracks": [
+    {
+      "id": "hld",
+      "title": "High-Level Design (HLD)",
+      "subtitle": "Distributed systems, scalability, trade-offs & modern AI infrastructure",
+      "status": "active",
+      "milestone": 1,
+      "stats": {
+        "layers": 7,
+        "plannedLessons": 33,
+        "readyLessons": 17,
+        "patterns": 12,
+        "plannedCaseStudies": 34,
+        "readyCaseStudies": 13
+      },
+      "indexPath": "data/hld/curriculum_index.json"
+    },
+    {
+      "id": "lld",
+      "title": "Low-Level Design (LLD)",
+      "subtitle": "SOLID principles, GoF design patterns, UML & machine coding rounds",
+      "status": "planned",
+      "milestone": 3,
+      "plannedModules": [
+        "OOP & SOLID Refactoring Labs",
+        "Creational, Structural & Behavioral Patterns",
+        "Concurrency, Thread-Safety & Locking",
+        "Machine Coding Suite (Parking Lot, Elevator, Splitwise, BookMyShow, LRU/LFU Cache, Pub-Sub)"
+      ]
+    },
+    {
+      "id": "coding",
+      "title": "Coding Rounds (DSA)",
+      "subtitle": "Algorithmic patterns (Blind 75 / NeetCode 150), dry-run traces & timed mocks",
+      "status": "planned",
+      "milestone": 3,
+      "plannedModules": [
+        "Sliding Window & Two Pointers",
+        "Trees, Graphs & Topological Sort",
+        "Heaps, Tries & Union-Find",
+        "Dynamic Programming & Greedy",
+        "Core Data Structure Implementations from Scratch"
+      ]
+    }
+  ]
+}

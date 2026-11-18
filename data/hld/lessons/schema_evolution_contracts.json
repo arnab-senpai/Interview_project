@@ -1,0 +1,214 @@
+{
+  "id": "schema-evolution-contracts",
+  "track": "hld",
+  "category": "patterns",
+  "layer": 6,
+  "title": "Binary Contracts, Protobuf & Schema Evolution",
+  "subtitle": "Tag-numbered wire compatibility, Schema Registry gates & poison-pill DLQs",
+  "difficulty": "L5-L6",
+  "estimatedMinutes": 18,
+  "overview": "In continuous rolling deployments across dozens of microservices, old and new versions of producers and consumers run side by side simultaneously. Schema evolution via binary field tags (Protobuf/Thrift) and Schema Registries (Avro) keeps rolling releases 100% zero-downtime without breaking upstream callers or consumers.",
+  "firstPrinciplesStory": "You ship Billing Service v2.1 adding one new required JSON field `tax_jurisdiction`. Halfway through the rolling deploy, v2.0 pods reject v2.1 events with HTTP 400 while older consumers crash trying to parse fields they didn't expect—cascading across Kafka into 100k stuck invoices. Binary schema tags paired with strict forward/backward compatibility rules prevent rolling schema breaks at CI build time.",
+  "adaptiveLenses": {
+    "intuition": "Imagine sending packages with numbered slot stickers instead of long English labels: if slot #14 appears on a form printed next week, an older clerk simply skips slot #14 cleanly while still processing slots #1–#13—never throwing away the envelope.",
+    "mechanics": "Protobuf/Thrift encode integers (`tag = 1, 2, 14`) rather than string field names, saving 3–7x payload size. Avro omits tags per record and embeds a 5-byte Schema Registry ID header. Both require never reusing deleted tag numbers and adding new fields strictly as `optional` with safe defaults via Expand-Contract deploys.",
+    "staffTradeoffs": "Adopt TPP Design by Contract: fail breaking wire changes cleanly in CI (`FULL_TRANSITIVE` compatibility checks) rather than discovering schema breaks in production. Wrap Kafka deserializers with a monitored Dead-Letter Queue (`billing.dlq`) so corrupted external payloads quarantine safely instead of starving an entire consumer partition."
+  },
+  "ddiaAnchors": [
+    {
+      "chapter": "DDIA Ch. 4 · Encoding and Evolution",
+      "concept": "Forward & Backward Compatibility Across Rolling Deployments",
+      "whyItMatters": "Guarantees that old writers never break new readers and new writers never break old readers during continuous microservices rollouts."
+    }
+  ],
+  "pragmaticTips": [
+    {
+      "principle": "TPP Topic 23 & 28 · Design by Contract & Decoupling",
+      "tip": "Explicitly enforce preconditions/postconditions at service boundaries and keep edge date-versioned JSON adapters decoupled from canonical internal binary schemas.",
+      "application": "Translate legacy v1 JSON requests at the API gateway while keeping core services on cleanly versioned `.proto` contracts."
+    }
+  ],
+  "keyTakeaways": [
+    "NEVER reuse retired Protobuf/Thrift tag numbers or narrow field numeric types (`int64` -> `int32`).",
+    "Binary encoding (Protobuf / Avro) eliminates JSON key bloat and cuts internal RPC bandwidth by ~70%.",
+    "Always quarantine unparseable poison-pill events into a monitored DLQ rather than crash-looping a partition."
+  ],
+  "nodes": [
+    {
+      "id": "client-v1",
+      "label": "Billing Producer v2.1",
+      "sublabel": "Adds optional tag #14",
+      "kind": "compute",
+      "layer": 2,
+      "gridPos": { "gx": 1, "gy": 5 },
+      "specs": { "protocol": "gRPC / Protobuf", "port": "9090", "maxQpsPerNode": 40000, "baseLatencyMs": 1.0, "capProfile": "N/A", "scalingAxis": "Producer pods" },
+      "summary": "Emits compact binary Protobuf/Avro messages during a rolling canary rollout.",
+      "whenToUse": ["High-QPS internal RPCs & Kafka event producers"],
+      "failureModes": ["Removing required fields or changing tag types breaks older consumers"]
+    },
+    {
+      "id": "schema-reg",
+      "label": "Schema Registry Gate",
+      "sublabel": "FULL_TRANSITIVE Check",
+      "kind": "cache",
+      "layer": 6,
+      "gridPos": { "gx": 3, "gy": 2 },
+      "specs": { "protocol": "HTTP REST / Cached In-Pod", "port": "8081", "maxQpsPerNode": 50000, "baseLatencyMs": 0.2, "capProfile": "CP", "scalingAxis": "Read-replicated registry + client cache" },
+      "summary": "Stores immutable schema versions (`schema_id = 42`) and validates compatibility rules.",
+      "whenToUse": ["CI governance and Avro/Protobuf topic evolution"],
+      "failureModes": ["Uncached synchronous lookups create runtime SPOF if local cache disabled"]
+    },
+    {
+      "id": "kafka-bus",
+      "label": "Kafka Event Log",
+      "sublabel": "5-byte ID + binary body",
+      "kind": "queue",
+      "layer": 6,
+      "gridPos": { "gx": 6, "gy": 5 },
+      "specs": { "protocol": "Kafka Binary", "port": "9092", "maxQpsPerNode": 150000, "baseLatencyMs": 3.0, "capProfile": "CP", "scalingAxis": "Topic partitions" },
+      "summary": "Carries compact schema-versioned records seamlessly across mixed consumer versions.",
+      "whenToUse": ["Decoupled async event streaming across independent teams"],
+      "failureModes": ["Poison-pill unparseable record blocks partition offset if unhandled"]
+    },
+    {
+      "id": "tax-v20",
+      "label": "Tax Consumer v2.0",
+      "sublabel": "Older reader (skips #14)",
+      "kind": "compute",
+      "layer": 3,
+      "gridPos": { "gx": 9, "gy": 3 },
+      "specs": { "protocol": "gRPC / Kafka Consumer", "port": "8080", "maxQpsPerNode": 25000, "baseLatencyMs": 2.0, "capProfile": "N/A", "scalingAxis": "Consumer group pods" },
+      "summary": "Older binary code cleanly skips unknown field tag #14 forward-compatibly without failing.",
+      "whenToUse": ["Zero-downtime rolling upgrades across teams"],
+      "failureModes": ["Lossy JSON re-serialization strips unknown pass-through tags"]
+    },
+    {
+      "id": "dlq-sink",
+      "label": "Contract Breach DLQ",
+      "sublabel": "Quarantine malformed records",
+      "kind": "queue",
+      "layer": 7,
+      "gridPos": { "gx": 9, "gy": 7 },
+      "specs": { "protocol": "Kafka DLQ", "port": "9092", "maxQpsPerNode": 10000, "baseLatencyMs": 2.0, "capProfile": "AP", "scalingAxis": "Alert-monitored topic" },
+      "summary": "Isolates corrupted payloads & trace headers so valid billing offsets advance freely.",
+      "whenToUse": ["Strict Design-by-Contract consumer error boundaries"],
+      "failureModes": ["Silent unmonitored DLQ growth hides upstream serialization bugs"]
+    }
+  ],
+  "edges": [
+    { "id": "e1", "from": "client-v1", "to": "schema-reg", "protocol": "HTTP/2", "transport": "sync", "label": "Verify Schema ID #42" },
+    { "id": "e2", "from": "client-v1", "to": "kafka-bus", "protocol": "Kafka Binary", "transport": "async", "label": "Publish tagged payload" },
+    { "id": "e3", "from": "kafka-bus", "to": "tax-v20", "protocol": "Consumer Fetch", "transport": "stream", "label": "Deliver to v2.0 consumer" },
+    { "id": "e4", "from": "tax-v20", "to": "dlq-sink", "protocol": "DLQ Emit", "transport": "async", "label": "Quarantine invalid contract" }
+  ],
+  "steps": [
+    {
+      "stepNo": 1,
+      "phaseTitle": "CI & Producer Schema ID Resolution",
+      "timestampMs": 0,
+      "sourceNodeId": "client-v1",
+      "targetNodeId": "schema-reg",
+      "edgeId": "e1",
+      "category": "read",
+      "protocol": "HTTP/2",
+      "info": "Producer v2.1 registers optional `tax_jurisdiction` (tag `14`); Registry issues cached `schema_id = 42` after `FULL_TRANSITIVE` check.",
+      "payloadSize": "180 B",
+      "payloadInspector": "Check: FULL_TRANSITIVE PASS\nnew optional string tax_jurisdiction = 14\ntag_reuse: false | schema_id: 42",
+      "latencyDeltaMs": 0.4,
+      "inspectorNote": "Catching incompatible schema edits at CI build/register time guarantees older running pods will never crash on unknown fields."
+    },
+    {
+      "stepNo": 2,
+      "phaseTitle": "Compact Binary Frame Published",
+      "timestampMs": 1,
+      "sourceNodeId": "client-v1",
+      "targetNodeId": "kafka-bus",
+      "edgeId": "e2",
+      "category": "write",
+      "protocol": "Protobuf/Kafka",
+      "info": "Writes `0x00 + schema_id=42 + varint tags [1, 2, 14]` cleanly in 310 B instead of 1.3 KB JSON.",
+      "payloadSize": "310 B",
+      "payloadInspector": "Header: 0x00 [00 00 00 2A]\nField 1 (invoice_id): varint\nField 2 (amount_cents): 4990\nField 14 (tax_jurisdiction): \"US-CA\"",
+      "latencyDeltaMs": 3.0,
+      "inspectorNote": "Compact wire tags eliminate repeated JSON property strings and cut cross-AZ replication bandwidth by >70%."
+    },
+    {
+      "stepNo": 3,
+      "phaseTitle": "Forward-Compatible Read on Older Consumer v2.0",
+      "timestampMs": 4,
+      "sourceNodeId": "kafka-bus",
+      "targetNodeId": "tax-v20",
+      "edgeId": "e3",
+      "category": "async",
+      "protocol": "Consumer Fetch",
+      "info": "Tax Consumer v2.0 (only knows tags `1..13`) cleanly skips unknown length-delimited tag `14` and computes tax.",
+      "payloadSize": "310 B",
+      "payloadInspector": "Decode v2.0: read tag 1, tag 2\nskip unknown tag 14 (wire_type=2, len=5)\nresult: 200 OK (Zero downtime!)",
+      "latencyDeltaMs": 2.0,
+      "inspectorNote": "Forward compatibility lets teams ship producer v2.1 hours or days before upgrading all consumer deployments.",
+      "predictPrompt": {
+        "prompt": "If Tax Consumer v2.0 reads the v2.1 message, parses tags 1..13, and then emits a derived event re-serialized from its v2.0 in-memory struct, what subtle bug occurs?",
+        "hint": "What happens to unknown field tag #14 when a strict struct-to-bytes serializer writes downstream?",
+        "reveal": "Unless unknown byte fields are preserved (`UnknownFieldSet` pass-through), re-serializing drops tag #14 permanently downstream!"
+      }
+    }
+  ],
+  "chaosScenarios": [
+    {
+      "id": "chaos-poison-schema",
+      "title": "Poison-Pill Corrupted Payload Injection",
+      "faultType": "partition",
+      "targetNodeId": "tax-v20",
+      "triggerSummary": "External webhook gateway bypasses CI validation and produces corrupted bytes onto `billing.events` partition 3.",
+      "mitigationSummary": "Consumer deserializes inside a contract try-catch boundary, isolates malformed record + metadata to `billing.dlq`, and commits partition 3 offset cleanly.",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "Corrupted Frame Consumed on Partition 3",
+          "timestampMs": 0,
+          "sourceNodeId": "kafka-bus",
+          "targetNodeId": "tax-v20",
+          "edgeId": "e3",
+          "category": "failover",
+          "protocol": "Malformed Frame",
+          "info": "Invalid wire type 7 encountered in offset #90821; consumer contract assertion catches invalid protobuf header.",
+          "payloadSize": "240 B",
+          "payloadInspector": "Error: InvalidWireTypeException at offset 90821\nAction: Quarantine to DLQ (Do NOT crash-loop pod!)",
+          "latencyDeltaMs": 1.0,
+          "inspectorNote": "Without a DLQ isolation boundary, restarting consumer pods repeatedly re-read offset #90821 and block 100k valid invoices."
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "Quarantine to Monitored Contract DLQ",
+          "timestampMs": 1,
+          "sourceNodeId": "tax-v20",
+          "targetNodeId": "dlq-sink",
+          "edgeId": "e4",
+          "category": "failover",
+          "protocol": "Kafka DLQ",
+          "info": "Quarantines bad frame + `trace_id` to `billing.dlq`, commits offset `90822`, and alerts owners immediately.",
+          "payloadSize": "410 B",
+          "payloadInspector": "Topic: billing.dlq\nsource_partition: 3 | offset: 90821\nreason: SchemaDeserializationError",
+          "latencyDeltaMs": 2.5,
+          "inspectorNote": "Decouples malformed single events from healthy stream throughput while preserving forensic evidence for fast fixes."
+        }
+      ]
+    }
+  ],
+  "tradeoffs": [
+    {
+      "option": "Protocol Buffers / Thrift (Tagged Binary)",
+      "pros": ["Compact 3–7x smaller binary payloads", "Built-in unknown tag skipping for forward compatibility", "Strong IDL code generation across Go/Rust/Python/Java"],
+      "cons": ["Requires compiled `.proto` schemas for debugging", "Tag numbers permanently retired upon deletion"],
+      "bestFor": "Microservice gRPC meshes and cross-team internal contracts."
+    },
+    {
+      "option": "Apache Avro + Schema Registry",
+      "pros": ["Smallest possible Kafka payload (no per-field tags in body)", "Self-describing Schema ID header works great for columnar data lakes"],
+      "cons": ["Consumers must cache/resolve writer schemas via Schema Registry"],
+      "bestFor": "High-throughput Kafka event topics and Iceberg/Parquet archival pipelines."
+    }
+  ],
+  "quizQuestionIds": ["q-schema-1", "q-schema-2"],
+  "flashcardIds": ["fc-schema-1", "fc-schema-2"]
+}
