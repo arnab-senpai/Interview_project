@@ -1,0 +1,92 @@
+{
+  "version": "2.0.0",
+  "topicId": "outbox-and-cdc",
+  "flashcards": [
+    {
+      "id": "fc-cdc-1",
+      "topicId": "outbox-and-cdc",
+      "layer": 6,
+      "difficulty": "Senior",
+      "front": "What split-brain hazard does the Transactional Outbox pattern eliminate?",
+      "back": "It eliminates dual-write inconsistency between an OLTP database commit and a Kafka/message-broker publish: both the domain row and an `outbox` event row commit atomically in one local ACID transaction.",
+      "tags": ["DDIA Ch. 11", "Outbox Pattern", "Dual Writes"]
+    },
+    {
+      "id": "fc-cdc-2",
+      "topicId": "outbox-and-cdc",
+      "layer": 6,
+      "difficulty": "Senior",
+      "front": "Why prefer log-based CDC (Debezium reading the WAL/binlog) over periodic `SELECT * FROM outbox` polling?",
+      "back": "Log-based CDC tails the append-only database WAL asynchronously with sub-second lag, zero extra read queries on hot OLTP indexes, and preserves exact commit order before consumers deduplicate by `event_id`.",
+      "tags": ["DDIA Ch. 11", "CDC", "Debezium"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-cdc-1",
+      "topicId": "outbox-and-cdc",
+      "layer": 6,
+      "difficulty": "Senior",
+      "scenario": "An order service commits to Postgres and then calls kafka.send(OrderCreated). During a network blip, the Kafka call times out after the commit succeeded.",
+      "question": "What fixes lost and phantom events without two-phase commit?",
+      "options": [
+        "Use Kafka transactions so the produce becomes all-or-nothing",
+        "Publish to Kafka first, then commit the order to Postgres",
+        "Write an outbox row in the same transaction and stream it via CDC",
+        "Retry the Kafka send in a loop until it finally succeeds"
+      ],
+      "correctIndex": 2,
+      "explanation": "Publishing after commit can lose events; publishing before commit can emit events for rolled-back orders. Writing the event to an outbox table in the same transaction makes the order and its event commit together, and CDC (for example Debezium) streams the outbox to Kafka.",
+      "optionExplanations": [
+        "Kafka transactions cover Kafka writes, not the separate Postgres commit.",
+        "If the order then rolls back, consumers act on an event for nothing.",
+        "Correct. The order and its event now share one commit.",
+        "If the service crashes mid-loop, the event is still lost."
+      ]
+    },
+    {
+      "id": "q-cdc-2",
+      "topicId": "outbox-and-cdc",
+      "layer": 6,
+      "difficulty": "Senior",
+      "scenario": "Debezium restarts after a pod eviction and resumes from the last offset it saved, which is slightly older than what it had already published.",
+      "question": "What delivery guarantee do consumers get, and what must they do?",
+      "options": [
+        "Exactly-once delivery, so consumers need no extra logic",
+        "At-most-once delivery; consumers must poll Postgres for gaps",
+        "Ordered delivery only; consumers must buffer and sort events",
+        "At-least-once delivery; consumers deduplicate on event_id"
+      ],
+      "correctIndex": 3,
+      "explanation": "Debezium may re-publish events it sent before its last checkpoint, so delivery is at least once. Consumers must be idempotent, for example by recording processed event_ids in an inbox table or applying version checks.",
+      "optionExplanations": [
+        "The relay can replay events after restart, so duplicates do happen.",
+        "Debezium replays rather than skips, so events are not lost this way.",
+        "Ordering per key is preserved; the concern here is duplicates.",
+        "Correct. Replays after a restart are expected."
+      ]
+    },
+    {
+      "id": "q-cdc-3",
+      "topicId": "outbox-and-cdc",
+      "layer": 6,
+      "difficulty": "Staff",
+      "scenario": "Debezium has been down for six hours over a weekend. Checkout still works, but the Postgres primary's disk is now 92% full and rising.",
+      "question": "What is happening, and what should have caught it?",
+      "options": [
+        "The outbox table is bloating; vacuum it more aggressively",
+        "The replication slot pins WAL; alert on slot lag and cap it",
+        "Checkout writes more rows when Kafka is down; add disk",
+        "Postgres stopped checkpointing; force a manual CHECKPOINT"
+      ],
+      "correctIndex": 1,
+      "explanation": "A logical replication slot keeps every WAL segment the consumer has not confirmed. With Debezium down, the slot pins WAL and the primary's disk fills. Alert on slot lag in bytes, and cap retention with max_slot_wal_keep_size (Postgres 13+) so a dead connector cannot take down the primary.",
+      "optionExplanations": [
+        "Outbox rows add a little, but retained WAL is what grows this fast.",
+        "Correct. An inactive slot keeps WAL until the disk fills.",
+        "Write volume is unchanged; the WAL simply is not being released.",
+        "Checkpoints cannot remove WAL that a replication slot still needs."
+      ]
+    }
+  ]
+}

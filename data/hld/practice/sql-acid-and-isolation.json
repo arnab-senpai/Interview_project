@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "sql-acid-and-isolation",
+  "flashcards": [
+    {
+      "id": "fc-acid-1",
+      "topicId": "sql-acid-and-isolation",
+      "layer": 4,
+      "difficulty": "Senior",
+      "front": "What is Write Skew under Snapshot Isolation (Repeatable Read), and why do normal row locks miss it?",
+      "back": "Two transactions read the same overlapping premise on Snapshot Isolation and update *disjoint* rows (e.g., Alice disables Alice, Bob disables Bob), breaking a cross-row invariant without triggering same-row write conflicts.",
+      "tags": ["DDIA Ch. 7", "Write Skew", "Snapshot Isolation"]
+    },
+    {
+      "id": "fc-acid-2",
+      "topicId": "sql-acid-and-isolation",
+      "layer": 4,
+      "difficulty": "Senior",
+      "front": "How does Serializable Snapshot Isolation (SSI) stop Write Skew without blocking concurrent readers?",
+      "back": "SSI tracks optimistic `SIREAD` predicate read locks across snapshots and aborts one transaction (SQLSTATE 40001) whenever two concurrent transactions create a mutual read-write antidependency cycle.",
+      "tags": ["DDIA Ch. 7", "SSI", "Serializability"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-acid-1",
+      "topicId": "sql-acid-and-isolation",
+      "layer": 4,
+      "difficulty": "Senior",
+      "scenario": "Under PostgreSQL REPEATABLE READ, Alice and Bob each run SELECT count(*) FROM on_call WHERE active (it returns 2), then each sets their own row to inactive. Now nobody is on call.",
+      "question": "Which anomaly is this, and what reliably prevents it?",
+      "options": [
+        "A dirty read; raise isolation to READ COMMITTED to fix it",
+        "Write skew; use SERIALIZABLE with retries or lock a shared row",
+        "A phantom read; add an index on the active column",
+        "A lost update; add an optimistic version column to each row"
+      ],
+      "correctIndex": 1,
+      "explanation": "This is write skew: both read the same set, then update different rows, so no row-level conflict is detected. SERIALIZABLE (Postgres SSI, with a retry on serialization failure) catches it, and so does explicitly locking a shared row, such as the shift, with SELECT ... FOR UPDATE.",
+      "optionExplanations": [
+        "REPEATABLE READ already prevents dirty reads; the anomaly is different.",
+        "Correct. Both fixes make the two transactions conflict.",
+        "An index speeds the count but does not make the transactions conflict.",
+        "Each person updated a different row, so per-row versions never conflict."
+      ]
+    },
+    {
+      "id": "q-acid-2",
+      "topicId": "sql-acid-and-isolation",
+      "layer": 4,
+      "difficulty": "Senior",
+      "scenario": "You move a scheduling transaction to SERIALIZABLE in PostgreSQL to stop write skew.",
+      "question": "What must the application add to stay correct under concurrency?",
+      "options": [
+        "Retry only the final UPDATE statement that raised the error",
+        "Nothing, because SERIALIZABLE never aborts a transaction",
+        "A table lock at the start of each scheduling transaction",
+        "Retry the whole transaction on serialization failures (40001)"
+      ],
+      "correctIndex": 3,
+      "explanation": "Postgres SSI aborts one of two conflicting transactions with SQLSTATE 40001 instead of blocking. The application must catch that error and retry the whole transaction, with a bound and backoff.",
+      "optionExplanations": [
+        "The whole transaction must rerun, since its earlier reads may be stale.",
+        "SSI does abort transactions; that is how it prevents anomalies.",
+        "This works but throws away the concurrency SSI was chosen for.",
+        "Correct. SSI expects callers to retry aborted transactions."
+      ]
+    }
+  ]
+}

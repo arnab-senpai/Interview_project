@@ -5,7 +5,7 @@
   "layer": 5,
   "title": "Replication Quorums & Raft Consensus",
   "subtitle": "Leader election, AppendEntries log replication, W+R>N & split-brain prevention",
-  "difficulty": "L5-L6",
+  "difficulty": "Senior",
   "estimatedMinutes": 22,
   "overview": "Replicating data across machines provides durability and read scaling—but introduces split-brain and stale-read risks under network partitions. Raft guarantees linearizable state machine replication by electing one leader per monotonic Term and committing entries only after a majority quorum (`floor(N/2) + 1`) persists the log.",
   "firstPrinciplesStory": "Two servers run in active-passive mode. One afternoon, a switch glitch cuts the heartbeat link between Primary and Standby for 20 seconds—yet clients can still reach BOTH machines! Standby assumes Primary died and promotes itself, while Primary keeps accepting writes. Both accept conflicting account debits—classic split-brain! Worse, when Primary unfreezes after a 15-second JVM GC pause (DDIA Ch. 8), it tries to write with an old lock lease. Raft and monotonic Term fencing exist precisely because timeouts cannot distinguish a dead node from a slow network.",
@@ -36,7 +36,8 @@
   "keyTakeaways": [
     "Quorum intersection `W + R > N` ensures every read sees at least one replica holding the latest write.",
     "Raft decomposes consensus into Leader Election (randomized timers + monotonic Terms) and Log Replication.",
-    "Fencing tokens / Term checks reject stale writes from an isolated deposed leader after a network partition heals."
+    "Fencing tokens / Term checks reject stale writes from an isolated deposed leader after a network partition heals.",
+    "Linearizable reads need ReadIndex or a leader lease; otherwise an isolated old leader can serve stale reads."
   ],
   "nodes": [
     {
@@ -119,11 +120,11 @@
       "edgeId": "e-l-f1",
       "category": "consensus",
       "protocol": "Raft RPC",
-      "info": "AppendEntries(term=4, prevIdx=42, entry=43) replicated to Node 2 & Node 3",
+      "info": "AppendEntries(term=4, prevIdx=42, entry=43) sent to Node 2 & Node 3 in parallel",
       "payloadSize": "180 B",
       "payloadInspector": "AppendEntriesRPC { term: 4, leaderId: 1, prevLogIndex: 42, prevLogTerm: 4, entries: [43] }",
       "latencyDeltaMs": 2.0,
-      "inspectorNote": "Both followers verify prevLogIndex/prevLogTerm continuity and fsync entry 43."
+      "inspectorNote": "Each follower checks prevLogIndex/prevLogTerm continuity, fsyncs entry 43 and replies. The leader only needs one follower's reply (plus its own copy) for a 2/3 majority, so it does not wait for the slower follower."
     },
     {
       "stepNo": 3,
@@ -134,7 +135,7 @@
       "edgeId": "e-c-leader",
       "category": "consensus",
       "protocol": "gRPC",
-      "info": "2/3 majority achieved (Node 1 + Node 2) -> commitIndex=43 -> Client ACK",
+      "info": "2/3 majority achieved (Node 1 + Node 2) -> commitIndex=43 -> Client ACK; Node 3 catches up later",
       "payloadSize": "64 B",
       "payloadInspector": "Quorum=2/3 reached -> StateMachine.apply(43) -> return COMMITTED (Term 4)",
       "latencyDeltaMs": 0.5,
@@ -144,6 +145,21 @@
         "hint": "Think about what happens on the majority side `{Node 2, Node 3}` at the same time.",
         "reveal": "Nodes 2 and 3 form a 2/3 majority and elect a new Leader in Term 5. If Node 1 kept committing writes locally without 2/3 acks, both sides would accept conflicting transactions—violating linearizability and causing split-brain data loss."
       }
+    },
+    {
+      "stepNo": 4,
+      "phaseTitle": "4. LINEARIZABLE READ (READINDEX)",
+      "timestampMs": 3.5,
+      "sourceNodeId": "client",
+      "targetNodeId": "raft-leader",
+      "edgeId": "e-c-leader",
+      "category": "consensus",
+      "protocol": "gRPC",
+      "info": "GET lease/worker_7 -> leader records commitIndex=43, confirms leadership with one heartbeat round to a majority, then answers",
+      "payloadSize": "96 B",
+      "payloadInspector": "ReadIndex=43 | heartbeat acks: Node 2 (term 4) -> still leader -> apply up to 43 -> return active",
+      "latencyDeltaMs": 1.0,
+      "inspectorNote": "Reads need care too. An old leader cut off by a partition does not know it was replaced and would serve stale data. ReadIndex (or a clock-bounded leader lease) proves it is still leader before answering."
     }
   ],
   "chaosScenarios": [

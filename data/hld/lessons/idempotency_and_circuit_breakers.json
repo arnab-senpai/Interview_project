@@ -5,13 +5,13 @@
   "layer": 7,
   "title": "Idempotency Keys, Circuit Breakers & Backoff Jitter",
   "subtitle": "Preventing duplicate charges and cascading retry storms",
-  "difficulty": "L4-L5",
+  "difficulty": "Mid",
   "estimatedMinutes": 16,
   "overview": "Networks are unreliable: mobile users tap Pay twice or experience a timeout *after* the server processed the charge, while blind client retries multiply an upstream blip into a 10x retry storm that prevents recovery. Idempotency keys make retries safe, while Circuit Breakers + Exponential Backoff with Full Jitter protect failing dependencies.",
   "firstPrinciplesStory": "A third-party Fraud API degrades from 40ms to 5s latency. Your Checkout service times out at 2s and immediately retries 3 times—tripling traffic onto the struggling Fraud API! Meanwhile, every Checkout pod ties up all worker threads waiting on 2s timeouts, cascading the outage across your entire site, and anxious customers hit 'Pay' again getting double-charged! Bounded timeouts, Circuit Breakers, Jittered Backoff, and Idempotency Keys turn partial failures into graceful containment.",
   "adaptiveLenses": {
-    "intuition": "An **Idempotency Key** is writing a unique receipt number (`req_991`) on a check: even if the bank teller accidentally processes a photocopy twice, they see `#991` already cleared and hand back the exact original receipt without taking another dollar. A **Circuit Breaker** is your home electrical breaker tripping open during a short circuit so the whole house doesn't catch fire—testing one probe (`Half-Open`) 15 seconds later before restoring power.",
-    "mechanics": "Client sends `Idempotency-Key: uuid` on `POST /charges`. Server atomically claims `(user_id, key)` inside the transaction (or Redis lock) and stores the serialized response; duplicate keys replay the cached response (`409` if payload mismatches!). Outbound clients wrap downstream RPCs with a `CircuitBreaker(Closed -> Open -> Half-Open)` + `sleep = random(0, min(cap, base * 2^attempt))` full jitter.",
+    "intuition": "An **Idempotency Key** is writing a unique receipt number (`req_991`) on a check: even if the bank teller accidentally processes a photocopy twice, they see `#991` already cleared and hand back the exact original receipt without taking another dollar. A **Circuit Breaker** is your home electrical breaker tripping open during a short circuit so the whole house doesn't catch fire—letting a few trial requests through (`Half-Open`, 3 in this lesson) 15 seconds later before restoring power.",
+    "mechanics": "Client sends `Idempotency-Key: uuid` on `POST /charges`. Server atomically claims `(user_id, key)` inside the transaction (or Redis lock) and stores the serialized response; duplicate keys replay the cached response, return `409 Conflict` while the first request is still in flight, and return `422` if the same key arrives with a different payload (the IETF Idempotency-Key draft's codes). Outbound clients wrap downstream RPCs with a `CircuitBreaker(Closed -> Open -> Half-Open)` + `sleep = random(0, min(cap, base * 2^attempt))` full jitter.",
     "staffTradeoffs": "Never use bare `base * 2^attempt` without random jitter—if 10,000 clients drop together, deterministic backoff makes all 10,000 hammer the server in synchronized waves at 1s, 2s, 4s! Also enforce **Retry Budgets** (cap retries at ~10–20% of normal traffic) so nested microservice retries (`3^3 = 27x` amplification!) never amplify outages."
   },
   "ddiaAnchors": [
@@ -100,9 +100,9 @@
       "protocol": "HTTPS",
       "info": "POST /v1/charges (Idempotency-Key: k_991, amount=$50) arrives",
       "payloadSize": "410 B",
-      "payloadInspector": "POST /v1/charges | Idempotency-Key: k_991 | SHA256(body)=0x91ab",
+      "payloadInspector": "POST /v1/charges | Idempotency-Key: k_991 | SHA256(body)=0x91ab -> INSERT idempotency_keys(k_991, status=IN_PROGRESS)",
       "latencyDeltaMs": 2.0,
-      "inspectorNote": "Body hash is stored alongside the key so reusing `k_991` with a different dollar amount raises 422/409!"
+      "inspectorNote": "The key is claimed atomically with status IN_PROGRESS, and the body hash is stored with it, so reusing `k_991` with a different amount is rejected with 422 Unprocessable Entity."
     },
     {
       "stepNo": 2,
@@ -121,7 +121,22 @@
     },
     {
       "stepNo": 3,
-      "phaseTitle": "3. PERSIST CHARGE & SAVED RESPONSE",
+      "phaseTitle": "3. IN-FLIGHT DUPLICATE GETS 409",
+      "timestampMs": 20.0,
+      "sourceNodeId": "client",
+      "targetNodeId": "checkout-svc",
+      "edgeId": "e-c-chk",
+      "category": "write",
+      "protocol": "HTTPS",
+      "info": "Duplicate POST with k_991 arrives while the first is still running -> 409 Conflict, retry later",
+      "payloadSize": "410 B",
+      "payloadInspector": "SELECT status FROM idempotency_keys WHERE key='k_991' -> IN_PROGRESS -> HTTP 409 (Retry-After: 1)",
+      "latencyDeltaMs": 1.0,
+      "inspectorNote": "The hardest case: there is no saved response yet to replay. Without the IN_PROGRESS claim, both requests would call the payment provider."
+    },
+    {
+      "stepNo": 4,
+      "phaseTitle": "4. PERSIST CHARGE & SAVED RESPONSE",
       "timestampMs": 37.0,
       "sourceNodeId": "checkout-svc",
       "targetNodeId": "idemp-db",
@@ -147,7 +162,7 @@
       "faultType": "latency_injection",
       "targetNodeId": "fraud-api",
       "triggerSummary": "Fraud API latency spikes to 5,000ms, causing >50% 800ms timeouts across a 10-second sliding window.",
-      "mitigationSummary": "Circuit Breaker trips OPEN, immediately shedding calls in <1ms via fallback heuristic for 15s, then tests 1 probe in HALF-OPEN before closing.",
+      "mitigationSummary": "Circuit Breaker trips OPEN, immediately shedding calls in <1ms via fallback heuristic for 15s, then lets 3 trial requests through in HALF-OPEN before closing.",
       "steps": [
         {
           "stepNo": 1,
@@ -173,9 +188,9 @@
           "edgeId": "e-chk-ext",
           "category": "read",
           "protocol": "HTTPS",
-          "info": "After 15s, Breaker allows 3 canary requests (HALF-OPEN) -> 200 OK -> CLOSED!",
+          "info": "After 15s, Breaker lets 3 trial requests through (HALF-OPEN) -> all 200 OK -> CLOSED",
           "payloadSize": "320 B",
-          "payloadInspector": "3/3 probes succeeded in 32ms -> Breaker State: CLOSED",
+          "payloadInspector": "3/3 trial requests succeeded in 32ms -> Breaker State: CLOSED",
           "latencyDeltaMs": 32.0,
           "inspectorNote": "Controlled canary probing verifies real recovery without unleashing full traffic immediately."
         }

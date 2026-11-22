@@ -5,33 +5,34 @@
   "layer": 5,
   "title": "Distributed Locks, Redlock & Fencing Tokens",
   "subtitle": "Why GC pauses break naive TTL locks and how monotonic tokens save state",
-  "difficulty": "L5-L6",
+  "difficulty": "Senior",
   "estimatedMinutes": 18,
-  "overview": "Distributed locks coordinate exclusive access—preventing two workers from double-charging a file or assigning the same resource. Yet Martin Kleppmann famously proved in DDIA Ch. 8 that naive Redis TTL locks without monotonic fencing tokens silently corrupt data during JVM/Python GC pauses or NTP clock jumps.",
+  "overview": "Distributed locks coordinate exclusive access—preventing two workers from double-charging a file or assigning the same resource. Yet Martin Kleppmann argued (in his 2016 post \"How to do distributed locking\", and later in DDIA Ch. 8) that TTL locks without monotonic fencing tokens can silently corrupt data during GC pauses or clock jumps, and that Redlock does not fix this.",
   "firstPrinciplesStory": "Worker A acquires a 10-second lock in Redis (`SET lock:inv_1 wA NX EX 10`) to update an invoice in S3/Postgres. Right before writing, Worker A freezes for 12 seconds on a stop-the-world GC pause! Redis expires the lock at 10s, Worker B safely acquires the lock and writes Invoice v2. At second 12, Worker A wakes up—still believing its lock is valid—and blindly overwrites Invoice v2 with stale v1! Checking 'did my lock expire' in Worker A's RAM doesn't help because Worker A can pause AGAIN after checking.",
   "adaptiveLenses": {
     "intuition": "A naive TTL lock is a library book due at 5 PM: if Reader 1 falls asleep until 5:30 PM, the librarian lends a copy to Reader 2 at 5:01 PM—then Reader 1 wakes up and scribbles over Reader 2's page! A **Fencing Token** is stamping every checkout with an increasing ticket number (#33, then #34): the storage vault refuses any edit stamped #33 once it has seen #34.",
-    "mechanics": "A linearizable lock service (etcd / ZooKeeper via Raft) returns a strictly monotonic `fencing_token` (e.g. `revision=33`) on every lock acquisition. Every storage mutation includes `WHERE fencing_token < 34` (or S3/DB CAS check), so any paused zombie client carrying token `33` is rejected atomically at the storage tier.",
+    "mechanics": "A linearizable lock service (etcd / ZooKeeper via Raft) returns a strictly monotonic `fencing_token` (e.g. `revision=33`) on every lock acquisition. Every storage mutation carries the caller's token and only applies if the stored token is older: `WHERE stored_token < :my_token` (or an S3/DB compare-and-set), so a paused zombie carrying token `33` is rejected atomically once `34` has been written.",
     "staffTradeoffs": "Distinguish **Efficiency locks** (preventing duplicate expensive work, where occasional overlap is harmless—single-instance Redis `SET NX EX` is great!) from **Correctness locks** (money, inventory, leader writes—where overlap corrupts state!). Correctness locks MUST use consensus (`etcd`/`ZooKeeper`) PLUS storage-side fencing tokens (DDIA Ch. 8)."
   },
   "ddiaAnchors": [
     {
       "chapter": "DDIA Ch. 8 · The Trouble with Distributed Systems",
       "concept": "Process Pauses, Clock Jumps & Fencing Tokens",
-      "whyItMatters": "Proves why wall-clock TTL leases alone cannot guarantee mutual exclusion against asynchronous networks or GC freezes."
+      "whyItMatters": "Explains why wall-clock TTL leases alone cannot guarantee mutual exclusion against asynchronous networks or GC freezes."
     }
   ],
   "pragmaticTips": [
     {
       "principle": "Assert Invariants at the Persistence Boundary",
       "tip": "Never trust a client's memory of holding a lock; make the target storage engine validate the monotonic token atomically on write.",
-      "application": "Pass `fencing_token` directly in SQL `UPDATE ... SET val=$1, token=$2 WHERE id=$3 AND token < $2`."
+      "application": "Pass `fencing_token` directly in SQL `UPDATE ... SET val=$1, token=$2 WHERE id=$3 AND token < $2` (the stored token must be older than mine)."
     }
   ],
   "keyTakeaways": [
     "Efficiency locks tolerate rare dual execution; Correctness locks require Raft/Paxos + monotonic fencing tokens.",
     "Always release locks with an owner check (`Lua: if GET(k)==owner then DEL(k)`) so an expired worker never deletes someone else's new lock.",
-    "Redlock over 5 independent Redis masters still relies on synchronized clock decay unless paired with storage fencing."
+    "Redlock over 5 independent Redis masters still relies on synchronized clock decay unless paired with storage fencing.",
+    "When the target cannot check tokens (most third-party APIs), fencing is impossible: use the provider's idempotency key so a zombie retry is harmless, and treat lease checks as narrowing the window, not closing it."
   ],
   "nodes": [
     {
@@ -129,14 +130,14 @@
       "edgeId": "e-b-db",
       "category": "write",
       "protocol": "SQL",
-      "info": "UPDATE jobs SET state='DONE', token=34 WHERE id=1 AND token < 34 -> 1 row updated",
+      "info": "UPDATE jobs SET state='DONE', token=34 WHERE id=1 AND token < :my_token (34) -> 1 row updated",
       "payloadSize": "240 B",
       "payloadInspector": "Committed: token=34 recorded on row",
       "latencyDeltaMs": 3.0,
       "inspectorNote": "Storage advances its high-water token to 34.",
       "predictPrompt": {
         "prompt": "At second 12, Worker A wakes up from its GC pause and sends its delayed write carrying `token = 33`. What happens at Postgres?",
-        "hint": "Check the SQL conditional `WHERE token < 33` against the row's current `token = 34`.",
+        "hint": "Evaluate `WHERE token < :my_token` with my_token = 33 against the row's current token = 34.",
         "reveal": "Postgres evaluates `34 < 33` -> FALSE, updates 0 rows, and rejects Worker A's stale zombie write cleanly!"
       }
     },
@@ -151,7 +152,7 @@
       "protocol": "SQL",
       "info": "Zombie Worker A sends token=33 -> 0 rows updated (FENCED OFF!)",
       "payloadSize": "240 B",
-      "payloadInspector": "WHERE token < 33 matched 0 rows (current token=34) -> stale overwrite prevented!",
+      "payloadInspector": "WHERE token < :my_token (33) matched 0 rows (current token=34) -> stale overwrite prevented!",
       "latencyDeltaMs": 2.5,
       "inspectorNote": "Fencing makes correctness independent of clock drift or process pause durations."
     }
@@ -195,6 +196,12 @@
       "pros": ["Sub-millisecond acquisition", "Trivial operations & huge QPS"],
       "cons": ["Async Redis failover can drop an active lock briefly (unsafe for strict correctness)"],
       "bestFor": "Deduplicating expensive cache rebuilds or cron triggers"
+    },
+    {
+      "option": "Storage that cannot check fencing tokens (third-party APIs)",
+      "pros": ["An idempotency key on the external call makes a duplicate from a zombie harmless", "Checking the remaining lease just before the call narrows the overlap window"],
+      "cons": ["Narrowing is not elimination: a pause right after the check still overlaps", "Only works if the provider supports idempotency keys or conditional writes"],
+      "bestFor": "Payment providers, email/SMS APIs, object stores without conditional writes"
     }
   ],
   "quizQuestionIds": ["q-lock-1", "q-lock-2"],

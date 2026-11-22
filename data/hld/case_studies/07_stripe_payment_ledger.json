@@ -3,7 +3,7 @@
   "tier": 4,
   "title": "Design a Payment Gateway & Ledger (Stripe)",
   "subtitle": "Double-entry ledger, idempotency, Outbox + PSP reconciliation",
-  "levelTag": "L6-L7",
+  "levelTag": "Staff",
   "estimatedMinutes": 50,
   "tags": ["Double-Entry Ledger", "Idempotency", "PSP Reconciliation", "ACID"],
   "functionalReqs": [
@@ -67,7 +67,7 @@
     "layer": 4,
     "title": "Idempotent Payment Execution & Double-Entry Ledger",
     "subtitle": "Idempotency lock -> External PSP call (outside SQL tx!) -> Atomic Ledger + Outbox",
-    "difficulty": "L6-L7",
+    "difficulty": "Staff",
     "estimatedMinutes": 25,
     "overview": "Never hold a SQL transaction open while calling an external bank/PSP over the internet (a 5-second bank stall exhausts DB connections instantly!). Instead: 1) Persist `PaymentIntent(INIT)` with `idempotency_key`, 2) Call the PSP with the SAME key, 3) Atomically commit `SUCCEEDED` + balanced Double-Entry Ledger rows + Outbox event, and reconcile async bank files nightly.",
     "keyTakeaways": [

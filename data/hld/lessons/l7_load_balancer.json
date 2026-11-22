@@ -5,7 +5,7 @@
   "layer": 2,
   "title": "L4 vs L7 Load Balancing & Algorithms",
   "subtitle": "TLS termination, health checks, Least-Conn & PEWMA routing",
-  "difficulty": "L3-L4",
+  "difficulty": "Junior",
   "estimatedMinutes": 16,
   "overview": "Load balancers decouple clients from volatile backend fleets. Layer 4 (Transport) forwards TCP packets at wire speed via DSR/NAT without decrypting TLS; Layer 7 (Application) terminates TLS, inspects HTTP paths/headers, and chooses backends dynamically using Least-Connections or latency-aware PEWMA.",
   "firstPrinciplesStory": "You add 8 shiny new backend pods behind a basic L4 Load Balancer during a traffic spike, expecting load to drop by 3x. Instead, the original 4 pods melt at 98% CPU while your 8 new pods sit completely idle! Why? Because HTTP/2 and gRPC multiplex hundreds of requests over ONE long-lived TCP socket—and L4 balances connections, not requests. Understanding where L4 stops and L7 takes over saves you from mysterious horizontal-scaling failures.",

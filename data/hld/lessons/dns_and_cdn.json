@@ -5,7 +5,7 @@
   "layer": 1,
   "title": "DNS, GeoDNS & Pull/Push CDN",
   "subtitle": "Anycast routing, recursive resolution, edge caching & origin shield",
-  "difficulty": "L3-L4",
+  "difficulty": "Junior",
   "estimatedMinutes": 15,
   "overview": "Before a single API microservice runs, DNS steers the client to the closest healthy datacenter and a Content Delivery Network (CDN) absorbs static and cacheable dynamic reads at global edge PoPs—cutting global round-trip latency from ~150ms down to ~15ms.",
   "firstPrinciplesStory": "Imagine you launch an app from a single US-East server. Users in Virginia love the 25ms feel, while users in Mumbai experience sluggish 240ms TCP handshakes and timeouts on every image. Worse, when your post goes viral, 100,000 browsers hammer your single origin for the exact same 2 MB bundle. Physics (speed of light in fiber) forbids shrinking cross-continent RTT—so you move bytes closer to users via GeoDNS + Pull CDN Edge PoPs, and shield your origin from cold-miss floods.",

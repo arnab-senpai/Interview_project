@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "consistent-hashing",
+  "flashcards": [
+    {
+      "id": "fc-ch-1",
+      "topicId": "consistent-hashing",
+      "layer": 5,
+      "difficulty": "Mid",
+      "front": "How many keys move on average when adding 1 node to a N-node Consistent Hashing ring?",
+      "back": "Only ~K/N keys move (only keys falling in the new node's clockwise arcs), compared to ~(N-1)/N keys under naive modulo hashing `hash(key) % N`.",
+      "tags": ["Consistent Hashing", "Sharding"]
+    },
+    {
+      "id": "fc-ch-2",
+      "topicId": "consistent-hashing",
+      "layer": 5,
+      "difficulty": "Mid",
+      "front": "Why do production hash rings assign 150–200 virtual nodes (vnodes) per physical server?",
+      "back": "With few physical nodes, random hash positions cause severe imbalance; interleaving hundreds of vnodes reduces variance to ~5% and spreads orphaned load evenly across all surviving servers when one node fails.",
+      "tags": ["Virtual Nodes", "Load Distribution"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-ch-1",
+      "topicId": "consistent-hashing",
+      "layer": 5,
+      "difficulty": "Mid",
+      "scenario": "You grow a 10-node Memcached fleet to 11 nodes using server = hash(key) % N instead of consistent hashing.",
+      "question": "Roughly what fraction of keys now map to a different server?",
+      "options": [
+        "None of the keys, as existing entries stay where they are",
+        "About 91% of keys, close to 10 out of every 11",
+        "About 9% of keys, the share owned by the new node",
+        "About 50% of keys, since half the remainders shift"
+      ],
+      "correctIndex": 1,
+      "explanation": "Changing the modulus from 10 to 11 changes hash(key) % N for about 10 of every 11 keys, so roughly 91% of keys miss at once. Consistent hashing moves only about 1/11 of the keys.",
+      "optionExplanations": [
+        "Entries stay on the old servers, but lookups now go to new ones and miss.",
+        "Correct. Almost every key's remainder changes when N changes.",
+        "That is the consistent-hashing result; plain modulo reshuffles far more.",
+        "There is no reason for half; the remainder changes for most keys."
+      ]
+    },
+    {
+      "id": "q-ch-2",
+      "topicId": "consistent-hashing",
+      "layer": 5,
+      "difficulty": "Senior",
+      "scenario": "Your ring has 200 virtual nodes per shard, yet shard 4 is at 100% CPU because one celebrity profile accounts for 35% of all reads.",
+      "question": "Do more virtual nodes fix this, and if not, what does?",
+      "options": [
+        "No; only moving to range partitioning removes the hotspot",
+        "Yes; more vnodes split each key's reads across shards",
+        "Yes; switching to a better hash function evens the load",
+        "No; cache the key locally or spread copies with salted keys"
+      ],
+      "correctIndex": 3,
+      "explanation": "Virtual nodes balance how many keys each shard owns, not how hot a single key is. One key still hashes to one position. Hot keys need a local in-process cache, read replicas for that key, or salting the key into several copies.",
+      "optionExplanations": [
+        "Range partitioning still puts one key on one shard, so the hotspot remains.",
+        "Vnodes split the key space, but a single key still maps to one shard.",
+        "A better hash spreads many keys evenly; it cannot split one key.",
+        "Correct. A single key always lands on one ring position."
+      ]
+    }
+  ]
+}

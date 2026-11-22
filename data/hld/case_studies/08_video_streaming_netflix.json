@@ -3,7 +3,7 @@
   "tier": 3,
   "title": "Design YouTube / Netflix Video Streaming",
   "subtitle": "Pre-signed S3 upload, DAG chunk transcoding, HLS/ABR & Edge CDN",
-  "levelTag": "L5-L6",
+  "levelTag": "Senior",
   "estimatedMinutes": 45,
   "tags": ["DAG Transcoding", "HLS/ABR", "CDN Edge", "Pre-Signed S3"],
   "functionalReqs": [
@@ -67,7 +67,7 @@
     "layer": 1,
     "title": "Chunked Upload, Parallel DAG Transcoding & Edge ABR Streaming",
     "subtitle": "Pre-signed S3 multipart -> GOP split workers -> HLS manifest -> Edge CDN PoP",
-    "difficulty": "L5-L6",
+    "difficulty": "Senior",
     "estimatedMinutes": 22,
     "overview": "Proxying a 4 GB creator upload through app servers exhausts pod RAM and bandwidth, while encoding a 2-hour movie on one CPU takes hours. Pre-signed S3 multipart uploads bypass API servers completely, a DAG splits the video by Group-of-Pictures (GOP) chunks across 50 parallel encoding workers, and Edge CDNs deliver 4-second HLS/DASH segments globally.",
     "keyTakeaways": [

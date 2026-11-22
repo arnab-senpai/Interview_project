@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 LayerId = Literal[1, 2, 3, 4, 5, 6, 7]
-DifficultyLevel = Literal["L3-L4", "L4-L5", "L5-L6", "L6-L7"]
+DifficultyLevel = Literal["Junior", "Mid", "Senior", "Staff"]
 NodeKind = Literal[
     "client",
     "dns",
@@ -294,6 +294,38 @@ class QuizQuestion(BaseModel):
     options: list[str] = Field(..., min_length=3)
     correct_index: int = Field(..., ge=0, alias="correctIndex")
     explanation: str
+    option_explanations: list[str] = Field(..., alias="optionExplanations")
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def _check_answer_key(self) -> "QuizQuestion":
+        if self.correct_index >= len(self.options):
+            raise ValueError(f"{self.id}: correctIndex {self.correct_index} out of range")
+        if len(self.option_explanations) != len(self.options):
+            raise ValueError(f"{self.id}: needs one optionExplanation per option")
+        return self
+
+    def public_view(self) -> dict:
+        """The question as the browser may see it: no answer key, no explanations."""
+        return self.model_dump(by_alias=True, exclude={"correct_index", "explanation", "option_explanations"})
+
+    def reveal(self) -> dict:
+        """Answer key and explanations, sent only after the learner has answered."""
+        return {
+            "correctIndex": self.correct_index,
+            "explanation": self.explanation,
+            "optionExplanations": list(self.option_explanations),
+        }
+
+
+class PracticeTopicFile(BaseModel):
+    """One file per topic under data/hld/practice/: that topic's flashcards and quizzes."""
+
+    version: str
+    topic_id: str = Field(..., alias="topicId")
+    flashcards: list[FlashcardItem] = Field(default_factory=list)
+    quizzes: list[QuizQuestion] = Field(default_factory=list)
 
     model_config = {"populate_by_name": True}
 
@@ -312,6 +344,8 @@ class ReferenceNumbersAndRubric(BaseModel):
     availability_nines: list[dict] = Field(..., alias="availabilityNines")
     estimation_formulas: list[dict] = Field(..., alias="estimationFormulas")
     genai_sizing_metrics: list[dict] = Field(..., alias="genaiSizingMetrics")
+    level_mapping: dict | None = Field(default=None, alias="levelMapping")
+    latency_benchmarks_meta: dict | None = Field(default=None, alias="latencyBenchmarksMeta")
 
     model_config = {"populate_by_name": True}
 

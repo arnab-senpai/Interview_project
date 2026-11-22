@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "collaborative-docs",
+  "flashcards": [
+    {
+      "id": "fc-crdt-1",
+      "topicId": "collaborative-docs",
+      "layer": 5,
+      "difficulty": "Staff",
+      "front": "What three mathematical properties must CRDT merge functions satisfy to converge identically without locks?",
+      "back": "Associativity, Commutativity, and Idempotence—ensuring any peer network can deliver, reorder, or duplicate deltas across offline partitions and still reach identical final state.",
+      "tags": ["DDIA Ch. 5", "CRDT", "Multi-Leader"]
+    },
+    {
+      "id": "fc-crdt-2",
+      "topicId": "collaborative-docs",
+      "layer": 5,
+      "difficulty": "Staff",
+      "front": "Contrast Local (Document-Partitioned) vs Global (Term-Partitioned) secondary indexes.",
+      "back": "Local indexes give fast single-shard atomic writes but require scatter-gather reads across ALL shards (p99 hit); Global indexes give O(1) fast shard reads at the cost of async cross-shard write updates.",
+      "tags": ["DDIA Ch. 6", "Secondary Indexes", "Sharding"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-crdt-1",
+      "topicId": "collaborative-docs",
+      "layer": 5,
+      "difficulty": "Staff",
+      "scenario": "Editors in Tokyo and London lose their connection for 10 minutes, edit overlapping paragraphs offline, then reconnect.",
+      "question": "Which approach merges both sides with no lost keystrokes and no central lock?",
+      "options": [
+        "A central lock on each paragraph that offline users must hold",
+        "Sequence CRDT operations merged on reconnect",
+        "Last-write-wins on each paragraph, by wall-clock time",
+        "Keep both versions and ask the users to merge them manually"
+      ],
+      "correctIndex": 1,
+      "explanation": "Sequence CRDTs give each insert a unique position id (for example a counter plus peer id), and merging is commutative and idempotent, so every replica converges to the same text. Last-write-wins discards one side's edits.",
+      "optionExplanations": [
+        "Offline editors cannot reach the lock, so they could not edit.",
+        "Correct. Every replica converges and keeps both sets of edits.",
+        "One side's paragraph edits are thrown away, and clocks can skew.",
+        "This avoids loss but pushes merge work onto every user."
+      ]
+    },
+    {
+      "id": "q-crdt-2",
+      "topicId": "collaborative-docs",
+      "layer": 5,
+      "difficulty": "Staff",
+      "scenario": "Document storage grows from 8 to 16 nodes, and workspace dashboards search documents by tag.",
+      "question": "Which layout avoids rehashing every key and avoids querying all nodes for each tag search?",
+      "options": [
+        "hash(doc_id) % N with a local tag index on each node",
+        "Replicate every document to all 16 nodes for fast search",
+        "Range sharding by creation time with a local tag index",
+        "Fixed logical buckets that move whole, plus a global tag index"
+      ],
+      "correctIndex": 3,
+      "explanation": "Map documents to a fixed number of logical buckets and move whole buckets when nodes join, so most keys stay put. A global tag index, updated asynchronously, answers tag searches from one place; a session token can make readers wait until their own recent writes are indexed.",
+      "optionExplanations": [
+        "Changing N rehashes most keys, and local indexes need scatter-gather.",
+        "Full replication multiplies storage and write cost by 16.",
+        "New documents hotspot the newest range, and tags still scatter.",
+        "Correct. Few keys move, and tag search reads one index."
+      ]
+    }
+  ]
+}

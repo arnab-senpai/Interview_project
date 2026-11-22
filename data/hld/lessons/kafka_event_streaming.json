@@ -5,14 +5,14 @@
   "layer": 6,
   "title": "Kafka Event Streaming & Consumer Groups",
   "subtitle": "Append-only logs, ISR durability, partition offsets, backpressure & DLQs",
-  "difficulty": "L4-L5",
+  "difficulty": "Mid",
   "estimatedMinutes": 20,
   "overview": "Apache Kafka decouples fast producers from slower downstream consumers using partitioned, immutable append-only logs. By preserving ordering within a partition key, using sequential disk I/O + zero-copy `sendfile`, and tracking consumer group offsets, Kafka sustains millions of events/sec with replayability.",
   "firstPrinciplesStory": "Checkout succeeds in Postgres, then calls Billing synchronously, then calls Email, then updates Analytics Search. Soon one slow Email provider stalls Checkout threads until customers double-click Pay. Worse, publishing to a naive in-memory queue deletes messages on delivery—so when an Analytics bug corrupts Tuesday's totals, yesterday's events are gone forever! Treating events as an immutable partitioned disk log (DDIA Ch. 11) gives you both real-time decoupling AND time-travel replay.",
   "adaptiveLenses": {
     "intuition": "A traditional queue is a whiteboard where each task gets erased as soon as a worker grabs it. Kafka is a ledger notebook with numbered pages divided into separate binders (partitions): Billing, Fraud, and Analytics can all read from the exact same immutable binder independently at their own reading speed using bookmarks (offsets).",
     "mechanics": "Producers hash partition keys (`order_id`) to route events into append-only partition segments flushed sequentially via OS page cache. `acks=all` commits once all In-Sync Replicas (`ISR`) persist the batch, advancing the High Watermark. Consumer groups assign 1 partition to at most 1 worker and commit offsets after idempotent writes.",
-    "staffTradeoffs": "Never dual-write directly to Postgres and Kafka inside separate network calls—use the Transactional Outbox + CDC (DDIA Ch. 11) so DB state and event log never diverge. Also plan for poison-pill payloads via bounded retries + Dead-Letter Topics (`orders.dlq`), because blocking an infinite retry stalls every healthy message behind it in that partition."
+    "staffTradeoffs": "Never dual-write directly to Postgres and Kafka inside separate network calls—use the Transactional Outbox + CDC (DDIA Ch. 11) so DB state and event log never diverge. Also plan for poison-pill payloads via bounded retries + Dead-Letter Topics (`orders.dlq`), because blocking an infinite retry stalls every healthy message behind it in that partition. A DLQ is only safe as-is when events are independent: on a keyed, ordered stream, park the key so its later events wait behind the bad one."
   },
   "ddiaAnchors": [
     {
@@ -159,8 +159,8 @@
       "title": "Poison-Pill Payload Quarantined to DLQ + Worker Crash Rebalance",
       "faultType": "node_down",
       "targetNodeId": "consumer",
-      "triggerSummary": "Offset 98415 contains a corrupted JSON payload that throws an unrecoverable schema exception.",
-      "mitigationSummary": "After 3 exponential retries, consumer emits event + stacktrace to `orders.dlq`, advances offset to 98416, and unblocks the partition.",
+      "triggerSummary": "Offset 98415 (key ord_9, OrderCreated) contains a corrupted JSON payload that throws an unrecoverable schema exception.",
+      "mitigationSummary": "After 3 exponential retries, the consumer sends the event + stack trace to `orders.dlq` and parks key ord_9, so later ord_9 events are diverted behind it until it is fixed and replayed. Other keys keep flowing.",
       "steps": [
         {
           "stepNo": 1,
@@ -186,11 +186,26 @@
           "edgeId": "e-cons-dlq",
           "category": "async",
           "protocol": "Kafka TCP",
-          "info": "Published to orders.dlq with error headers; Partition 0 offset committed to 98416",
+          "info": "Published to orders.dlq with error headers; key ord_9 marked parked; Partition 0 offset committed to 98416",
           "payloadSize": "1.2 KB",
-          "payloadInspector": "Topic: orders.dlq | x-original-offset: 98415 | x-error: SchemaMismatch",
+          "payloadInspector": "Topic: orders.dlq | x-original-offset: 98415 | x-error: SchemaMismatch | parked_keys += ord_9",
           "latencyDeltaMs": 2.0,
-          "inspectorNote": "On-call alerts inspect orders.dlq while healthy orders continue processing uninterrupted."
+          "inspectorNote": "Skipping 98415 is only safe when events are independent. On a keyed, ordered stream, applying ord_9's next event (say, a cancel) before its create breaks per-key order, so the key is parked instead."
+        },
+        {
+          "stepNo": 3,
+          "phaseTitle": "3. LATER EVENT FOR PARKED KEY DIVERTED",
+          "timestampMs": 7.0,
+          "sourceNodeId": "consumer",
+          "targetNodeId": "dlq",
+          "edgeId": "e-cons-dlq",
+          "category": "async",
+          "protocol": "Kafka TCP",
+          "info": "Offset 98420 (key ord_9, OrderCancelled) -> ord_9 is parked -> appended to orders.dlq behind 98415",
+          "payloadSize": "1.1 KB",
+          "payloadInspector": "parked_keys lookup: ord_9 -> divert | ord_12, ord_13 ... -> process normally",
+          "latencyDeltaMs": 1.0,
+          "inspectorNote": "On-call fixes 98415 and replays ord_9's parked events in order, then un-parks the key. Healthy orders never waited."
         }
       ]
     }

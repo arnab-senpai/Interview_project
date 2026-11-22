@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "multi-version-billing-api",
+  "flashcards": [
+    {
+      "id": "fc-bill-1",
+      "topicId": "multi-version-billing-api",
+      "layer": 6,
+      "difficulty": "Senior",
+      "front": "How do Stripe-style date-pinned API versions avoid polluting core billing domain logic with legacy `if/else` checks?",
+      "back": "Push version transformations (`2024-05-01` -> `vCurrent`) cleanly into declarative Edge Contract Adapters (TPP Design by Contract), keeping core services working on a single canonical Protobuf model.",
+      "tags": ["TPP Decoupling", "API Versioning", "Contract"]
+    },
+    {
+      "id": "fc-bill-2",
+      "topicId": "multi-version-billing-api",
+      "layer": 6,
+      "difficulty": "Senior",
+      "front": "Why should an HTTP `Idempotency-Key` ledger store a SHA-256 hash of the request payload?",
+      "back": "Detecting payload mismatches lets the API reject accidental key reuse for different billing amounts with `422 Unprocessable Entity` instead of silently replaying the earlier charge receipt.",
+      "tags": ["Idempotency", "Design by Contract", "FinTech"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-bill-2",
+      "topicId": "multi-version-billing-api",
+      "layer": 6,
+      "difficulty": "Mid",
+      "scenario": "A merchant script reuses Idempotency-Key k_991, first for a $10 charge and later for a $999 charge.",
+      "question": "What should the server do with the second request?",
+      "options": [
+        "Reject it with 422 because the payload hash does not match",
+        "Replay the saved $10 receipt as if it were the same request",
+        "Run the $999 charge, since its amount differs from the first",
+        "Return 409 because the key is held by an in-flight request"
+      ],
+      "correctIndex": 0,
+      "explanation": "Store a hash of the request body with the key. When the same key arrives with a different body, reject it with 422 Unprocessable Entity, the status the IETF Idempotency-Key draft uses for a mismatched payload, instead of replaying or charging again.",
+      "optionExplanations": [
+        "Correct. Key reuse with a new body is a client bug to surface.",
+        "The merchant would believe $999 was charged when only $10 was.",
+        "That defeats the key, which was meant to make retries safe.",
+        "409 is for a request still in progress; the $10 charge finished."
+      ]
+    },
+    {
+      "id": "q-bill-1",
+      "topicId": "multi-version-billing-api",
+      "layer": 6,
+      "difficulty": "Senior",
+      "scenario": "External merchants are pinned to 2024-05-01 JSON shapes while internal billing and tax teams change their Protobuf contracts every week.",
+      "question": "Where should version translation live?",
+      "options": [
+        "In edge adapters that map each pinned version to the current one",
+        "In every billing service, with a branch for each API version",
+        "Nowhere; require every merchant to upgrade each week",
+        "In the database, with one table per published API version"
+      ],
+      "correctIndex": 0,
+      "explanation": "Translate each merchant's pinned version to the current canonical contract at an edge adapter. Internal services then only speak one contract, and old versions are isolated in one well-tested place.",
+      "optionExplanations": [
+        "Correct. Internal services stay on one contract.",
+        "Version logic spreads everywhere and slows every internal change.",
+        "External merchants cannot follow weekly breaking changes.",
+        "Splitting storage by API version duplicates data and logic."
+      ]
+    }
+  ]
+}

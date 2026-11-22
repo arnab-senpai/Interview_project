@@ -3,7 +3,7 @@
   "tier": 4,
   "title": "Design a High-Volume Financial Auditing Ledger",
   "subtitle": "Hot LSM MemTable/SSTable ingestion -> Cold compressed Parquet columnar audit tier",
-  "levelTag": "L6-L7",
+  "levelTag": "Staff",
   "estimatedMinutes": 45,
   "tags": ["LSM-Tree", "Columnar OLAP", "Bloom Filter", "Compaction Stalls"],
   "functionalReqs": [
@@ -64,7 +64,7 @@
     "layer": 4,
     "title": "Hot LSM Write Shards -> Cold Columnar Audit Engine",
     "subtitle": "Sequential WAL + MemTable -> Bloom-Indexed SSTables -> Parquet Compactor",
-    "difficulty": "L6-L7",
+    "difficulty": "Staff",
     "estimatedMinutes": 22,
     "overview": "Why financial auditing systems split workloads across write-optimized LSM engines (hot 7 days) and Dictionary/RLE compressed columnar stores (5-year audit scans).",
     "keyTakeaways": [

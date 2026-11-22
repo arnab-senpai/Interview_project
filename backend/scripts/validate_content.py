@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data"
 HLD_DIR = DATA_DIR / "hld"
+PRACTICE_DIR = HLD_DIR / "practice"
 
 VALID_LAYERS = {1, 2, 3, 4, 5, 6, 7}
 VALID_NODE_KINDS = {
@@ -193,14 +195,115 @@ def validate_explorer_lesson(
     return errors
 
 
+
+VALID_LEVELS = {"Junior", "Mid", "Senior", "Staff"}
+
+# Quiz quality thresholds (see the content audit's quiz authoring rules).
+MAX_CORRECT_LENGTH_RATIO = 1.2      # correct option vs. mean option length -> error
+MAX_OPTION_SPREAD_RATIO = 1.6       # longest vs. shortest option -> warning
+MAX_POSITION_SHARE = 0.35           # share of quizzes whose key sits at one index -> error
+MAX_CORRECT_IS_LONGEST_SHARE = 0.40 # share of quizzes whose key is the unique longest -> error
+
+ABSOLUTE_RE = re.compile(r"\b(guarantee[sd]?|always|never|100%|zero[- ](?:downtime|data loss|lost|divergence|split-brain))\b", re.IGNORECASE)
+SOURCE_HINT_RE = re.compile(r"(DDIA|RFC|https?://|\bCh\. ?\d)", re.IGNORECASE)
+
+
+def lint_quiz(q: dict[str, Any], ctx: str) -> tuple[list[str], list[str]]:
+    """Structural checks (errors) and length heuristics for one quiz question."""
+    errors: list[str] = []
+    warnings: list[str] = []
+    opts = q.get("options", [])
+    cidx = q.get("correctIndex")
+    if len(opts) < 3:
+        errors.append(f"{ctx}: needs at least 3 options")
+        return errors, warnings
+    if not isinstance(cidx, int) or not (0 <= cidx < len(opts)):
+        errors.append(f"{ctx}: invalid correctIndex={cidx} for {len(opts)} options")
+        return errors, warnings
+    if not isinstance(q.get("explanation"), str) or not q["explanation"].strip():
+        errors.append(f"{ctx}: missing explanation")
+    expl = q.get("optionExplanations")
+    if not isinstance(expl, list) or len(expl) != len(opts) or not all(isinstance(e, str) and e.strip() for e in expl):
+        errors.append(f"{ctx}: needs one non-empty optionExplanation per option")
+    lengths = [len(o) for o in opts]
+    mean = sum(lengths) / len(lengths)
+    if lengths[cidx] > MAX_CORRECT_LENGTH_RATIO * mean:
+        errors.append(
+            f"{ctx}: correct option is {lengths[cidx] / mean:.2f}x the mean option length (max {MAX_CORRECT_LENGTH_RATIO})"
+        )
+    if min(lengths) and max(lengths) / min(lengths) > MAX_OPTION_SPREAD_RATIO:
+        warnings.append(f"{ctx}: option lengths range {min(lengths)}-{max(lengths)} characters")
+    return errors, warnings
+
+
+def lint_quiz_bank(quizzes: list[dict[str, Any]]) -> list[str]:
+    """Bank-wide checks: answer positions spread out, and the key is not usually the longest option."""
+    errors: list[str] = []
+    graded = [q for q in quizzes if isinstance(q.get("correctIndex"), int) and q.get("options")]
+    if len(graded) < 8:
+        return errors
+    positions: dict[int, int] = {}
+    longest = 0
+    for q in graded:
+        positions[q["correctIndex"]] = positions.get(q["correctIndex"], 0) + 1
+        lengths = [len(o) for o in q["options"]]
+        if lengths.count(max(lengths)) == 1 and lengths[q["correctIndex"]] == max(lengths):
+            longest += 1
+    for pos, count in sorted(positions.items()):
+        if count / len(graded) > MAX_POSITION_SHARE:
+            errors.append(
+                f"quiz bank: {count}/{len(graded)} answers sit at index {pos} (max {MAX_POSITION_SHARE:.0%})"
+            )
+    if longest / len(graded) > MAX_CORRECT_IS_LONGEST_SHARE:
+        errors.append(
+            f"quiz bank: the correct option is the longest in {longest}/{len(graded)} questions (max {MAX_CORRECT_IS_LONGEST_SHARE:.0%})"
+        )
+    return errors
+
+
+def _iter_strings(node: Any, path: str = ""):
+    if isinstance(node, str):
+        yield path, node
+    elif isinstance(node, dict):
+        for k, v in node.items():
+            yield from _iter_strings(v, f"{path}.{k}" if path else k)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from _iter_strings(v, f"{path}[{i}]")
+
+
+def lint_prose(doc: dict[str, Any], topic_id: str) -> list[str]:
+    """Prose heuristics. These stay warnings: they flag text for an author to look at, never fail CI."""
+    warnings: list[str] = []
+    absolutes = 0
+    exclamations = 0
+    for path, text in _iter_strings(doc):
+        if path.endswith(("id", "Id", "edgeId", "sourceNodeId", "targetNodeId", "dataFile")):
+            continue
+        if ABSOLUTE_RE.search(text) and not SOURCE_HINT_RE.search(text):
+            absolutes += 1
+        exclamations += text.count("!") - text.count("!=")
+    if absolutes:
+        warnings.append(f"{topic_id}: {absolutes} field(s) use an absolute (guarantee/always/never/100%/zero ...) without a source")
+    if exclamations > 3:
+        warnings.append(f"{topic_id}: {exclamations} exclamation marks; prefer a neutral tone")
+    if not doc.get("lastVerified"):
+        warnings.append(f"{topic_id}: no lastVerified date (becomes an error in Phase 1)")
+    return warnings
+
+
 def validate_all() -> dict[str, Any]:
     errors: list[str] = []
+    warnings: list[str] = []
 
     tracks = load_json(DATA_DIR / "curriculum_tracks.json")
     index = load_json(HLD_DIR / "curriculum_index.json")
     ref = load_json(HLD_DIR / "reference_numbers_and_rubric.json")
     patterns_bundle = load_json(HLD_DIR / "patterns.json")
-    fq_bundle = load_json(HLD_DIR / "flashcards_and_quizzes.json")
+    practice_files = sorted(PRACTICE_DIR.glob("*.json"))
+    if not practice_files:
+        errors.append(f"{PRACTICE_DIR}: no per-topic practice files found")
+    practice_docs = [(path, load_json(path)) for path in practice_files]
     foundations = load_json(HLD_DIR / "ddia_and_pragmatic_foundations.json")
 
     if len(foundations.get("ddiaChapterMap", [])) != 12:
@@ -212,24 +315,38 @@ def validate_all() -> dict[str, Any]:
         errors.append("curriculum_index: expected exactly 7 layers")
 
     flashcard_ids: set[str] = set()
-    for fc in fq_bundle.get("flashcards", []):
-        fid = fc.get("id")
-        if not fid or fid in flashcard_ids:
-            errors.append(f"flashcards: duplicate or empty id '{fid}'")
-        else:
-            flashcard_ids.add(fid)
-
     quiz_ids: set[str] = set()
-    for q in fq_bundle.get("quizzes", []):
-        qid = q.get("id")
-        if not qid or qid in quiz_ids:
-            errors.append(f"quizzes: duplicate or empty id '{qid}'")
-            continue
-        quiz_ids.add(qid)
-        opts = q.get("options", [])
-        cidx = q.get("correctIndex")
-        if not isinstance(cidx, int) or not (0 <= cidx < len(opts)):
-            errors.append(f"quizzes[{qid}]: invalid correctIndex={cidx} for {len(opts)} options")
+    all_quizzes: list[dict[str, Any]] = []
+    for path, doc in practice_docs:
+        ctx = f"practice/{path.name}"
+        topic_id = doc.get("topicId")
+        if path.stem != topic_id:
+            errors.append(f"{ctx}: topicId '{topic_id}' must match the file name")
+        for fc in doc.get("flashcards", []):
+            fid = fc.get("id")
+            if not fid or fid in flashcard_ids:
+                errors.append(f"{ctx}: duplicate or empty flashcard id '{fid}'")
+            else:
+                flashcard_ids.add(fid)
+            if fc.get("topicId") != topic_id:
+                errors.append(f"{ctx}: flashcard '{fid}' has topicId '{fc.get('topicId')}'")
+            if fc.get("difficulty") not in VALID_LEVELS:
+                errors.append(f"{ctx}: flashcard '{fid}' has invalid level '{fc.get('difficulty')}'")
+        for q in doc.get("quizzes", []):
+            qid = q.get("id")
+            if not qid or qid in quiz_ids:
+                errors.append(f"{ctx}: duplicate or empty quiz id '{qid}'")
+                continue
+            quiz_ids.add(qid)
+            if q.get("topicId") != topic_id:
+                errors.append(f"{ctx}: quiz '{qid}' has topicId '{q.get('topicId')}'")
+            if q.get("difficulty") not in VALID_LEVELS:
+                errors.append(f"{ctx}: quiz '{qid}' has invalid level '{q.get('difficulty')}'")
+            q_errors, q_warnings = lint_quiz(q, f"{ctx}[{qid}]")
+            errors.extend(q_errors)
+            warnings.extend(q_warnings)
+            all_quizzes.append(q)
+    errors.extend(lint_quiz_bank(all_quizzes))
 
     ready_lessons = 0
     for entry in index.get("lessons", []):
@@ -275,6 +392,15 @@ def validate_all() -> dict[str, Any]:
                 )
             )
 
+    known_topics = {l.get("id") for l in index.get("lessons", [])} | all_case_ids
+    for path, doc in practice_docs:
+        if doc.get("topicId") not in known_topics:
+            errors.append(f"practice/{path.name}: topicId '{doc.get('topicId')}' is not a lesson or case study in curriculum_index")
+
+    for entry in [*index.get("lessons", []), *index.get("caseStudies", [])]:
+        if entry.get("status") == "ready" and entry.get("dataFile"):
+            warnings.extend(lint_prose(load_json(ROOT / entry["dataFile"]), entry["id"]))
+
     for p in patterns_bundle.get("patterns", []):
         for rel in p.get("relatedCaseStudies", []):
             if rel not in all_case_ids:
@@ -313,6 +439,7 @@ def validate_all() -> dict[str, Any]:
         "ddia_chapters": len(foundations.get("ddiaChapterMap", [])),
         "pragmatic_principles": len(foundations.get("pragmaticPrinciples", [])),
         "errors": errors,
+        "warnings": warnings,
     }
     return summary
 
@@ -320,8 +447,17 @@ def validate_all() -> dict[str, Any]:
 def main() -> int:
     summary = validate_all()
     errors = summary["errors"]
-    print(json.dumps(summary, indent=2))
+    warnings = summary["warnings"]
+    printable = {k: v for k, v in summary.items() if k not in ("errors", "warnings")}
+    print(json.dumps(printable, indent=2))
+    if warnings:
+        print(f"\n{len(warnings)} warning(s) (prose heuristics; these never fail the build):")
+        for w in warnings:
+            print(f"  warning: {w}")
     if errors:
+        print(f"\n{len(errors)} error(s):", file=sys.stderr)
+        for e in errors:
+            print(f"  error: {e}", file=sys.stderr)
         print(f"\nValidation FAILED with {len(errors)} error(s).", file=sys.stderr)
         return 1
     print("\nValidation PASSED: all HLD datasets and cross-references are valid.")

@@ -3,7 +3,7 @@
   "tier": 1,
   "title": "Design a URL Shortener (TinyURL / Bit.ly)",
   "subtitle": "Base62 encoding, KGS pre-allocation, read-heavy caching & 301 vs 302 redirects",
-  "levelTag": "L3-L4",
+  "levelTag": "Junior",
   "estimatedMinutes": 35,
   "tags": ["Base62", "KGS", "Read-Heavy Cache", "301 vs 302"],
   "functionalReqs": [
@@ -29,7 +29,7 @@
       "newUrlsPerDay": "4M/day (~40 writes/sec avg, ~120 writes/sec peak)",
       "redirectsPerSec": "~4,000 reads/sec avg, ~12,000 reads/sec peak",
       "fiveYearStorage": "4M × 365 × 5 × 500 B ≈ 3.65 TB (single/lightly sharded DB)",
-      "hotCacheRam": "20% of daily reads (~80M links × 500 B ≈ 40 GB Redis RAM)"
+      "hotCacheRam": "Size by distinct hot links, not reads: ~400M redirects/day might touch ~20M distinct links; caching the hottest 20% (~4M × 500 B) is ~2 GB, so plan ~4–6 GB with Redis overhead"
     }
   },
   "coreEntities": [
@@ -69,7 +69,7 @@
     "layer": 3,
     "title": "URL Shortener Redirect & Creation Flow",
     "subtitle": "Read-through Redis cache + Bloom filter + async click analytics",
-    "difficulty": "L3-L4",
+    "difficulty": "Junior",
     "estimatedMinutes": 20,
     "overview": "Writes fetch pre-generated collision-free Base62 keys from an in-memory KGS lease. Reads hit Redis (or edge cache) first, guarded by a Bloom filter against bogus codes, and emit click events asynchronously to Kafka.",
     "keyTakeaways": [
@@ -117,7 +117,7 @@
       {
         "id": "redis",
         "label": "Redis Hot Link Cache",
-        "sublabel": "LRU · 40 GB RAM",
+        "sublabel": "LRU · ~6 GB RAM",
         "kind": "cache",
         "layer": 3,
         "gridPos": { "gx": 6, "gy": 1 },
@@ -227,7 +227,7 @@
         "faultType": "cache_expiry",
         "targetNodeId": "redis",
         "triggerSummary": "10,000 req/s arrive for bogus random codes AND an expired viral link simultaneously.",
-        "mitigationSummary": "In-process Bloom Filter drops bogus 404 scans before DB; Singleflight collapses viral miss into 1 DB lookup.",
+        "mitigationSummary": "A shared RedisBloom filter (BF.ADD on every create, so new links are visible to every pod) drops bogus codes before the DB; a SET NX refresh lease lets one pod refill the viral link while the rest wait or serve stale.",
         "steps": [
           {
             "stepNo": 1,
@@ -240,24 +240,24 @@
             "protocol": "HTTP/2",
             "info": "Random scan /zzzz999 rejected by Bloom filter -> instant 404 (0 DB calls)",
             "payloadSize": "90 B",
-            "payloadInspector": "BloomFilter.mightContain('zzzz999') == false -> HTTP 404",
+            "payloadInspector": "BF.EXISTS url_codes zzzz999 -> 0 -> HTTP 404",
             "latencyDeltaMs": 0.2,
-            "inspectorNote": "Prevents cache penetration attacks from flooding the primary DB."
+            "inspectorNote": "Prevents cache penetration attacks from flooding the primary DB. The filter is shared, not per pod: a link created on pod A must be visible to pod B immediately, or fresh links 404."
           },
           {
             "stepNo": 2,
-            "phaseTitle": "2. SINGLEFLIGHT BACKFILLS DB",
+            "phaseTitle": "2. REFRESH LEASE BACKFILLS DB",
             "timestampMs": 0.2,
             "sourceNodeId": "url-svc",
             "targetNodeId": "db",
             "edgeId": "e4",
             "category": "read",
             "protocol": "SQL/KV",
-            "info": "1 coalesced DB fetch restores Redis cache for viral code",
+            "info": "The pod holding the refresh lease runs 1 DB read and restores the Redis entry",
             "payloadSize": "500 B",
-            "payloadInspector": "Singleflight DB read (1 query) -> SETEX url:aB9x2Kq 86400",
+            "payloadInspector": "SET refresh:aB9x2Kq NX PX 2000 -> OK -> 1 DB read -> SETEX url:aB9x2Kq 86400",
             "latencyDeltaMs": 6.0,
-            "inspectorNote": "Primary DB handles just 1 read instead of 10,000."
+            "inspectorNote": "With a fleet-wide lease the DB sees 1 read. Per-pod Singleflight alone would still send one read per pod."
           }
         ]
       }
@@ -276,7 +276,7 @@
         "bestFor": "Low-write internal tools"
       }
     ],
-    "quizQuestionIds": ["q-url-1"],
+    "quizQuestionIds": ["q-url-1", "q-url-2"],
     "flashcardIds": ["fc-url-1"]
   },
   "deepDives": [
@@ -294,7 +294,7 @@
     }
   ],
   "rubricChecklist": [
-    { "phase": "Requirements & Math", "weight": 20, "criteria": ["Identifies 100:1 read/write ratio", "Proves 62^7 keyspace size", "Sizes ~40 GB hot Redis RAM"] },
+    { "phase": "Requirements & Math", "weight": 20, "criteria": ["Identifies 100:1 read/write ratio", "Proves 62^7 keyspace size", "Sizes the hot cache from distinct hot links (a few GB), not raw reads"] },
     { "phase": "API & Data Model", "weight": 20, "criteria": ["Defines POST create + GET redirect", "Explains 301 vs 302 trade-off", "Picks short_code as partition key"] },
     { "phase": "Architecture & Deep Dives", "weight": 40, "criteria": ["Avoids write-time collisions via KGS/counter", "Adds Bloom filter + Redis cache", "Keeps analytics async via Kafka"] },
     { "phase": "Operations & Edge Cases", "weight": 20, "criteria": ["Addresses expiration cleanup", "Handles custom aliases & rate limits"] }

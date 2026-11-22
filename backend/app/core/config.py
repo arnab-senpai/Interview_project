@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[3]
 DATA_DIR = ROOT_DIR / "data"
 HLD_DIR = DATA_DIR / "hld"
+PRACTICE_DIR = HLD_DIR / "practice"
 BACKEND_DIR = ROOT_DIR / "backend"
 DEFAULT_DB_PATH = BACKEND_DIR / "systemcraft.db"
 FRONTEND_DIST_DIR = ROOT_DIR / "frontend" / "dist"

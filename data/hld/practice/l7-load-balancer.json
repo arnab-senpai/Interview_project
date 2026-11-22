@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "l7-load-balancer",
+  "flashcards": [
+    {
+      "id": "fc-lb-1",
+      "topicId": "l7-load-balancer",
+      "layer": 2,
+      "difficulty": "Junior",
+      "front": "Why do multiplexed HTTP/2 and gRPC connections require an L7 load balancer between pods?",
+      "back": "An L4 balancer routes per TCP connection (5-tuple). Because HTTP/2 and gRPC multiplex hundreds of RPCs over one long-lived TCP connection, L4 pins all traffic to one backend pod; L7 inspects and balances individual streams/requests.",
+      "tags": ["L4 vs L7", "gRPC", "HTTP/2"]
+    },
+    {
+      "id": "fc-lb-2",
+      "topicId": "l7-load-balancer",
+      "layer": 2,
+      "difficulty": "Mid",
+      "front": "How does PEWMA (Peak Exponentially Weighted Moving Average) improve over Round Robin?",
+      "back": "PEWMA combines active in-flight requests with exponentially smoothed backend response times, automatically shifting traffic away from slow or GC-paused 'gray failure' pods.",
+      "tags": ["Load Balancing", "Tail Latency", "PEWMA"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-lb-1",
+      "topicId": "l7-load-balancer",
+      "layer": 2,
+      "difficulty": "Mid",
+      "scenario": "You scale a gRPC service from 4 to 12 pods behind an L4 network load balancer. CPU stays at 95% on the original 4 pods while the 8 new pods sit near 0%.",
+      "question": "Why does the traffic not spread to the new pods?",
+      "options": [
+        "gRPC needs sticky sessions, so new pods get no existing users",
+        "The new pods are failing readiness checks and get no traffic",
+        "Long-lived HTTP/2 connections stay pinned to the old pods",
+        "The balancer's round-robin pool is cached for several minutes"
+      ],
+      "correctIndex": 2,
+      "explanation": "An L4 balancer picks a backend per TCP connection. gRPC multiplexes every call over a few long-lived HTTP/2 connections, so existing connections stay pinned to the old pods. Fix it with an L7 proxy that balances per request, client-side balancing, or a maximum connection age that forces reconnects.",
+      "optionExplanations": [
+        "gRPC does not need sticky sessions; pinning here is a side effect of connection reuse.",
+        "Failed readiness would show as unready pods; nothing in the scenario points to that.",
+        "Correct. L4 balances connections, and gRPC rarely opens new ones.",
+        "L4 balancers update their target list quickly; the issue is that clients never reconnect."
+      ]
+    },
+    {
+      "id": "q-lb-2",
+      "topicId": "l7-load-balancer",
+      "layer": 2,
+      "difficulty": "Mid",
+      "scenario": "One pod enters a gray failure. Its /health endpoint returns 200 OK, but real /checkout requests take 1,200 ms because of GC pauses.",
+      "question": "Which balancing approach moves traffic off this pod fastest?",
+      "options": [
+        "Round robin with a faster 5-second active health probe",
+        "Latency-aware least-request plus passive outlier detection",
+        "Consistent hashing on user id so each user sticks to a pod",
+        "Weighted round robin with weights set from pod CPU limits"
+      ],
+      "correctIndex": 1,
+      "explanation": "Active health checks only test /health, which still passes. Latency-aware balancing (least-request or PEWMA, which weights in-flight requests by smoothed latency) shifts traffic away as soon as real requests slow down, and passive outlier detection ejects pods that keep failing real traffic.",
+      "optionExplanations": [
+        "The probe hits /health, which keeps returning 200, so the pod stays in rotation.",
+        "Correct. It reacts to real request latency, not the health endpoint.",
+        "Hashing pins users to the slow pod; it does not react to latency at all.",
+        "Static weights reflect capacity, not the current GC pauses on one pod."
+      ]
+    }
+  ]
+}

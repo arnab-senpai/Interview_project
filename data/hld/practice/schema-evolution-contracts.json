@@ -1,0 +1,92 @@
+{
+  "version": "2.0.0",
+  "topicId": "schema-evolution-contracts",
+  "flashcards": [
+    {
+      "id": "fc-schema-1",
+      "topicId": "schema-evolution-contracts",
+      "layer": 6,
+      "difficulty": "Senior",
+      "front": "Why must you NEVER reuse a retired Protobuf or Thrift field tag number?",
+      "back": "Historic persisted messages or older binaries in rolling deployments still map that integer tag to the old field type/semantics, causing silent data corruption when parsed by code expecting the new meaning.",
+      "tags": ["DDIA Ch. 4", "Protobuf", "Schema Evolution"]
+    },
+    {
+      "id": "fc-schema-2",
+      "topicId": "schema-evolution-contracts",
+      "layer": 6,
+      "difficulty": "Senior",
+      "front": "How does Apache Avro differ from Protocol Buffers on the wire?",
+      "back": "Protobuf embeds numeric field tags on every serialized message; Avro strips even tags from the record body and pairs each binary payload with a 5-byte Schema Registry ID so readers reconcile writer vs reader schemas dynamically.",
+      "tags": ["DDIA Ch. 4", "Avro", "Schema Registry"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-schema-1",
+      "topicId": "schema-evolution-contracts",
+      "layer": 6,
+      "difficulty": "Senior",
+      "scenario": "Billing v2.1 rolls out next to Tax v2.0 and adds optional string tax_jurisdiction = 14 to a shared .proto message.",
+      "question": "Which change must you avoid so both versions keep decoding each other's messages?",
+      "options": [
+        "Passing unknown fields through unchanged in relay services",
+        "Adding the new field as optional with a safe default value",
+        "Reusing a retired tag number such as #5 for a new field",
+        "Running a FULL_TRANSITIVE compatibility check in CI"
+      ],
+      "correctIndex": 2,
+      "explanation": "Protobuf identifies fields by tag number. Reusing a deleted tag (say #5) for a new field makes old data and old services read the new bytes with the old meaning. Mark retired tags as reserved instead.",
+      "optionExplanations": [
+        "Preserving unknown fields is what keeps tag 14 from being dropped.",
+        "This is the recommended way to add a field.",
+        "Correct. Old readers would misread the new field as the old one.",
+        "This check catches breaking changes; it is a safeguard, not a risk."
+      ]
+    },
+    {
+      "id": "q-schema-2",
+      "topicId": "schema-evolution-contracts",
+      "layer": 6,
+      "difficulty": "Senior",
+      "scenario": "A webhook emits malformed bytes onto partition 3 of billing.events, keyed by invoice_id. The consumer crash-loops on that record.",
+      "question": "What keeps partition 3 moving without breaking per-invoice order?",
+      "options": [
+        "DLQ the record, then process that invoice's next events",
+        "DLQ the record and park its invoice_id until it is replayed",
+        "Turn off schema validation so the consumer accepts the bytes",
+        "Retry decoding the record forever with exponential backoff"
+      ],
+      "correctIndex": 1,
+      "explanation": "Catch the decode error at the consumer boundary, send the raw bytes and trace id to billing.dlq, and park that invoice_id so its later events wait behind it. Other invoices keep flowing, and the parked invoice resumes once the bad record is fixed and replayed.",
+      "optionExplanations": [
+        "Later events for that invoice would apply without the missing one.",
+        "Correct. The partition moves and that invoice keeps its order.",
+        "That pushes corrupt data into billing instead of isolating it.",
+        "Malformed bytes never decode, so the partition stays stuck."
+      ]
+    },
+    {
+      "id": "q-schema-3",
+      "topicId": "schema-evolution-contracts",
+      "layer": 6,
+      "difficulty": "Senior",
+      "scenario": "A v2.0 consumer decodes a v2.1 Protobuf message that has unknown tag 14, then re-emits it. Your services use proto3 runtime 3.21.",
+      "question": "When does tag 14 get lost?",
+      "options": [
+        "When the data is copied into your own struct or goes via JSON",
+        "Only when the consumer runs a different language than producer",
+        "Always, because proto3 discards unknown fields on decode",
+        "Never, because Protobuf keeps unknown tags in every format"
+      ],
+      "correctIndex": 0,
+      "explanation": "Since protobuf 3.5, proto3 keeps unknown fields when a message is decoded and re-encoded as the same type, as proto2 always did. The field is lost when you copy the data into your own struct or DTO, or convert through JSON, which has nowhere to keep unknown tags.",
+      "optionExplanations": [
+        "Correct. Modern runtimes keep unknown fields on the message itself.",
+        "Language does not matter; the mapping step is what drops the field.",
+        "That was true only for proto3 runtimes before 3.5.",
+        "JSON and hand-written structs have no slot for unknown tags."
+      ]
+    }
+  ]
+}

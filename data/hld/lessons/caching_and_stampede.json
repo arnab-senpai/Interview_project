@@ -5,13 +5,13 @@
   "layer": 3,
   "title": "Caching Strategies & Thundering Herd Defense",
   "subtitle": "Cache-Aside, Write-Through/Behind, Singleflight & Bloom Filters",
-  "difficulty": "L4-L5",
+  "difficulty": "Mid",
   "estimatedMinutes": 20,
   "overview": "RAM lookups take ~100ns while disk-backed database queries over the network take milliseconds. Yet caching introduces three classic failure modes: Cache Penetration (missing keys bypassing cache), Cache Stampede / Thundering Herd (hot key expiration), and Cache Avalanche (mass simultaneous TTL expiry).",
   "firstPrinciplesStory": "You add Redis in front of Postgres, and p99 read latency drops gloriously from 45ms to 2ms—until Friday night when a hot homepage SKU TTL expires at 8:00:00 PM sharp. Within 50 milliseconds, 8,000 requests all miss Redis simultaneously, stampede straight into Postgres, exhaust all 200 database connections, and keep retrying—even after Redis comes back empty! Caching solves steady-state speed, yet creates nonlinear cliff failures unless you engineer stampede, penetration, and avalanche defenses.",
   "adaptiveLenses": {
     "intuition": "Cache-Aside is checking your kitchen counter (Redis) before driving to the grocery store (Postgres). If 50 roommates walk into the kitchen at the exact moment the milk expires, Singleflight tells 49 of them: 'Wait 10 seconds at the door—one of us is already driving to the store and will share the gallon with everyone.'",
-    "mechanics": "Lookups check a compact in-process Bloom Filter first (eliminating non-existent key scans), query Redis via `GET`, and on miss collapse concurrent duplicate in-flight fetches inside a Singleflight leader promise before issuing one parameterized SQL query and writing back with jittered TTL (`base + rand`).",
+    "mechanics": "Lookups check a shared RedisBloom filter first (`BF.EXISTS`; every create calls `BF.ADD`, so all pods see new keys), query Redis via `GET`, and on miss collapse concurrent duplicate fetches inside each pod with Singleflight. Singleflight is per process, so a fleet of 40 pods still sends up to 40 queries; a shared refresh lease (`SET refresh:<key> <pod> NX PX 2000`) or probabilistic early refresh (XFetch) cuts that to one. The refill writes back with a jittered TTL (`base + rand`).",
     "staffTradeoffs": "Keeping Redis and Postgres synchronized is a classic dual-write hazard: updating DB and deleting cache can still race with a concurrent stale reader! Use short TTL safety nets, monotonic version checks, or CDC-driven cache invalidation (DDIA Ch. 11/12) when strong freshness matters."
   },
   "ddiaAnchors": [
@@ -30,8 +30,8 @@
   ],
   "keyTakeaways": [
     "Cache-Aside keeps the database authoritative and lazily populates Redis on miss.",
-    "A Bloom Filter in front of cache/DB blocks 99%+ of non-existent key lookups (Cache Penetration).",
-    "Request coalescing (Singleflight) + jittered TTLs prevent 10,000 concurrent misses from hitting Postgres simultaneously."
+    "A Bloom filter in front of cache and DB rejects about 99% of lookups for keys that do not exist (at a 1% false-positive rate), but only if every create updates it. A shared RedisBloom filter does that; an in-process copy per pod does not.",
+    "Singleflight collapses duplicate misses per pod, not per fleet. A shared SET NX refresh lease or early refresh gets a fleet down to one DB query, and jittered TTLs stop mass expiry."
   ],
   "nodes": [
     {
@@ -49,14 +49,14 @@
     {
       "id": "bloom",
       "label": "Bloom Filter",
-      "sublabel": "In-Mem Bitset · 1% FP",
+      "sublabel": "Shared RedisBloom · 1% FP",
       "kind": "cache",
       "layer": 3,
       "gridPos": { "gx": 4, "gy": 2 },
-      "specs": { "protocol": "In-Process / RedisBloom", "port": "6379", "maxQpsPerNode": 500000, "baseLatencyMs": 0.05, "capProfile": "N/A", "scalingAxis": "Bit array sizing" },
-      "summary": "Probabilistic structure that guarantees zero false negatives for known existing keys.",
+      "specs": { "protocol": "RESP3 (RedisBloom)", "port": "6379", "maxQpsPerNode": 500000, "baseLatencyMs": 0.05, "capProfile": "N/A", "scalingAxis": "Bit array sizing" },
+      "summary": "Shared probabilistic filter of known keys: no false negatives for keys that were added, about 1% false positives. Every create must call BF.ADD before it returns, or new keys 404.",
       "whenToUse": ["Defending against malicious or random non-existent ID scans"],
-      "failureModes": ["Cannot easily delete keys without Counting Bloom Filter or rebuild"]
+      "failureModes": ["A write path that skips BF.ADD makes newly created keys return 404 until the filter is rebuilt", "Cannot easily delete keys without a Counting Bloom Filter or a rebuild"]
     },
     {
       "id": "redis",
@@ -84,7 +84,7 @@
     }
   ],
   "edges": [
-    { "id": "e-app-bloom", "from": "app", "to": "bloom", "protocol": "Local/RESP", "transport": "sync", "label": "Check key exists" },
+    { "id": "e-app-bloom", "from": "app", "to": "bloom", "protocol": "RESP3", "transport": "sync", "label": "Check key exists" },
     { "id": "e-app-redis", "from": "app", "to": "redis", "protocol": "RESP3", "transport": "sync", "label": "GET / SETEX" },
     { "id": "e-app-pg", "from": "app", "to": "postgres", "protocol": "SQL", "transport": "sync", "label": "SELECT on miss" }
   ],
@@ -102,7 +102,7 @@
       "payloadSize": "32 B",
       "payloadInspector": "BloomFilter check k=7 hashes -> all bits 1 (proceed to Redis)",
       "latencyDeltaMs": 0.05,
-      "inspectorNote": "If Bloom returns FALSE, we short-circuit immediately with 404—zero wasted calls to Redis or Postgres."
+      "inspectorNote": "If Bloom returns FALSE, we return 404 without calling Redis or Postgres. The filter is shared in Redis and updated with BF.ADD on every create; a per-pod in-memory filter would miss keys created on other pods and wrongly 404 them."
     },
     {
       "stepNo": 2,
@@ -117,7 +117,7 @@
       "payloadSize": "48 B",
       "payloadInspector": "GET product:9012 -> $-1 (nil)",
       "latencyDeltaMs": 0.5,
-      "inspectorNote": "Key expired or was evicted by LRU; app acquires local/distributed Singleflight lock before hitting DB."
+      "inspectorNote": "Key expired or was evicted by LRU; the pod joins its local Singleflight group before hitting the DB."
     },
     {
       "stepNo": 3,
@@ -132,7 +132,7 @@
       "payloadSize": "2.4 KB",
       "payloadInspector": "SELECT id, title, price_cents, stock FROM products WHERE id = $1;",
       "latencyDeltaMs": 8.0,
-      "inspectorNote": "Only the Singleflight leader executes SQL while concurrent duplicate callers await the shared future.",
+      "inspectorNote": "Only this pod's Singleflight leader runs the SQL while duplicate callers in the same process await the shared result. Other pods have their own leaders.",
       "predictPrompt": {
         "prompt": "Why does setting `TTL = 3600` (exactly 1 hour) for 200,000 cache entries warmed together at startup risk a severe midnight outage?",
         "hint": "Think about what happens 3,600 seconds later to all 200,000 keys at once.",
@@ -161,8 +161,8 @@
       "title": "Thundering Herd on Expired Hot Key",
       "faultType": "cache_expiry",
       "targetNodeId": "redis",
-      "triggerSummary": "Flash-sale SKU key expires while 8,000 concurrent req/s arrive for the exact same product ID.",
-      "mitigationSummary": "Singleflight coalescing collapses 8,000 duplicate fetches into 1 DB query (or distributed SET NX lock + logical soft-TTL refresh).",
+      "triggerSummary": "Flash-sale SKU key expires while 8,000 req/s arrive for the same product ID, spread across 40 app pods.",
+      "mitigationSummary": "Per-pod Singleflight cuts 8,000 misses to about 40 DB queries (one per pod). A shared refresh lease (SET NX on a refresh key) or probabilistic early refresh cuts that to 1 for the whole fleet.",
       "steps": [
         {
           "stepNo": 1,
@@ -173,26 +173,41 @@
           "edgeId": "e-app-redis",
           "category": "cache_miss",
           "protocol": "RESP3",
-          "info": "Hot key product:flash_1 expired -> 8,000 concurrent misses",
+          "info": "Hot key product:flash_1 expired -> 8,000 concurrent misses across 40 pods",
           "payloadSize": "48 B",
-          "payloadInspector": "Singleflight group['product:flash_1']: 1 leader elected, 7,999 callers blocked on in-memory channel",
+          "payloadInspector": "Each pod's Singleflight group['product:flash_1']: 1 leader, ~199 callers waiting in that process",
           "latencyDeltaMs": 0.6,
           "inspectorNote": "Without coalescing, all 8,000 requests would saturate Postgres's max_connections=200 in milliseconds."
         },
         {
           "stepNo": 2,
-          "phaseTitle": "2. SINGLE DB READ SHARED",
+          "phaseTitle": "2. PER-POD COALESCING: ~40 QUERIES",
           "timestampMs": 0.6,
           "sourceNodeId": "app",
           "targetNodeId": "postgres",
           "edgeId": "e-app-pg",
           "category": "failover",
           "protocol": "SQL",
-          "info": "1 SQL query fills Redis; 8,000 waiters receive shared result",
+          "info": "Singleflight is per process: 40 pods -> ~40 SQL queries, not 1",
           "payloadSize": "2.4 KB",
-          "payloadInspector": "DB QPS stayed at 1 instead of 8,000; Redis refreshed with soft-TTL early recompute",
+          "payloadInspector": "DB QPS spike: ~40 identical SELECTs (one per pod) instead of 8,000",
           "latencyDeltaMs": 8.0,
-          "inspectorNote": "Leader populates Redis and fans out the response to every waiting coroutine."
+          "inspectorNote": "40 queries is survivable, but the count grows with the fleet. Singleflight state lives in each pod's memory, so pods cannot see each other's leaders."
+        },
+        {
+          "stepNo": 3,
+          "phaseTitle": "3. FLEET-WIDE REFRESH LEASE: 1 QUERY",
+          "timestampMs": 8.6,
+          "sourceNodeId": "app",
+          "targetNodeId": "redis",
+          "edgeId": "e-app-redis",
+          "category": "write",
+          "protocol": "RESP3",
+          "info": "SET refresh:product:flash_1 pod-17 NX PX 2000 -> only pod-17 refills; others serve the stale value",
+          "payloadSize": "64 B",
+          "payloadInspector": "pod-17: OK (lease won) | 39 other pods: nil -> serve soft-expired value until refill lands",
+          "latencyDeltaMs": 0.5,
+          "inspectorNote": "Keep a soft TTL shorter than the hard TTL so a stale copy exists to serve. Probabilistic early refresh (XFetch) avoids the synchronized expiry entirely."
         }
       ]
     }
@@ -209,8 +224,17 @@
       "pros": ["Write-Through keeps cache warm & consistent; Write-Behind batches writes for huge write throughput"],
       "cons": ["Write-Through adds write latency; Write-Behind risks data loss if cache node crashes pre-flush"],
       "bestFor": "Write-Through for user profiles; Write-Behind for view counters / telemetry"
+    },
+    {
+      "option": "Shared Bloom filter vs negative caching",
+      "pros": ["Bloom: tiny memory for millions of keys, rejects unknown keys before Redis", "Negative caching: no extra data structure; cache 'not found' for 30 to 60 s"],
+      "cons": [
+        "Bloom: every create must update it, and deletes need a rebuild or counting filter",
+        "Negative caching: each unique bogus key still costs one DB query, and a key created during the TTL looks missing"
+      ],
+      "bestFor": "Bloom for large key spaces under scan attacks; negative caching for small key spaces or low attack risk"
     }
   ],
-  "quizQuestionIds": ["q-cache-1", "q-cache-2"],
+  "quizQuestionIds": ["q-cache-1", "q-cache-2", "q-cache-3"],
   "flashcardIds": ["fc-cache-1", "fc-cache-2"]
 }

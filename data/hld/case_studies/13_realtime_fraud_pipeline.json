@@ -3,7 +3,7 @@
   "tier": 5,
   "title": "Design 1M TPS Real-Time Fraud & Activity Pipeline",
   "subtitle": "Transactional Outbox + Debezium CDC -> Kafka -> Flink Actors + Watermarks & Blackboard Rules",
-  "levelTag": "L6-L7",
+  "levelTag": "Staff",
   "estimatedMinutes": 50,
   "tags": ["1M TPS", "Kafka", "Debezium CDC", "Flink Watermarks", "Actors & Blackboard"],
   "functionalReqs": [
@@ -64,7 +64,7 @@
     "layer": 6,
     "title": "1M TPS Outbox CDC -> Flink Actors -> CQRS Views",
     "subtitle": "Breaking Temporal Coupling via Log Brokers, Watermarks & Blackboard Risk Signals",
-    "difficulty": "L6-L7",
+    "difficulty": "Staff",
     "estimatedMinutes": 24,
     "overview": "How principal streaming architectures replace fragile synchronous HTTP chains & SQL cron jobs with Debezium WAL CDC, Kafka, stateful Flink actors, and idempotent CQRS projections.",
     "keyTakeaways": [

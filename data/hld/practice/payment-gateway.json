@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "payment-gateway",
+  "flashcards": [
+    {
+      "id": "fc-pay-1",
+      "topicId": "payment-gateway",
+      "layer": 4,
+      "difficulty": "Senior",
+      "front": "Why do financial ledgers use append-only double-entry journal rows instead of `UPDATE balance = balance - amount`?",
+      "back": "Every transfer records balanced debit and credit entries in an immutable log, guaranteeing `SUM(debits) == SUM(credits)` for cryptographic/accounting audits and safe replay without losing historical provenance.",
+      "tags": ["Case Study", "Double-Entry Ledger", "FinTech"]
+    },
+    {
+      "id": "fc-pay-2",
+      "topicId": "payment-gateway",
+      "layer": 4,
+      "difficulty": "Senior",
+      "front": "How does a payment gateway handle ambiguous timeouts from an external PSP/card network?",
+      "back": "Never assume a timeout means failure: transition the payment intent to `PENDING_RECONCILIATION`, stop blind duplicate charges, pass the same `idempotency_key`, and resolve state via signed webhooks + scheduled T+N settlement file reconciliation.",
+      "tags": ["Case Study", "Reconciliation", "Exactly-Once Semantics"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-pay-1",
+      "topicId": "payment-gateway",
+      "layer": 4,
+      "difficulty": "Senior",
+      "scenario": "A merchant wallet balance lives in Postgres and sees many concurrent payouts and refunds.",
+      "question": "Why store immutable double-entry ledger lines next to the cached balance?",
+      "options": [
+        "Balances can be rebuilt and audited, and every entry nets to zero",
+        "It lets each service keep its own copy of the balance",
+        "It needs fewer rows than overwriting a single balance row",
+        "It removes the need for transactions on balance updates"
+      ],
+      "correctIndex": 0,
+      "explanation": "Each movement is recorded as balanced debit and credit lines that are never updated. You can rebuild any balance from them, audit every change, and check that the lines for each transaction sum to zero, so money is never created or lost by a bug.",
+      "optionExplanations": [
+        "Correct. The ledger is the audit trail and the invariant check.",
+        "Copies per service would diverge; the ledger is one source of truth.",
+        "It needs more rows; the value is auditability, not size.",
+        "Ledger writes and the cached balance still need one transaction."
+      ]
+    },
+    {
+      "id": "q-pay-2",
+      "topicId": "payment-gateway",
+      "layer": 4,
+      "difficulty": "Senior",
+      "scenario": "Your payment executor calls the card processor, gets 504 Gateway Timeout, and cannot tell whether the card was charged.",
+      "question": "What is the safest next step?",
+      "options": [
+        "Retry the charge with a new idempotency key to be sure",
+        "Report success to the user, since most timeouts do succeed",
+        "Roll back the order and ask the user to pay again later",
+        "Mark it pending, query status with the same key, then reconcile"
+      ],
+      "correctIndex": 3,
+      "explanation": "A timeout is ambiguous: the processor may have charged the card. Record the attempt as pending, query its status (or wait for the webhook) using the same idempotency key, and reconcile against the settlement file. Never assume success or failure.",
+      "optionExplanations": [
+        "A new key can charge the card a second time.",
+        "If the charge failed, the order ships unpaid.",
+        "If the first charge went through, the user pays twice.",
+        "Correct. You learn the real outcome before acting."
+      ]
+    }
+  ]
+}

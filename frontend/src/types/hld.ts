@@ -2,7 +2,7 @@ export type TrackId = "hld" | "lld" | "coding";
 
 export type LayerId = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
-export type DifficultyLevel = "L3-L4" | "L4-L5" | "L5-L6" | "L6-L7";
+export type DifficultyLevel = "Junior" | "Mid" | "Senior" | "Staff";
 
 export type NodeKind =
   | "client"
@@ -249,6 +249,11 @@ export interface QuizQuestion {
   scenario: string;
   question: string;
   options: string[];
+}
+
+/** Answer key and explanations. The server only sends these after the learner answers. */
+export interface QuizReveal {
   correctIndex: number;
   explanation: string;
+  optionExplanations: string[];
 }

@@ -3,7 +3,7 @@
   "tier": 3,
   "title": "Design Uber / Lyft Ride-Sharing Backend",
   "subtitle": "Geospatial H3/Geohash indexing, high-write driver GPS pings & lock-safe dispatch",
-  "levelTag": "L5-L6",
+  "levelTag": "Senior",
   "estimatedMinutes": 45,
   "tags": ["Geospatial H3", "High-Write GPS", "Distributed Lock", "Matching"],
   "functionalReqs": [
@@ -67,7 +67,7 @@
     "layer": 4,
     "title": "High-Write GPS Ingestion & Atomic Driver Dispatch",
     "subtitle": "Regional H3 spatial grid + Redis lock to guarantee single-rider matching",
-    "difficulty": "L5-L6",
+    "difficulty": "Senior",
     "estimatedMinutes": 24,
     "overview": "Updating a disk SQL database 500,000 times/sec for moving drivers would destroy B-Tree indexes. Instead, Location Service updates an in-memory city-sharded H3/Geohash index (only 128 MB RAM globally!) and emits a Kafka trail for offline analytics, while Dispatch uses atomic locks (`SET NX EX`) so a driver only sees one ride offer at a time.",
     "keyTakeaways": [

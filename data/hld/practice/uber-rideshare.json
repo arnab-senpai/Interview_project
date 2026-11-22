@@ -1,0 +1,39 @@
+{
+  "version": "2.0.0",
+  "topicId": "uber-rideshare",
+  "flashcards": [
+    {
+      "id": "fc-uber-1",
+      "topicId": "uber-rideshare",
+      "layer": 4,
+      "difficulty": "Senior",
+      "front": "Why store active moving driver coordinates in city-sharded in-memory H3/Redis rather than Postgres?",
+      "back": "2M drivers pinging every 4s generate 500k updates/sec, which would overwhelm SQL B-Tree index writes. Yet 2M active records × 64B is only ~128 MB—fitting cleanly in sharded RAM with short TTL expiration.",
+      "tags": ["Uber", "Geospatial", "H3"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-uber-1",
+      "topicId": "uber-rideshare",
+      "layer": 4,
+      "difficulty": "Senior",
+      "scenario": "Two riders request a ride in the same millisecond near the only available driver, d_901. Both see 'Driver assigned' before one of them gets an error.",
+      "question": "What prevents the double dispatch without locking the whole city?",
+      "options": [
+        "A city-level lock on the dispatch table during matching",
+        "Retry the losing rider after a random delay of 1 to 3 seconds",
+        "Faster GPS pings so both riders see the driver's state sooner",
+        "A short per-driver lock taken before the offer is sent"
+      ],
+      "correctIndex": 3,
+      "explanation": "Take a short per-driver lock before sending an offer, for example SET lock:driver:d_901 trip_id NX EX 15. Only one dispatch flow can offer to that driver at a time, and the TTL frees the driver if the offer is never answered.",
+      "optionExplanations": [
+        "This works but blocks every other match in the city.",
+        "Retries happen after the double assignment; they do not prevent it.",
+        "Fresher location data does not stop two flows offering the same driver.",
+        "Correct. It serializes offers for one driver without a city-wide lock."
+      ]
+    }
+  ]
+}

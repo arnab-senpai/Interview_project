@@ -3,7 +3,7 @@
   "tier": 3,
   "title": "Design 500k RPS API Gateway & Ingestion (p99 < 50ms)",
   "subtitle": "Cell-based blast isolation, offline JWT verify, CoDel load shedding & hedged reads",
-  "levelTag": "L5-L6",
+  "levelTag": "Senior",
   "estimatedMinutes": 45,
   "tags": ["p99 Tail Latency", "Cell Architecture", "Token Bucket", "Hedged Requests"],
   "functionalReqs": [
@@ -65,7 +65,7 @@
     "layer": 2,
     "title": "500k RPS Edge Gateway & Adaptive Ingestion Flow",
     "subtitle": "Offline JWKS -> Local Lease Quota -> CoDel Load Shedding -> Hedged Read Mesh",
-    "difficulty": "L5-L6",
+    "difficulty": "Senior",
     "estimatedMinutes": 20,
     "overview": "Tracing 500k RPS from BGP Anycast + Maglev L4 Load Balancers through stateless Rust/Envoy L7 cell gateways into hedged reads and durable async ingestion.",
     "keyTakeaways": [

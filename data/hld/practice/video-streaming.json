@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "video-streaming",
+  "flashcards": [
+    {
+      "id": "fc-vid-1",
+      "topicId": "video-streaming",
+      "layer": 3,
+      "difficulty": "Senior",
+      "front": "Why does adaptive bitrate (ABR) video transcode uploads into multi-bitrate 2–6 second `.m4s` GOP-aligned segments?",
+      "back": "Splitting into independent IDR-aligned segments lets players seamlessly switch between 360p, 1080p, and 4K mid-stream as bandwidth fluctuates, while making each immutable chunk 100% cacheable at CDN edge PoPs and pre-encoded in parallel via a DAG.",
+      "tags": ["Case Study", "HLS/DASH", "ABR Transcoding"]
+    },
+    {
+      "id": "fc-vid-2",
+      "topicId": "video-streaming",
+      "layer": 3,
+      "difficulty": "Senior",
+      "front": "What dual storage strategy keeps CDN hit ratios above 95% for massive VOD catalogs like Netflix?",
+      "back": "Serve the hot 5% zipfian head (new releases/trending shows) from NVMe/SSD Open Connect edge appliances directly inside ISPs, while storing the vast long tail in regional S3/origin shields fetched on miss.",
+      "tags": ["Case Study", "Open Connect", "Edge Caching"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-vid-1",
+      "topicId": "video-streaming",
+      "layer": 3,
+      "difficulty": "Senior",
+      "scenario": "A creator uploads a 2-hour 4K master. Encoding it on one large worker takes 4 hours.",
+      "question": "How do streaming platforms cut that to minutes?",
+      "options": [
+        "Lower the master's quality before encoding to save time",
+        "Encode only 1080p first and add the other bitrates on demand",
+        "Split at keyframes and encode the chunks in parallel workers",
+        "Use one larger GPU instance to encode the whole file faster"
+      ],
+      "correctIndex": 2,
+      "explanation": "Split the master at keyframe (GOP) boundaries into chunks of a few seconds, encode the chunks for every bitrate in parallel across many workers, then stitch the HLS or DASH manifests. Chunks are independent, so the work scales out.",
+      "optionExplanations": [
+        "Lower input quality hurts every output and still runs serially.",
+        "This defers work but still encodes the main rendition sequentially.",
+        "Correct. Independent chunks turn hours into minutes.",
+        "A bigger machine helps a little but stays far slower than fan-out."
+      ]
+    },
+    {
+      "id": "q-vid-2",
+      "topicId": "video-streaming",
+      "layer": 3,
+      "difficulty": "Senior",
+      "scenario": "Millions watch a trending series at prime time and regional ISP peering links fill up.",
+      "question": "How do large platforms keep most video bytes off the public internet?",
+      "options": [
+        "Add more origin capacity in each region's data center",
+        "Switch delivery to peer-to-peer between nearby viewers",
+        "Lower the default bitrate for every viewer during prime time",
+        "Pre-load hot segments on caches placed inside ISP networks"
+      ],
+      "correctIndex": 3,
+      "explanation": "They place cache appliances inside ISP networks and pre-load popular segments there during off-peak hours. A control plane steers each client to the nearest appliance, so most bytes travel one hop inside the ISP.",
+      "optionExplanations": [
+        "More origin capacity does not shorten the path through peering.",
+        "P2P is unreliable on mobile and is not how major services offload.",
+        "That cuts quality for everyone and still crosses peering links.",
+        "Correct. Bytes are served from inside the viewer's ISP."
+      ]
+    }
+  ]
+}

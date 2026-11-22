@@ -5,7 +5,7 @@
   "layer": 1,
   "title": "WebSockets vs SSE vs Long Polling vs gRPC",
   "subtitle": "Choosing bidirectional vs server-push vs binary RPC transport",
-  "difficulty": "L4-L5",
+  "difficulty": "Mid",
   "estimatedMinutes": 15,
   "overview": "Every real-time feature forces a transport choice. Short polling wastes bandwidth; Long Polling ties up HTTP handlers; Server-Sent Events (SSE) push cleanly over standard HTTP/2; WebSockets unlock full-duplex chat/gaming; and gRPC gives typed Protobuf binary RPCs for internal microservices.",
   "firstPrinciplesStory": "You build a live auction ticker using 1-second HTTP polling. With 500,000 open tabs, you suddenly get hit by 500,000 HTTP requests every second—99% returning 'no new bid', burning TLS handshakes and JSON parsing CPU for nothing! Switching to persistent server-push cuts traffic 50x—but choosing full WebSockets where one-way SSE suffices adds sticky-session draining headaches behind L7 proxies.",

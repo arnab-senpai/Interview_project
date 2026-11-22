@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "distributed-locking-fencing",
+  "flashcards": [
+    {
+      "id": "fc-lock-1",
+      "topicId": "distributed-locking-fencing",
+      "layer": 5,
+      "difficulty": "Senior",
+      "front": "Why is a plain Redis TTL lock (`SET NX PX`) unsafe without a fencing token?",
+      "back": "A client experiencing a stop-the-world GC pause or network delay after acquiring the lock can resume after its TTL expires and overwrite storage while a second client holds the newer lease. Only a monotonically increasing fencing token checked by storage rejects the stale write.",
+      "tags": ["DDIA Ch. 8", "Fencing Token", "Distributed Locks"]
+    },
+    {
+      "id": "fc-lock-2",
+      "topicId": "distributed-locking-fencing",
+      "layer": 5,
+      "difficulty": "Senior",
+      "front": "Who must validate a fencing token to guarantee mutual exclusion under process pauses?",
+      "back": "The downstream storage or resource server itself (for example via `WHERE epoch < :token` or Raft log version checks)—never the lock service alone, because delayed RPCs are already in flight.",
+      "tags": ["DDIA Ch. 8", "Correctness", "Storage Guard"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-lock-1",
+      "topicId": "distributed-locking-fencing",
+      "layer": 5,
+      "difficulty": "Senior",
+      "scenario": "Worker A takes a Redis lock with SET lock token NX PX 10000, then pauses for 14 seconds in GC right before writing. Worker B took the lock at 11 seconds and already wrote.",
+      "question": "What stops Worker A's late write from overwriting B's?",
+      "options": [
+        "Having Worker A re-check its lock right before it writes",
+        "Fencing tokens that storage checks against the latest it saw",
+        "A longer lock TTL so the lease outlives typical GC pauses",
+        "Running NTP more often so every worker's clock stays aligned"
+      ],
+      "correctIndex": 1,
+      "explanation": "Any client can pause after checking its lock, so the check has to happen at storage. The lock service hands out increasing fencing tokens, and storage rejects any write whose token is lower than the highest it has seen (WHERE stored_token < :my_token).",
+      "optionExplanations": [
+        "A can pause again between the check and the write.",
+        "Correct. The storage tier rejects the stale token atomically.",
+        "Pauses can always exceed the TTL; a longer lease only narrows the window.",
+        "The problem is a process pause, not clock drift."
+      ]
+    },
+    {
+      "id": "q-lock-2",
+      "topicId": "distributed-locking-fencing",
+      "layer": 5,
+      "difficulty": "Senior",
+      "scenario": "You need a lock for leader election, where two leaders at once would corrupt data, rather than a best-effort lock that only avoids duplicate work.",
+      "question": "Which lock service fits?",
+      "options": [
+        "etcd or ZooKeeper, with revisions used as fencing tokens",
+        "A database advisory lock held on one non-replicated server",
+        "Redlock across five Redis masters with a short TTL",
+        "A single Redis node using SET NX with a short TTL"
+      ],
+      "correctIndex": 0,
+      "explanation": "A consensus store such as etcd or ZooKeeper commits lease changes through a quorum and exposes increasing revision numbers that work as fencing tokens across failovers. A single Redis node can lose a lock during async failover, which is acceptable only for efficiency locks.",
+      "optionExplanations": [
+        "Correct. Quorum writes plus monotonic revisions survive failover.",
+        "That server is a single point of failure, and a failover loses the lock.",
+        "Redlock still depends on timing assumptions and gives no fencing token.",
+        "Fine for efficiency locks; async failover can hand the lock to two owners."
+      ]
+    }
+  ]
+}

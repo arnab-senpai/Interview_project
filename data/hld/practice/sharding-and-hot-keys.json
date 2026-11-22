@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "sharding-and-hot-keys",
+  "flashcards": [
+    {
+      "id": "fc-shard-1",
+      "topicId": "sharding-and-hot-keys",
+      "layer": 4,
+      "difficulty": "Senior",
+      "front": "How does key salting cure a celebrity hot-key partition without breaking reads?",
+      "back": "Append a bounded random suffix (`celebrity_id#0..N-1`) to spread writes across N shards. Reads either fan out across all N salted keys and merge or route through a short-TTL read cache.",
+      "tags": ["DDIA Ch. 6", "Sharding", "Hot Keys"]
+    },
+    {
+      "id": "fc-shard-2",
+      "topicId": "sharding-and-hot-keys",
+      "layer": 4,
+      "difficulty": "Senior",
+      "front": "What is the key trade-off between hash partitioning and key-range partitioning?",
+      "back": "Hash partitioning distributes writes evenly and avoids hot spots caused by monotonic timestamps, whereas range partitioning keeps adjacent keys sorted for fast range scans at the risk of hot tail partitions.",
+      "tags": ["DDIA Ch. 6", "Hash vs Range", "Partitioning"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-shard-1",
+      "topicId": "sharding-and-hot-keys",
+      "layer": 4,
+      "difficulty": "Senior",
+      "scenario": "A likes_counter table is hash-sharded by post_id across 32 shards. Shard 14 hits 100% CPU whenever a pop star posts.",
+      "question": "Which change fixes the single-shard write hotspot?",
+      "options": [
+        "Switch post_id to range partitioning instead of hashing",
+        "Raise the shard count from 32 to 256 shards",
+        "Add read replicas for shard 14 to take some of the load",
+        "Salt the hot key into sub-keys and sum the counts on read"
+      ],
+      "correctIndex": 3,
+      "explanation": "Every like for that post shares one key, so it always hashes to one shard. Split the hot key into sub-keys (post_id#0..15) so writes spread across shards, and sum them on read or keep the total in a cache.",
+      "optionExplanations": [
+        "A single post_id still lands in a single range.",
+        "More shards still send one key to one shard.",
+        "Replicas help reads; these are writes, which still go to the primary.",
+        "Correct. Writes for one post now spread across several shards."
+      ]
+    },
+    {
+      "id": "q-shard-2",
+      "topicId": "sharding-and-hot-keys",
+      "layer": 4,
+      "difficulty": "Senior",
+      "scenario": "Your team shards an audit log by day, using created_at ranges such as DAY_2026_11_17.",
+      "question": "What bottleneck appears as traffic grows?",
+      "options": [
+        "Queries by time range can no longer use any index",
+        "All current writes land on the newest day's shard",
+        "Old shards fill up and must be split again every day",
+        "Rows for one user end up on many shards, slowing writes"
+      ],
+      "correctIndex": 1,
+      "explanation": "With time-range partitioning, all new writes go to the newest partition while older ones sit idle. Prefixing the key with a hash bucket, or hashing within each time range, spreads current writes while still allowing time-bounded queries.",
+      "optionExplanations": [
+        "Time-range queries are exactly what this layout makes easy.",
+        "Correct. The newest partition takes every insert.",
+        "Old shards stop receiving writes, so they do not keep growing.",
+        "Spreading one user's rows mostly affects reads, not this write hotspot."
+      ]
+    }
+  ]
+}

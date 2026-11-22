@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "idempotency-and-circuit-breakers",
+  "flashcards": [
+    {
+      "id": "fc-idemp-1",
+      "topicId": "idempotency-and-circuit-breakers",
+      "layer": 7,
+      "difficulty": "Mid",
+      "front": "How does an HTTP `Idempotency-Key` ledger safely handle concurrent retries?",
+      "back": "Store `UNIQUE(merchant_id, idempotency_key)` alongside a request payload hash and serialized response: an `IN_PROGRESS` row returns `409 Conflict`, payload mismatches return `422`, and a `COMPLETED` row replays the saved response without re-executing side effects.",
+      "tags": ["DDIA Ch. 8", "Idempotency", "API Reliability"]
+    },
+    {
+      "id": "fc-idemp-2",
+      "topicId": "idempotency-and-circuit-breakers",
+      "layer": 7,
+      "difficulty": "Senior",
+      "front": "Why must exponential backoff retries always add full jitter and pair with a Circuit Breaker?",
+      "back": "Unjittered retries synchronize into a thundering herd that locks a recovering service at 100% load. Adding jitter spreads retry waves, while an open Circuit Breaker fails fast in <1ms so worker thread pools don't exhaust.",
+      "tags": ["Resilience", "Circuit Breaker", "Backoff Jitter"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-idemp-1",
+      "topicId": "idempotency-and-circuit-breakers",
+      "layer": 7,
+      "difficulty": "Mid",
+      "scenario": "A flaky network makes a client send two identical POST /v1/charges requests 120 ms apart with the same Idempotency-Key: k-99. The first is still running.",
+      "question": "How should the server answer the second request?",
+      "options": [
+        "Return 200 with an empty body so the client stops retrying",
+        "Return 422 because the key was already used once before",
+        "Return 409 Conflict because the key is still in progress",
+        "Run the charge again since no response has been saved yet"
+      ],
+      "correctIndex": 2,
+      "explanation": "The first request claimed the key with status IN_PROGRESS. A duplicate that arrives meanwhile should get 409 Conflict (or wait briefly for the result) so the charge never runs twice. Once the first finishes, duplicates replay the saved response.",
+      "optionExplanations": [
+        "An empty success hides the real outcome from the client.",
+        "422 is for the same key with a different payload; this payload matches.",
+        "Correct. The in-flight claim blocks a second execution.",
+        "That double-charges the customer, which the key exists to prevent."
+      ]
+    },
+    {
+      "id": "q-idemp-2",
+      "topicId": "idempotency-and-circuit-breakers",
+      "layer": 7,
+      "difficulty": "Senior",
+      "scenario": "A fraud-score dependency slows from 20 ms to 4,000 ms. Checkout threads pile up on 5-second timeouts and Checkout falls over.",
+      "question": "Which combination stops the cascade fastest?",
+      "options": [
+        "More Checkout replicas so more threads are available overall",
+        "A per-dependency bulkhead plus a breaker that fails fast",
+        "Retry fraud calls with fixed backoff of one second each time",
+        "A 60-second timeout with three retries on each fraud call"
+      ],
+      "correctIndex": 1,
+      "explanation": "Bulkheads give each dependency its own capped pool so one slow call cannot take every thread. A circuit breaker opens on slow calls or errors, fails fast to a fallback, and in half-open lets a few trial requests through before closing. Shorter timeouts help too.",
+      "optionExplanations": [
+        "New replicas fill up with blocked threads just as quickly.",
+        "Correct. Threads stay free and the slow service gets room to recover.",
+        "Fixed backoff synchronizes retries and still waits on a slow dependency.",
+        "Longer waits and more retries tie up even more threads."
+      ]
+    }
+  ]
+}

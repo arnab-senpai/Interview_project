@@ -3,7 +3,7 @@
   "tier": 3,
   "title": "Design a Multi-Versioned Billing & Payment API",
   "subtitle": "Zero-downtime rolling microservices, Protobuf/Avro schema evolution, Idempotency & Contract DLQs",
-  "levelTag": "L5-L6",
+  "levelTag": "Senior",
   "estimatedMinutes": 45,
   "tags": ["Protobuf", "Schema Registry", "Design by Contract", "Idempotency", "DLQ"],
   "functionalReqs": [
@@ -64,7 +64,7 @@
     "layer": 6,
     "title": "Contract-First Multi-Version Billing Pipeline",
     "subtitle": "Date-Pinned Edge Adapter -> Canonical Protobuf gRPC -> Schema Registry -> DLQ",
-    "difficulty": "L5-L6",
+    "difficulty": "Senior",
     "estimatedMinutes": 20,
     "overview": "How Stripe-scale billing platforms decouple external legacy API versions from rapidly evolving internal Protobuf/Avro services.",
     "keyTakeaways": [

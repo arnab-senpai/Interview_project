@@ -5,7 +5,7 @@
   "layer": 4,
   "title": "Database Sharding, Resharding & Hot-Key Mitigation",
   "subtitle": "Range vs Hash partitioning, key salting & directory routers",
-  "difficulty": "L5-L6",
+  "difficulty": "Senior",
   "estimatedMinutes": 20,
   "overview": "When data outgrows one machine's disk, memory, or write IOPS, you split tables horizontally into shards (partitions). Picking the wrong shard key creates hot spots where one shard melts at 100% CPU while seven other shards sit mostly idle—and cross-shard joins become slow scatter-gather headaches.",
   "firstPrinciplesStory": "You partition your social posts table by `created_at` date range so recent feeds stay fast. Every day at midnight, 100% of new writes hit ONE shard—today's date shard—while yesterday's 15 shards handle almost zero writes! Switching to `hash(author_id)` balances writes nicely, until a viral celebrity tweets and 40,000 reads/sec hammer Shard #3 alone. Sharding is as much about skew mitigation and secondary indexes as raw data volume.",

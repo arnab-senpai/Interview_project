@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "api-gateway-500k-ingestion",
+  "flashcards": [
+    {
+      "id": "fc-gw-1",
+      "topicId": "api-gateway-500k-ingestion",
+      "layer": 2,
+      "difficulty": "Senior",
+      "front": "If 1 page request fans out in parallel to K=20 backend shards with p99 = 40ms each, what % of page loads hit >40ms tail latency?",
+      "back": "`1 - (0.99)^20 = ~18.2%`! Parallel scatter-gather fan-out amplifies tail-latency impact linearly with fan-out factor unless mitigated by hedged requests and shard deadlines.",
+      "tags": ["DDIA Ch. 1", "Tail Latency", "p99 Math"]
+    },
+    {
+      "id": "fc-gw-2",
+      "topicId": "api-gateway-500k-ingestion",
+      "layer": 2,
+      "difficulty": "Senior",
+      "front": "How does Shuffle Sharding improve multi-tenant blast radius isolation over standard partitioning?",
+      "back": "Mapping each tenant to a random subset of K=2 cells out of M=16 pools yields 120 virtual combinations (`M choose K`), ensuring a single toxic tenant saturates <8% of overlap with healthy customers.",
+      "tags": ["TPP Orthogonality", "Cells", "Blast Radius"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-gw-1",
+      "topicId": "api-gateway-500k-ingestion",
+      "layer": 2,
+      "difficulty": "Senior",
+      "scenario": "Your gateway fans every dashboard call out to 25 services in parallel. Each has a p99 of 45 ms.",
+      "question": "Roughly what share of dashboard calls exceed 45 ms, and what reduces it?",
+      "options": [
+        "About 1%, since each service is slow only 1% of the time",
+        "About 22%; add deadlines and hedge idempotent calls past p95",
+        "About 22%; lowering every timeout to 45 ms removes it",
+        "About 25%; adding more replicas per service removes it"
+      ],
+      "correctIndex": 1,
+      "explanation": "A call is slow if any of the 25 parallel calls is slow: 1 - 0.99^25 is about 22%. Per-call deadlines and hedged requests (sending a second copy of idempotent calls after roughly the p95 latency, within a retry budget) cut the tail.",
+      "optionExplanations": [
+        "That ignores that any one of 25 slow calls slows the whole request.",
+        "Correct. Fan-out multiplies tail probability.",
+        "Hard 45 ms timeouts turn slow calls into errors instead of answers.",
+        "The estimate is close, but replicas alone do not cut tail latency."
+      ]
+    },
+    {
+      "id": "q-gw-2",
+      "topicId": "api-gateway-500k-ingestion",
+      "layer": 2,
+      "difficulty": "Senior",
+      "scenario": "A traffic spike triples gateway ingress from 500k to 1.5M requests per second, and downstream queues grow past their delay target.",
+      "question": "What protects the p99 of high-priority traffic?",
+      "options": [
+        "Queue every request until downstream capacity catches up",
+        "Retry failed requests immediately at the gateway",
+        "Shed low-priority requests early with 429 and a jittered retry",
+        "Raise downstream timeouts so fewer requests fail outright"
+      ],
+      "correctIndex": 2,
+      "explanation": "Once demand exceeds capacity, queues only add delay. Shed low-priority requests early with 429 and Retry-After (with jitter), using queue delay (as in CoDel) or concurrency limits from Little's Law to decide when, so admitted requests still meet the SLA.",
+      "optionExplanations": [
+        "Long queues mean every request misses its deadline.",
+        "Immediate retries add load at the worst possible moment.",
+        "Correct. Admitted traffic stays inside the latency target.",
+        "Longer timeouts hold more resources and slow recovery."
+      ]
+    }
+  ]
+}

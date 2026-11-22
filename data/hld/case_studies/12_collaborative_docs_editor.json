@@ -3,7 +3,7 @@
   "tier": 5,
   "title": "Design Collaborative Real-Time Editing (Docs / Figma)",
   "subtitle": "Multi-leader CRDT state-vector sync, offline local-first queue, Read-Your-Writes & Consistent Hashing",
-  "levelTag": "L6-L7",
+  "levelTag": "Staff",
   "estimatedMinutes": 50,
   "tags": ["CRDT", "Multi-Leader", "Consistent Hashing", "Offline Sync", "WebSocket"],
   "functionalReqs": [
@@ -64,7 +64,7 @@
     "layer": 5,
     "title": "Global CRDT Multi-Leader Collaboration Mesh",
     "subtitle": "Offline Client CRDT -> Consistent-Hashed WS Hub -> Kafka Cross-Region -> LSM Op-Log",
-    "difficulty": "L6-L7",
+    "difficulty": "Staff",
     "estimatedMinutes": 24,
     "overview": "How collaborative tools guarantee lock-free offline editing and deterministic cross-region convergence without single-leader round-trip bottlenecks.",
     "keyTakeaways": [

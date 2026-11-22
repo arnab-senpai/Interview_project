@@ -5,14 +5,14 @@
   "layer": 7,
   "title": "Enterprise RAG Pipeline & LLM Gateway",
   "subtitle": "Semantic caching, ACL-filtered hybrid retrieval, reranking & SLM fallback",
-  "difficulty": "L5-L6",
+  "difficulty": "Senior",
   "estimatedMinutes": 22,
   "overview": "Modern 2025–2026 GenAI system design blends deterministic security boundaries (RBAC/ACL enforcement, TPM rate limits, PII guardrails) with probabilistic retrieval and hardware-constrained GPU inference. A production RAG pipeline enforces permissions BEFORE retrieval, fuses BM25 + HNSW vector search, reranks top candidates, and streams tokens via SSE.",
   "firstPrinciplesStory": "You plug an LLM straight into company docs using naive vector search. On day one, two serious bugs surface: an intern asks about executive compensation and the LLM leaks restricted HR chunks filtered out *too late*; then a search for error code `ERR_9914_TIMEOUT` fails completely because pure cosine embeddings miss exact alphanumeric strings! Treating retrieval, ACLs, semantic caching, and GPU inference as a composable deterministic-plus-probabilistic pipeline (DDIA Ch. 12 unbundled derived views!) turns a fragile demo into a trustworthy system.",
   "adaptiveLenses": {
     "intuition": "Think of Enterprise RAG like an open-book exam with a strict security librarian: before the smart analyst (LLM) sees a single page, the librarian verifies your badge (ACL pre-filter), pulls exact keyword matches AND conceptual matches (BM25 + Vector), checks a sticky note of recently verified identical questions (Semantic Cache), and trims 50 pages down to the best 6 before writing a cited reply.",
     "mechanics": "AI Gateway runs fast PII/injection guardrails and reserves dual RPM+TPM quotas in Redis. ACL-hashed semantic cache short-circuits repeats; otherwise dense HNSW + sparse BM25 retrieve with mandatory `acl IN user_groups` pre-filter, fused via Reciprocal Rank Fusion (RRF), pruned by a Cross-Encoder Reranker, and streamed via SSE from a continuous-batching vLLM cluster.",
-    "staffTradeoffs": "Keep probabilistic LLMs strictly outside deterministic state boundaries: never let unvalidated LLM output mutate permissions or skip ACL pre-filters. Balance TTFT (<400ms) vs recall by capping reranker candidates (top 50 -> top 6) and maintaining a quantized 8B SLM fallback for GPU KV-cache overload."
+    "staffTradeoffs": "Keep probabilistic LLMs strictly outside deterministic state boundaries: never let unvalidated LLM output mutate permissions or skip ACL pre-filters. Balance TTFT (the 500 ms interactive budget) vs recall by capping reranker candidates (top 50 -> top 6) and maintaining a quantized 8B SLM fallback for GPU KV-cache overload."
   },
   "ddiaAnchors": [
     {
@@ -143,7 +143,7 @@
       "payloadSize": "6.1 KB",
       "payloadInspector": "QueryVec[1536] | ScopeFilter: acl_hash=9a21f -> max_sim=0.84 -> MISS",
       "latencyDeltaMs": 8.0,
-      "inspectorNote": "Scoping semantic cache by ACL hash guarantees confidential HR/finance answers never leak to unauthorized employees."
+      "inspectorNote": "Scoping the semantic cache by ACL hash keeps confidential HR/finance answers away from other groups, as long as the hash changes when a user's group membership changes (see the ACL revocation scenario)."
     },
     {
       "stepNo": 3,
@@ -162,7 +162,7 @@
       "predictPrompt": {
         "prompt": "Why does enforcing ACL permissions inside the vector/BM25 query (`acl IN user_groups`) matter far more than filtering unauthorized results *after* retrieving top-10 matches?",
         "hint": "What happens if all top-10 semantic matches belong to an executive HR folder the caller cannot read?",
-        "reveal": "Post-filtering leaves 0 allowed chunks (empty recall failure!) AND risks leaking confidential snippets into logs, caches, or prompt windows. Pre-filtering inside the index guarantees both security isolation and full top-K permitted recall."
+        "reveal": "Post-filtering can leave 0 allowed chunks (empty recall failure!) AND risks leaking confidential snippets into logs, caches, or prompt windows. Pre-filtering inside the index guarantees both security isolation and full top-K permitted recall."
       }
     },
     {
@@ -234,6 +234,46 @@
           "payloadInspector": "Model: llama-3-8b-fp8-fallback | x-degraded-mode: slm-fast-path | ttft_ms: 190",
           "latencyDeltaMs": 140.0,
           "inspectorNote": "Grounded with top reranked chunks, a smaller SLM still gives accurate cited answers at 1/8th GPU memory."
+        }
+      ]
+    },
+    {
+      "id": "acl-revocation-semantic-cache",
+      "title": "Access Revoked While Answers Sit in the Semantic Cache",
+      "faultType": "cache_expiry",
+      "targetNodeId": "semantic-cache",
+      "triggerSummary": "HR removes eng_42 from the comp-review group at 10:00. A cached answer built from comp-review documents still matches eng_42's old ACL hash.",
+      "mitigationSummary": "Include an ACL version (acl_epoch) in the cache scope and bump it through CDC on every membership change; tag entries with source doc ids and purge them when those documents' ACLs change.",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. STALE ACL SCOPE STILL MATCHES",
+          "timestampMs": 0.0,
+          "sourceNodeId": "ai-gateway",
+          "targetNodeId": "semantic-cache",
+          "edgeId": "e-gw-sc",
+          "category": "cache_hit",
+          "protocol": "RESP3",
+          "info": "eng_42 asks about comp bands at 10:05 -> cache scope acl_hash=9a21f (pre-revocation) -> HIT, answer leaks",
+          "payloadSize": "6.1 KB",
+          "payloadInspector": "ScopeFilter: acl_hash=9a21f | entry sources: [doc:comp-bands-2026] | cached 09:40 -> served",
+          "latencyDeltaMs": 8.0,
+          "inspectorNote": "Retrieval pre-filters were correct; the cache answered without ever reaching them. A hash of group names alone does not change when membership is revoked mid-session."
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "2. ACL EPOCH IN THE CACHE KEY",
+          "timestampMs": 8.0,
+          "sourceNodeId": "ai-gateway",
+          "targetNodeId": "semantic-cache",
+          "edgeId": "e-gw-sc",
+          "category": "cache_miss",
+          "protocol": "RESP3",
+          "info": "Membership change -> CDC bumps eng_42 acl_epoch 17 -> 18 -> old entries no longer match -> MISS -> fresh retrieval",
+          "payloadSize": "6.1 KB",
+          "payloadInspector": "ScopeFilter: acl_hash=9a21f, acl_epoch=18 -> 0 candidates | purge doc:comp-bands-2026 entries on its next ACL change",
+          "latencyDeltaMs": 8.0,
+          "inspectorNote": "Permission changes must reach every derived store (vector index, BM25 index, semantic cache) through the same change stream, or the fastest path becomes the leakiest."
         }
       ]
     }

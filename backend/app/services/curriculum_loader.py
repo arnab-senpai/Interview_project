@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from backend.app.core.config import DATA_DIR, HLD_DIR, ROOT_DIR
+from backend.app.core.config import DATA_DIR, HLD_DIR, PRACTICE_DIR, ROOT_DIR
 from backend.app.schemas.hld import (
     CurriculumIndex,
     FlashcardsAndQuizzesBundle,
@@ -15,12 +15,27 @@ from backend.app.schemas.hld import (
     HldExplorerLesson,
     HldModulesBundle,
     PatternsBundle,
+    PracticeTopicFile,
     ReferenceNumbersAndRubric,
 )
 
 
 def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_practice_bundle(practice_dir: Path) -> FlashcardsAndQuizzesBundle:
+    """Merge the per-topic practice files (flashcards + quizzes) into one bundle."""
+    flashcards = []
+    quizzes = []
+    for path in sorted(practice_dir.glob("*.json")):
+        topic_file = PracticeTopicFile.model_validate(_read_json(path))
+        for item in [*topic_file.flashcards, *topic_file.quizzes]:
+            if item.topic_id != topic_file.topic_id:
+                raise ValueError(f"{path.name}: item {item.id} has topicId {item.topic_id}")
+        flashcards.extend(topic_file.flashcards)
+        quizzes.extend(topic_file.quizzes)
+    return FlashcardsAndQuizzesBundle(version="2.0.0", flashcards=flashcards, quizzes=quizzes)
 
 
 class CurriculumStore:
@@ -33,9 +48,7 @@ class CurriculumStore:
             _read_json(HLD_DIR / "reference_numbers_and_rubric.json")
         )
         self.patterns = PatternsBundle.model_validate(_read_json(HLD_DIR / "patterns.json"))
-        self.fq_bundle = FlashcardsAndQuizzesBundle.model_validate(
-            _read_json(HLD_DIR / "flashcards_and_quizzes.json")
-        )
+        self.fq_bundle = load_practice_bundle(PRACTICE_DIR)
         self.foundations: dict[str, Any] = _read_json(
             HLD_DIR / "ddia_and_pragmatic_foundations.json"
         )
