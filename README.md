@@ -40,25 +40,62 @@ An interactive, blueprint-styled engineering learning studio for **High-Level De
 
 ## Running Locally
 
-### 1. Backend API (FastAPI + SQLite)
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r backend/requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload --port 8000
+You need **Python 3.10 or newer** (CI uses 3.12), **Node.js 20 or newer** with npm, and Git.
+
+### 1. Clone
+```bash
+git clone https://github.com/arnab-senpai/Interview_project.git
+cd Interview_project
 ```
 
-### 2. Frontend Dev Server (React + Vite + TypeScript)
+### 2. Backend (FastAPI + SQLite)
+macOS / Linux:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r backend/requirements.txt
+```
+Windows (PowerShell):
 ```powershell
-npm --prefix frontend install
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1   # if blocked: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+python -m pip install -r backend/requirements.txt
+```
+
+### 3. Local settings
+Nothing is required for local development: without `SYSTEMCRAFT_JWT_SECRET` the backend creates `backend/.jwt_secret` on first start, and the default CORS list already covers the Vite dev server. To see the reviewer Feedback view, make your username an admin. Set it in the same terminal that runs the backend (the app does not read a `.env` file).
+
+macOS / Linux:
+```bash
+export SYSTEMCRAFT_ADMIN_USERNAMES=yourname
+```
+Windows (PowerShell):
+```powershell
+$env:SYSTEMCRAFT_ADMIN_USERNAMES = "yourname"
+```
+
+### 4. Run the backend
+```bash
+python -m uvicorn backend.app.main:app --reload --port 8000
+```
+On first start it creates the SQLite database at `backend/systemcraft.db` (WAL mode, so you will also see `-wal` and `-shm` files). Delete those three files to start from an empty database. Check it is up at `http://127.0.0.1:8000/api/health`.
+
+### 5. Run the frontend (second terminal)
+```bash
+npm --prefix frontend ci
 npm --prefix frontend run dev
 ```
-Open `http://localhost:5173` (Vite proxies `/api/*` directly to FastAPI on port `8000`).
+Open `http://localhost:5173`. Vite proxies `/api/*` to FastAPI on port `8000`.
 
-### 3. Single-Server Production Mode (FastAPI serves built Vite bundle)
-```powershell
+### 6. Create your account
+The app opens on the sign-in screen. Choose the **Create Account** tab, and use the username you put in `SYSTEMCRAFT_ADMIN_USERNAMES` (3–32 characters, password at least 6). A **Feedback** item appears in the nav for admins.
+
+### Single-server mode (FastAPI serves the built frontend)
+```bash
 npm --prefix frontend run build
-.\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 ```
+Open `http://127.0.0.1:8000`.
 
 ## Alpha Deployment (internal VM)
 
@@ -77,7 +114,9 @@ Reviewers flag problems with the flag button on lesson steps, lenses, case study
 
 ## Verification Tests
 
-```powershell
+With the virtual environment active:
+```bash
 python backend/scripts/validate_content.py
-.\.venv\Scripts\python.exe -m pytest -v
+npm --prefix frontend run build   # one test checks that FastAPI serves frontend/dist
+python -m pytest -v
 ```
