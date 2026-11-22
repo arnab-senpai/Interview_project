@@ -21,7 +21,6 @@ import {
   Play,
   RotateCcw,
   SkipForward,
-  Sparkles,
   X,
 } from "lucide-react";
 import type { HldModuleItem, LessonIndexItem, TopicProgress } from "../api/client";
@@ -30,7 +29,6 @@ import { renderInlineCode, truncateText } from "../utils/format";
 import { computeTopologyTelemetry, formatCompactRps } from "../utils/telemetry";
 import { DeepDiveDrawer } from "./DeepDiveDrawer";
 import { IsometricCanvas, type PlaybackState } from "./IsometricCanvas";
-import { NebulaCanvas3D } from "./NebulaCanvas3D";
 import { NotesDrawer } from "./NotesDrawer";
 import { TraceWaterfallDrawer } from "./TraceWaterfallDrawer";
 
@@ -78,7 +76,7 @@ const LENS_META = [
 const SPEED_OPTIONS = [0.5, 1, 2] as const;
 
 /**
- * Full-bleed Spatial 3D Architecture Lab with frosted glass HUD controls,
+ * Full-bleed architecture lab with frosted glass HUD controls,
  * live QPS-reactive Three.js particle physics, and progressive-disclosure drawers.
  */
 export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
@@ -89,7 +87,6 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
   linkedModule = null,
   loadingLesson,
   progressByTopic,
-  theme = "dark",
   showLeftPane = false,
   showRightPane = true,
   showBottomPane = true,
@@ -103,7 +100,7 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
 }) => {
   const [catFilter, setCatFilter] = useState<"all" | "core" | "patterns_ai">("all");
   const [showPlanned, setShowPlanned] = useState(false);
-  const [viewMode, setViewMode] = useState<"nebula" | "iso" | "sequence">("nebula");
+  const [viewMode, setViewMode] = useState<"iso" | "sequence">("iso");
   const [playbackState, setPlaybackState] = useState<PlaybackState>("idle");
   const [activeStepIdx, setActiveStepIdx] = useState<number>(-1);
   const [flightProgress, setFlightProgress] = useState<number>(0);
@@ -129,6 +126,8 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
   const [showHint, setShowHint] = useState<Record<string, boolean>>({});
 
   const rafRef = useRef<number | null>(null);
+  const progressRef = useRef<number>(0);
+  progressRef.current = flightProgress;
   const lastTickRef = useRef<number | null>(null);
 
   const isLeftDrawerOpen = onToggleLeftPane ? showLeftPane : internalLeftOpen;
@@ -193,6 +192,9 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
 
     const stepDurationMs = 1250 / speed;
 
+    // Side effects live in the tick itself, never inside a state updater: React
+    // StrictMode double-invokes updaters, which previously spawned an extra RAF
+    // loop every frame (playback crawled) and double-counted progress events.
     const tick = (now: number) => {
       if (lastTickRef.current === null) {
         lastTickRef.current = now;
@@ -200,32 +202,37 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
       const dt = now - lastTickRef.current;
       lastTickRef.current = now;
 
-      setFlightProgress((prev) => {
-        const next = prev + dt / stepDurationMs;
-        if (next < 1) {
-          rafRef.current = requestAnimationFrame(tick);
-          return next;
-        }
+      const next = progressRef.current + dt / stepDurationMs;
+      if (next < 1) {
+        progressRef.current = next;
+        setFlightProgress(next);
+        rafRef.current = requestAnimationFrame(tick);
+        return;
+      }
 
-        markLessonProgress(activeStepIdx);
+      rafRef.current = null;
+      markLessonProgress(activeStepIdx);
 
-        if (singleShotTarget && playbackState === "paused") {
-          setSingleShotTarget(false);
-          if (activeStepIdx >= steps.length - 1) {
-            setPlaybackState("completed");
-          }
-          return 1;
-        }
-
-        if (activeStepIdx < steps.length - 1) {
-          setActiveStepIdx((idx) => idx + 1);
-          rafRef.current = requestAnimationFrame(tick);
-          return 0;
-        } else {
+      if (singleShotTarget && playbackState === "paused") {
+        progressRef.current = 1;
+        setFlightProgress(1);
+        setSingleShotTarget(false);
+        if (activeStepIdx >= steps.length - 1) {
           setPlaybackState("completed");
-          return 1;
         }
-      });
+        return;
+      }
+
+      if (activeStepIdx < steps.length - 1) {
+        // The effect re-runs on the new step index and starts the next hop.
+        progressRef.current = 0;
+        setFlightProgress(0);
+        setActiveStepIdx(activeStepIdx + 1);
+      } else {
+        progressRef.current = 1;
+        setFlightProgress(1);
+        setPlaybackState("completed");
+      }
     };
 
     rafRef.current = requestAnimationFrame(tick);
@@ -462,7 +469,7 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
 
   return (
     <div className="spatial-lab-shell">
-      {/* LAYER 0: FULL-BLEED 3D OR 2D/SEQ ARCHITECTURE STAGE */}
+      {/* LAYER 0: diagram or sequence stage */}
       <div
         style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column" }}
         onClick={() => {
@@ -472,30 +479,8 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
       >
         {loadingLesson || !activeLesson ? (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }} className="mono">
-            Initializing 3D spatial topology...
+            Loading lesson…
           </div>
-        ) : viewMode === "nebula" ? (
-          <NebulaCanvas3D
-            nodes={activeLesson.nodes}
-            edges={activeLesson.edges}
-            steps={steps}
-            activeStepIndex={activeStepIdx}
-            playbackState={playbackState}
-            flightProgress={flightProgress}
-            selectedNodeId={selectedNodeId}
-            faultNodeId={activeChaos?.targetNodeId ?? null}
-            theme={theme}
-            loadFactor={qpsLoad}
-            nodeUtilization={telemetry.nodeUtilization}
-            hudRightInsetPx={effectiveRightCardVisible ? 316 : 0}
-            hudBottomInsetPx={effectiveTraceOpen ? 230 : 30}
-            onSelectNode={(nid) => {
-              setSelectedNodeId(nid);
-              setRightInspectNode(true);
-              setRightCardCollapsed(false);
-            }}
-            onSelectStep={handleJumpToStep}
-          />
         ) : (
           <div
             style={{
@@ -519,6 +504,7 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
               selectedNodeId={selectedNodeId}
               faultNodeId={activeChaos?.targetNodeId ?? null}
               viewMode={viewMode === "iso" ? "network" : "sequence"}
+              nodeUtilization={telemetry.nodeUtilization}
               onSelectNode={(nid) => {
                 setSelectedNodeId(nid);
                 setRightInspectNode(true);
@@ -546,7 +532,7 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
           zIndex: 25,
         }}
       >
-        {/* TOP-LEFT: Breadcrumb Capsule + Chaos Fault Pill + Compact 3D/2D/Seq Switcher */}
+        {/* TOP-LEFT: Breadcrumb Capsule + Chaos Fault Pill + view switcher */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", pointerEvents: "auto", position: "relative" }}>
           <div className="hud-glass-pill" style={{ paddingRight: standaloneMode ? 8 : 13 }}>
             <button
@@ -715,26 +701,19 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
             </div>
           )}
 
-          {/* Compact 3D / 2D / Seq Mode Pill (Accessible fallback) */}
+          {/* Diagram / Sequence view switcher */}
           <div className="hud-segmented hud-glass-pill" style={{ padding: "3px 4px", minHeight: 34 }}>
-            <button
-              onClick={() => setViewMode("nebula")}
-              className={`hud-seg-btn ${viewMode === "nebula" ? "active" : ""}`}
-            >
-              <Sparkles size={10} style={{ marginRight: 4, verticalAlign: -1 }} />
-              3D
-            </button>
             <button
               onClick={() => setViewMode("iso")}
               className={`hud-seg-btn ${viewMode === "iso" ? "active" : ""}`}
             >
-              2D
+              Diagram
             </button>
             <button
               onClick={() => setViewMode("sequence")}
               className={`hud-seg-btn ${viewMode === "sequence" ? "active" : ""}`}
             >
-              Seq
+              Sequence
             </button>
           </div>
         </div>
@@ -1571,7 +1550,7 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
             </button>
           )}
 
-          {/* Live QPS Load Slider Driving 3D Particle Physics & Node Heatmaps */}
+          {/* Live QPS Load Slider driving node utilization */}
           <div
             style={{
               display: "flex",

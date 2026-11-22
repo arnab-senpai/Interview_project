@@ -30,7 +30,6 @@ import {
   type UserProfile,
 } from "./api/client";
 import { AccountModal } from "./components/AccountModal";
-import { AmbientNebulaMist } from "./components/AmbientNebulaMist";
 import { AuthPortalModal } from "./components/AuthPortalModal";
 import { CapacityLabView, type CapacityPresetInput } from "./components/CapacityLabView";
 import { CaseStudiesView } from "./components/CaseStudiesView";
@@ -233,7 +232,6 @@ export function App() {
 
   return (
     <>
-      <AmbientNebulaMist theme={theme} />
       <div className="app-shell">
         {/* Studio 1 Frosted Glass Command Top Bar */}
         <header className="top-bar">
@@ -243,8 +241,8 @@ export function App() {
                 <Box size={18} strokeWidth={1.9} />
               </div>
               <div>
-                <div className="brand-title">SYSTEMCRAFT</div>
-                <div className="brand-sub">3D NEBULA ARCHITECTURE STUDIO</div>
+                <div className="brand-title">SystemCraft</div>
+                <div className="brand-sub">System design, practised</div>
               </div>
             </div>
 
@@ -265,7 +263,7 @@ export function App() {
                         transition={{ type: "spring", stiffness: 440, damping: 32 }}
                       />
                     )}
-                    <Icon size={12} /> {item.label}
+                    <Icon size={14} strokeWidth={1.8} /> <span className="nav-label">{item.label}</span>
                   </button>
                 );
               })}
@@ -330,7 +328,9 @@ export function App() {
                 title="Streak Settings & Personal API Tokens"
                 style={{ padding: "0 8px" }}
               >
-                <span>{streak?.todayActions ?? 0}/{streak?.dailyGoal ?? 3}</span>
+                <span>
+                  {Math.min(streak?.todayActions ?? 0, streak?.dailyGoal ?? 3)}/{streak?.dailyGoal ?? 3}
+                </span>
               </button>
             )}
           </div>
@@ -344,7 +344,7 @@ export function App() {
 
         {!overview ? (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }} className="mono">
-            Initializing SystemCraft 3D Nebula Studio...
+            Loading your workspace…
           </div>
         ) : (
           <AnimatePresence mode="wait">
@@ -519,7 +519,7 @@ export function App() {
           >
             <div onClick={(e) => e.stopPropagation()} className="card" style={{ width: "min(440px, 92vw)", padding: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <span className="mono" style={{ fontWeight: 700, fontSize: 13 }}>KEYBOARD SHORTCUTS</span>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>Keyboard shortcuts</span>
                 <button className="icon-btn" onClick={() => setShortcutsOpen(false)}><X size={13} /></button>
               </div>
               <table className="spec-table">

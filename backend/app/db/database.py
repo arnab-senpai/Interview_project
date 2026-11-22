@@ -356,6 +356,14 @@ def upsert_lesson_progress(
     now = utc_now_iso()
     steps = sorted(set(completed_steps))
     with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT status, completed_steps_json FROM lesson_progress WHERE user_id = ? AND topic_id = ?",
+            (user_id, topic_id),
+        ).fetchone()
+        prev_steps = set(json.loads(existing["completed_steps_json"])) if existing else set()
+        # Only real progress counts toward the daily goal: a new step or a status change.
+        # Replays and repeated saves of the same state must not inflate the streak counter.
+        advanced = existing is None or existing["status"] != status or not set(steps) <= prev_steps
         conn.execute(
             """
             INSERT INTO lesson_progress (user_id, topic_id, kind, status, completed_steps_json, active_lens, updated_at)
@@ -369,7 +377,8 @@ def upsert_lesson_progress(
             """,
             (user_id, topic_id, kind, status, json.dumps(steps), active_lens, now),
         )
-    record_daily_activity(user_id, "lesson")
+    if advanced:
+        record_daily_activity(user_id, "lesson")
     return {
         "topicId": topic_id,
         "kind": kind,

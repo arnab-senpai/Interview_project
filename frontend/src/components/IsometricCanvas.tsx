@@ -14,25 +14,42 @@ interface IsometricCanvasProps {
   selectedNodeId: string | null;
   faultNodeId?: string | null;
   viewMode: "network" | "sequence";
+  nodeUtilization?: Record<string, number>;
   onSelectNode: (nodeId: string) => void;
   onSelectStep: (stepIndex: number) => void;
 }
 
+// Category colours are referenced through CSS variables so both themes stay legible.
 const CATEGORY_COLORS: Record<StepCategory, string> = {
-  network: "#2563eb",
-  cache_hit: "#0f9f6e",
-  cache_miss: "#d97706",
-  read: "#1d4ed8",
-  write: "#6d28d9",
-  async: "#0891b2",
-  consensus: "#4f46e5",
-  failover: "#dc2626",
-  llm: "#7c3aed",
+  network: "var(--flow-network)",
+  cache_hit: "var(--flow-hit)",
+  cache_miss: "var(--flow-miss)",
+  read: "var(--flow-read)",
+  write: "var(--flow-write)",
+  async: "var(--flow-async)",
+  consensus: "var(--flow-consensus)",
+  failover: "var(--flow-failover)",
+  llm: "var(--flow-llm)",
 };
 
+const CATEGORY_KEYS = Object.keys(CATEGORY_COLORS) as StepCategory[];
+
+/** Smooth start and stop so a hop reads as "travel", not a linear slide. */
+function easeInOutCubic(t: number): number {
+  const c = Math.max(0, Math.min(1, t));
+  return c < 0.5 ? 4 * c * c * c : 1 - Math.pow(-2 * c + 2, 3) / 2;
+}
+
+function utilColor(u: number): string {
+  if (u >= 0.85) return "var(--danger)";
+  if (u >= 0.65) return "var(--warn)";
+  return "var(--success)";
+}
+
 function isoProject(gx: number, gy: number): { x: number; y: number } {
-  const tileW = 54;
-  const tileH = 30;
+  // Wider tiles than before so labels have room and never collide with neighbours
+  const tileW = 60;
+  const tileH = 34;
   const x = (gx - gy) * tileW + 410;
   const y = (gx + gy) * tileH + 78;
   return { x, y };
@@ -242,6 +259,7 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
   selectedNodeId,
   faultNodeId,
   viewMode,
+  nodeUtilization,
   onSelectNode,
   onSelectStep,
 }) => {
@@ -306,8 +324,8 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
       minY = Math.min(minY, p.y);
       maxY = Math.max(maxY, p.y);
     }
-    const padX = 140;
-    const padY = 95;
+    const padX = 110;
+    const padY = 80;
     return `${minX - padX} ${minY - padY} ${Math.max(540, maxX - minX + padX * 2)} ${Math.max(300, maxY - minY + padY * 2)}`;
   }, [nodes]);
 
@@ -455,22 +473,41 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
     );
   }
 
-  let activePacketOverlay: React.ReactNode = null;
-
   // NETWORK ISOMETRIC TOPOLOGY VIEW
+  const easedProgress = easeInOutCubic(flightProgress);
+  const traversedEdgeIds = new Set<string>();
+  if (isFlowActive) {
+    const upto = playbackState === "completed" ? steps.length : activeStepIndex;
+    for (let i = 0; i < upto; i++) {
+      const eid = steps[i]?.edgeId;
+      if (eid) traversedEdgeIds.add(eid);
+    }
+  }
+
+  let activePacketOverlay: React.ReactNode = null;
+  let arrivalPulse: React.ReactNode = null;
+
   return (
-    <div style={{ flex: 1, position: "relative", overflow: "hidden" }} className="blueprint-grid">
-      <svg viewBox={viewBox} width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
+    <div style={{ flex: 1, position: "relative", overflow: "hidden" }} className="flow-canvas">
+      <svg viewBox={viewBox} width="100%" height="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Architecture request flow diagram">
         <defs>
-          <marker id="arrow-muted" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
-            <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="var(--border)" />
+          <marker id="arrow-muted" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto">
+            <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="var(--edge-strong)" />
           </marker>
-          <marker id="arrow-active" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-            <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--accent)" />
+          <marker id="arrow-trail" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto">
+            <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="var(--accent)" />
           </marker>
+          {CATEGORY_KEYS.map((k) => (
+            <marker key={k} id={`arrow-${k}`} viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M 0 1 L 10 5 L 0 9 z" fill={CATEGORY_COLORS[k]} />
+            </marker>
+          ))}
+          <filter id="pkt-glow" x="-100%" y="-100%" width="300%" height="300%">
+            <feGaussianBlur stdDeviation="3.2" />
+          </filter>
         </defs>
 
-        {/* Padded, non-overlapping edges */}
+        {/* Edges: visible base wire, accent trail for hops already taken, live flow on the active hop */}
         {edges.map((edge) => {
           const p1 = projected.get(edge.from);
           const p2 = projected.get(edge.to);
@@ -478,42 +515,118 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
 
           const isActiveEdge = isFlowActive && activeStep?.edgeId === edge.id;
           const reverseDirection = isActiveEdge && activeStep?.sourceNodeId === edge.to;
+          const wasTraversed = traversedEdgeIds.has(edge.id);
 
           const rawStart = reverseDirection ? p2 : p1;
           const rawEnd = reverseDirection ? p1 : p2;
           const { sx, sy, tx, ty, nx, ny } = clipSegment(rawStart.x, rawStart.y, rawEnd.x, rawEnd.y, 44, 46);
-
-          const color = isActiveEdge
-            ? CATEGORY_COLORS[activeStep!.category] ?? "var(--accent)"
-            : "var(--border)";
+          const isAsync = edge.transport === "async";
 
           if (isActiveEdge && activeStep) {
-            const pktX = sx + (tx - sx) * flightProgress;
-            const pktY = sy + (ty - sy) * flightProgress;
-            const midX = (sx + tx) / 2 + nx * 18;
-            const midY = (sy + ty) / 2 + ny * 18 - 10;
+            const color = CATEGORY_COLORS[activeStep.category] ?? "var(--accent)";
+            const pktX = sx + (tx - sx) * easedProgress;
+            const pktY = sy + (ty - sy) * easedProgress;
+            const tailT = Math.max(0, easedProgress - 0.24);
+            const tailX = sx + (tx - sx) * tailT;
+            const tailY = sy + (ty - sy) * tailT;
+            const midX = (sx + tx) / 2 + nx * 26;
+            const midY = (sy + ty) / 2 + ny * 26 - 10;
             const pillLabel = `${activeStep.protocol} · +${activeStep.latencyDeltaMs}ms`;
-            const pillWidth = Math.max(96, pillLabel.length * 6.5 + 16);
+            const pillWidth = Math.max(104, pillLabel.length * 6.4 + 40);
+            // A hop is a "response" when it retraces an earlier hop in the opposite direction
+            const isResponse = steps
+              .slice(0, activeStepIndex)
+              .some((st) => st.sourceNodeId === activeStep.targetNodeId && st.targetNodeId === activeStep.sourceNodeId);
+            const inFlight = flightProgress > 0 && flightProgress < 1;
 
             activePacketOverlay = (
-              <g className="packet-overlay-layer" style={{ pointerEvents: "none" }}>
-                <circle cx={pktX} cy={pktY} r={11} fill={color} opacity={0.2} />
-                <circle cx={pktX} cy={pktY} r={5.2} fill={color} stroke="var(--bg-surface)" strokeWidth={1.6} />
-                <g transform={`translate(${midX}, ${midY})`}>
+              <g style={{ pointerEvents: "none" }}>
+                {inFlight && (
+                  <>
+                    <line
+                      x1={tailX}
+                      y1={tailY}
+                      x2={pktX}
+                      y2={pktY}
+                      stroke={color}
+                      strokeWidth={4}
+                      strokeLinecap="round"
+                      opacity={0.35}
+                    />
+                    <circle cx={pktX} cy={pktY} r={9} fill={color} opacity={0.45} filter="url(#pkt-glow)" />
+                    {isResponse ? (
+                      <rect
+                        x={pktX - 5}
+                        y={pktY - 5}
+                        width={10}
+                        height={10}
+                        rx={2.5}
+                        fill="var(--bg-surface-solid)"
+                        stroke={color}
+                        strokeWidth={2.2}
+                      />
+                    ) : (
+                      <circle cx={pktX} cy={pktY} r={5.5} fill={color} stroke="var(--bg-surface-solid)" strokeWidth={2} />
+                    )}
+                  </>
+                )}
+                <g transform={`translate(${midX}, ${midY})`} className="flow-pill">
                   <rect
                     x={-pillWidth / 2}
-                    y={-11}
+                    y={-12}
                     width={pillWidth}
-                    height={20}
-                    rx={4}
-                    fill="var(--bg-surface)"
+                    height={24}
+                    rx={12}
+                    fill="var(--bg-surface-solid)"
                     stroke={color}
-                    strokeWidth={1.3}
+                    strokeWidth={1.2}
                   />
-                  <text x={0} y={2.5} textAnchor="middle" fontSize="9.5" fontWeight="700" className="mono" fill={color}>
+                  <circle cx={-pillWidth / 2 + 13} cy={0} r={8} fill={color} />
+                  <text x={-pillWidth / 2 + 13} y={3.2} textAnchor="middle" fontSize="9" fontWeight="700" fill="var(--bg-surface-solid)" className="mono">
+                    {activeStepIndex + 1}
+                  </text>
+                  <text x={10} y={3.6} textAnchor="middle" fontSize="10" fontWeight="600" className="mono" fill="var(--ink-primary)">
                     {pillLabel}
                   </text>
                 </g>
+              </g>
+            );
+
+            // Receiving node "catches" the packet: a single ring that expands and fades on arrival
+            if (flightProgress >= 0.82 && flightProgress < 1) {
+              const target = projected.get(activeStep.targetNodeId);
+              if (target) {
+                const t = (flightProgress - 0.82) / 0.18;
+                arrivalPulse = (
+                  <ellipse
+                    cx={target.x}
+                    cy={target.y + 16}
+                    rx={30 + t * 22}
+                    ry={11 + t * 8}
+                    fill="none"
+                    stroke={color}
+                    strokeWidth={2}
+                    opacity={0.7 * (1 - t)}
+                    style={{ pointerEvents: "none" }}
+                  />
+                );
+              }
+            }
+
+            return (
+              <g key={edge.id}>
+                <line x1={sx} y1={sy} x2={tx} y2={ty} stroke={color} strokeWidth={6} opacity={0.12} strokeLinecap="round" />
+                <line
+                  x1={sx}
+                  y1={sy}
+                  x2={tx}
+                  y2={ty}
+                  stroke={color}
+                  strokeWidth={2}
+                  strokeDasharray="7 6"
+                  className="flow-dash"
+                  markerEnd={`url(#arrow-${activeStep.category})`}
+                />
               </g>
             );
           }
@@ -525,17 +638,21 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
                 y1={sy}
                 x2={tx}
                 y2={ty}
-                stroke={color}
-                strokeWidth={isActiveEdge ? 2.4 : 1.3}
-                strokeDasharray={isActiveEdge ? "6 4" : edge.transport === "async" ? "4 4" : "5 4"}
-                markerEnd={isActiveEdge ? "url(#arrow-active)" : "url(#arrow-muted)"}
-                opacity={isActiveEdge ? 1 : 0.72}
+                stroke={wasTraversed ? "var(--accent)" : "var(--edge-strong)"}
+                strokeWidth={wasTraversed ? 1.8 : 1.4}
+                strokeDasharray={isAsync ? "4 5" : undefined}
+                strokeLinecap="round"
+                markerEnd={wasTraversed ? "url(#arrow-trail)" : "url(#arrow-muted)"}
+                opacity={wasTraversed ? 0.7 : isFlowActive ? 0.55 : 0.9}
+                style={{ transition: "stroke 300ms ease, opacity 300ms ease" }}
               />
             </g>
           );
         })}
 
-        {/* Isometric Infrastructure Nodes */}
+        {arrivalPulse}
+
+        {/* Isometric infrastructure nodes */}
         {nodes.map((node) => {
           const pt = projected.get(node.id);
           if (!pt) return null;
@@ -544,86 +661,107 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
             (activeStep?.sourceNodeId === node.id || activeStep?.targetNodeId === node.id);
           const isSelected = selectedNodeId === node.id;
           const isFaulted = faultNodeId === node.id;
+          const isDimmed = isFlowActive && !isEndpoint && !isSelected && !isFaulted;
           const lbl = labelOffsets.get(node.id) ?? { dx: 0, dy: 38, anchor: "middle" as const };
           const completedClient = playbackState === "completed" && node.kind === "client";
+          const util = nodeUtilization?.[node.id];
 
           return (
             <g
               key={node.id}
               transform={`translate(${pt.x}, ${pt.y})`}
               onClick={() => onSelectNode(node.id)}
-              style={{ cursor: "pointer" }}
+              className={`iso-node ${isDimmed ? "dimmed" : ""}`}
+              role="button"
+              tabIndex={0}
+              aria-label={`${node.label}, ${node.sublabel}`}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelectNode(node.id);
+                }
+              }}
             >
-              {(isSelected || isEndpoint) && (
+              {(isSelected || isEndpoint || isFaulted) && (
                 <ellipse
                   cx={0}
-                  cy={16}
-                  rx={38}
+                  cy={17}
+                  rx={40}
                   ry={15}
-                  fill="none"
+                  fill={isFaulted ? "var(--danger-bg)" : "var(--accent-soft)"}
                   stroke={isFaulted ? "var(--danger)" : "var(--accent)"}
-                  strokeWidth={1.4}
-                  strokeDasharray="3 3"
-                  opacity={0.75}
+                  strokeWidth={1.2}
+                  opacity={isSelected || isFaulted ? 1 : 0.75}
                 />
               )}
 
-              <IsometricNodeGlyph
-                kind={node.kind}
-                active={isSelected || isEndpoint}
-                faulted={isFaulted}
-                completedClient={completedClient}
-              />
+              <g className="iso-glyph">
+                <IsometricNodeGlyph
+                  kind={node.kind}
+                  active={isSelected || isEndpoint}
+                  faulted={isFaulted}
+                  completedClient={completedClient}
+                />
+              </g>
 
               {isFaulted && (
-                <g transform="translate(24, -30)">
-                  <rect x={-18} y={-8} width={40} height={14} rx={3} fill="var(--danger)" />
-                  <text x={2} y={2} textAnchor="middle" fontSize="8" fontWeight="700" className="mono" fill="#fff">
+                <g transform="translate(26, -32)">
+                  <rect x={-20} y={-9} width={44} height={17} rx={8.5} fill="var(--danger)" />
+                  <text x={2} y={3} textAnchor="middle" fontSize="8.5" fontWeight="700" className="mono" fill="#fff">
                     FAULT
                   </text>
                 </g>
               )}
 
-              {/* Label with crisp opaque halo so wires never cut legibility */}
               {(() => {
                 const labelText = truncateText(node.label, 30);
                 const subText = truncateText(node.sublabel, 32);
-                const boxW = Math.max(144, Math.max(labelText.length * 6.5, subText.length * 5.6) + 18);
-                const boxX =
-                  lbl.anchor === "start" ? -8 : lbl.anchor === "end" ? -boxW + 8 : -boxW / 2;
+                const boxW = Math.max(96, Math.max(labelText.length * 6.3, subText.length * 5.5) + 20);
+                const boxX = lbl.anchor === "start" ? -8 : lbl.anchor === "end" ? -boxW + 8 : -boxW / 2;
+                const showUtil = typeof util === "number" && util > 0;
+                const boxH = showUtil ? 38 : 32;
+                const highlighted = isSelected || isEndpoint;
                 return (
                   <g transform={`translate(${lbl.dx}, ${lbl.dy})`}>
                     <title>{`${node.label} — ${node.sublabel}`}</title>
                     <rect
                       x={boxX}
-                      y={-12}
+                      y={-14}
                       width={boxW}
-                      height={28}
-                      rx={4}
-                      fill="var(--bg-surface)"
-                      opacity={0.92}
+                      height={boxH}
+                      rx={7}
+                      fill="var(--bg-surface-solid)"
+                      stroke={highlighted ? "var(--accent)" : "var(--border)"}
+                      strokeWidth={1}
                     />
                     <text
                       x={0}
                       y={0}
                       textAnchor={lbl.anchor}
-                      fontSize="10.5"
-                      fontWeight="700"
-                      className="mono"
-                      fill={isSelected || isEndpoint ? "var(--accent)" : "var(--ink-primary)"}
+                      fontSize="11"
+                      fontWeight="600"
+                      fill={highlighted ? "var(--accent)" : "var(--ink-primary)"}
+                      style={{ fontFamily: "var(--font-sans)" }}
                     >
                       {labelText}
                     </text>
-                    <text
-                      x={0}
-                      y={12}
-                      textAnchor={lbl.anchor}
-                      fontSize="9"
-                      className="mono"
-                      fill="var(--ink-muted)"
-                    >
+                    <text x={0} y={12} textAnchor={lbl.anchor} fontSize="9" className="mono" fill="var(--ink-muted)">
                       {subText}
                     </text>
+                    {showUtil && (
+                      <g transform={`translate(${boxX + 10}, 18)`}>
+                        <rect x={0} y={0} width={boxW - 20} height={2.5} rx={1.25} fill="var(--border-soft)" />
+                        <rect
+                          x={0}
+                          y={0}
+                          width={(boxW - 20) * Math.min(1, util!)}
+                          height={2.5}
+                          rx={1.25}
+                          fill={utilColor(util!)}
+                          style={{ transition: "width 400ms ease" }}
+                        />
+                      </g>
+                    )}
                   </g>
                 );
               })()}
@@ -631,9 +769,15 @@ export const IsometricCanvas: React.FC<IsometricCanvasProps> = ({
           );
         })}
 
-        {/* Active packet & callout rendered ABOVE nodes so never hidden underneath */}
+        {/* Packet and hop label render above nodes so they are never hidden */}
         {activePacketOverlay}
       </svg>
+
+      <div className="flow-legend" aria-hidden="true">
+        <span><i className="lg-dot" /> request</span>
+        <span><i className="lg-square" /> response</span>
+        <span><i className="lg-dash" /> async</span>
+      </div>
     </div>
   );
 };

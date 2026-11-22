@@ -9,7 +9,6 @@ import {
   Layers,
   LayoutGrid,
   Play,
-  Sparkles,
 } from "lucide-react";
 import type {
   CaseStudyIndexItem,
@@ -23,11 +22,7 @@ import type {
 } from "../api/client";
 import { truncateText } from "../utils/format";
 import { FullRoadmapDrawer, type RoadmapStageDef } from "./FullRoadmapDrawer";
-import {
-  RoadmapUniverse3D,
-  type UniverseConstellationNode,
-  type UniverseLink,
-} from "./RoadmapUniverse3D";
+import { RoadmapPath, type PathStop } from "./RoadmapPath";
 
 interface RoadmapViewProps {
   layers: LayerMeta[];
@@ -89,16 +84,13 @@ const STAGES: RoadmapStageDef[] = [
   },
 ];
 
-const MODULE_VISUALS: Record<
-  number,
-  { shortLabel: string; shapeKind: UniverseConstellationNode["shapeKind"] }
-> = {
-  1: { shortLabel: "Foundations", shapeKind: "dodecahedron" },
-  2: { shortLabel: "Storage LSM", shapeKind: "cylinder" },
-  3: { shortLabel: "Contracts", shapeKind: "octahedron" },
-  4: { shortLabel: "Replication", shapeKind: "cluster" },
-  5: { shortLabel: "Consensus", shapeKind: "icosahedron" },
-  6: { shortLabel: "Streaming & AI", shapeKind: "box" },
+const MODULE_VISUALS: Record<number, { shortLabel: string }> = {
+  1: { shortLabel: "Foundations" },
+  2: { shortLabel: "Storage engines" },
+  3: { shortLabel: "Contracts" },
+  4: { shortLabel: "Replication" },
+  5: { shortLabel: "Consensus" },
+  6: { shortLabel: "Streaming & AI" },
 };
 
 // Ensures ready lessons/cases outside explicit module links still surface inside natural modules
@@ -140,7 +132,6 @@ export const RoadmapView: React.FC<RoadmapViewProps> = ({
   progressByTopic,
   summary,
   streak,
-  theme = "dark",
   onStartLesson,
   onOpenCaseStudy,
   onOpenCapacityLab,
@@ -148,7 +139,6 @@ export const RoadmapView: React.FC<RoadmapViewProps> = ({
   onOpenPractice,
 }) => {
   const [universeScope, setUniverseScope] = useState<"modules" | "cases">("modules");
-  const [displayMode, setDisplayMode] = useState<"3d" | "2d">("3d");
   const [fullIndexOpen, setFullIndexOpen] = useState(false);
 
   const readyLessons = useMemo(
@@ -262,82 +252,34 @@ export const RoadmapView: React.FC<RoadmapViewProps> = ({
     }
   }, [readyCases, selectedCaseId]);
 
-  // Build 3D orbital nodes + links for active universe scope
-  const { universeNodes, universeLinks } = useMemo(() => {
+  // Ordered learning-path stops for the active scope
+  const pathStops: PathStop[] = useMemo(() => {
     if (universeScope === "modules") {
-      const total = Math.max(1, moduleClusters.length);
-      const nodes: UniverseConstellationNode[] = moduleClusters.map((mod, idx) => {
-        const angle = (idx / total) * Math.PI * 2 - Math.PI * 0.68;
-        const x = Math.cos(angle) * 4.35;
-        const z = Math.sin(angle) * 2.85;
-        const y = Math.sin(idx * 1.15) * 0.34;
-        const vis = MODULE_VISUALS[mod.moduleNumber];
-        return {
-          id: mod.id,
-          code: `M${mod.moduleNumber}`,
-          shortLabel: vis?.shortLabel ?? mod.shortLabel,
-          subtitle: `${mod.completedCount}/${mod.lessonItems.length} lessons · ${mod.caseItems.length} cases`,
-          status: mod.status,
-          position: [x, y, z],
-          satelliteCount: mod.lessonItems.length,
-          shapeKind: vis?.shapeKind ?? "cluster",
-        };
-      });
-      const links: UniverseLink[] = moduleClusters.map((mod, idx) => ({
-        fromId: mod.id,
-        toId: moduleClusters[(idx + 1) % moduleClusters.length].id,
+      return moduleClusters.map((mod) => ({
+        id: mod.id,
+        code: String(mod.moduleNumber),
+        title: mod.title.replace(/^Module\s+\d+:\s*/i, ""),
+        subtitle: `${mod.lessonItems.length} lessons · ${mod.caseItems.length} case ${mod.caseItems.length === 1 ? "study" : "studies"}`,
+        status: mod.status,
+        done: mod.completedCount,
+        total: mod.lessonItems.length,
       }));
-      return { universeNodes: nodes, universeLinks: links };
     }
-
-    // Case Studies dual-ring orbital layout (Inner Ring: Tiers 1-2, Outer Ring: Tiers 3-5)
-    const innerCases = readyCases.filter((c) => c.tier <= 2);
-    const outerCases = readyCases.filter((c) => c.tier > 2);
-    const shapeByTier: Record<number, UniverseConstellationNode["shapeKind"]> = {
-      1: "dodecahedron",
-      2: "octahedron",
-      3: "cylinder",
-      4: "cluster",
-      5: "icosahedron",
-    };
-    const nodes: UniverseConstellationNode[] = [];
-    innerCases.forEach((c, idx) => {
-      const a = (idx / Math.max(1, innerCases.length)) * Math.PI * 2 - Math.PI * 0.25;
-      const prog = progressByTopic[c.id]?.status;
-      nodes.push({
-        id: c.id,
-        code: `T${c.tier}`,
-        shortLabel: truncateText(c.title.replace(/^Design\s+(?:an?\s+)?/i, ""), 18),
-        subtitle: c.levelTag,
-        status: prog === "completed" ? "completed" : prog === "in_progress" ? "in_progress" : "not_started",
-        position: [Math.cos(a) * 2.3, 0.72, Math.sin(a) * 1.55],
-        satelliteCount: Math.min(3, c.tags.length),
-        shapeKind: shapeByTier[c.tier] ?? "octahedron",
+    return [...readyCases]
+      .sort((a, b) => a.tier - b.tier)
+      .map((c) => {
+        const prog = progressByTopic[c.id]?.status;
+        return {
+          id: c.id,
+          code: `T${c.tier}`,
+          title: c.title,
+          subtitle: `${c.levelTag} · ${c.tags.slice(0, 3).join(" · ")}`,
+          status: prog === "completed" ? "completed" : prog === "in_progress" ? "in_progress" : "not_started",
+          done: prog === "completed" ? 1 : 0,
+          total: 0,
+          group: `Tier ${c.tier}`,
+        } as PathStop;
       });
-    });
-    outerCases.forEach((c, idx) => {
-      const a = (idx / Math.max(1, outerCases.length)) * Math.PI * 2 - Math.PI * 0.45;
-      const prog = progressByTopic[c.id]?.status;
-      nodes.push({
-        id: c.id,
-        code: `T${c.tier}`,
-        shortLabel: truncateText(c.title.replace(/^Design\s+(?:an?\s+)?/i, ""), 18),
-        subtitle: c.levelTag,
-        status: prog === "completed" ? "completed" : prog === "in_progress" ? "in_progress" : "not_started",
-        position: [Math.cos(a) * 5.05, -0.42, Math.sin(a) * 3.45],
-        satelliteCount: Math.min(3, c.tags.length),
-        shapeKind: shapeByTier[c.tier] ?? "cluster",
-      });
-    });
-
-    const links: UniverseLink[] = [];
-    for (let i = 0; i < innerCases.length; i++) {
-      links.push({ fromId: innerCases[i].id, toId: innerCases[(i + 1) % innerCases.length].id });
-    }
-    for (let i = 0; i < outerCases.length; i++) {
-      links.push({ fromId: outerCases[i].id, toId: outerCases[(i + 1) % outerCases.length].id });
-    }
-    return { universeNodes: nodes, universeLinks: links };
   }, [universeScope, moduleClusters, readyCases, progressByTopic]);
 
   const activeModule =
@@ -371,7 +313,7 @@ export const RoadmapView: React.FC<RoadmapViewProps> = ({
 
   return (
     <div className="roadmap-bento-grid">
-      {/* LEFT FOCAL ZONE: Interactive 3D HLD Universe Bento Stage */}
+      {/* LEFT: learning path */}
       <div
         className="hud-glass-card"
         style={{
@@ -382,80 +324,50 @@ export const RoadmapView: React.FC<RoadmapViewProps> = ({
           flexDirection: "column",
         }}
       >
-        <RoadmapUniverse3D
-          nodes={universeNodes}
-          links={universeLinks}
-          selectedId={universeScope === "modules" ? selectedModuleId : selectedCaseId}
-          theme={theme}
-          displayMode={displayMode}
-          onSelectNode={(id) => {
-            if (universeScope === "modules") setSelectedModuleId(id);
-            else setSelectedCaseId(id);
-          }}
-        />
-
-        {/* Floating Top HUD Strip Inside 3D Universe Card */}
-        <div
-          style={{
-            position: "absolute",
-            top: 14,
-            left: 14,
-            right: 14,
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 8,
-            flexWrap: "wrap",
-            pointerEvents: "none",
-            zIndex: 12,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", pointerEvents: "auto" }}>
-            <div className="hud-glass-pill mono" style={{ fontSize: 11, fontWeight: 700 }}>
-              <Sparkles size={13} color="var(--accent)" />
-              <span>3D HLD UNIVERSE</span>
-            </div>
-
+        <div className="path-header">
+          <div>
+            <h2 className="section-title">Your learning path</h2>
+            <p className="section-sub">
+              {universeScope === "modules"
+                ? "Six modules, in order. Each builds on the one before."
+                : "Interview-style case studies, from warm-up to staff-level."}
+            </p>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <div className="hud-segmented hud-glass-pill" style={{ padding: "3px 4px", minHeight: 34 }}>
               <button
                 onClick={() => setUniverseScope("modules")}
                 className={`hud-seg-btn ${universeScope === "modules" ? "active" : ""}`}
               >
-                Modules (1–6)
+                Modules
               </button>
               <button
                 onClick={() => setUniverseScope("cases")}
                 className={`hud-seg-btn ${universeScope === "cases" ? "active" : ""}`}
               >
-                Case Studies ({readyCases.length})
+                Case studies · {readyCases.length}
               </button>
             </div>
-
             <button
               onClick={() => setFullIndexOpen(true)}
-              className="hud-glass-pill mono"
-              style={{ fontSize: 11, fontWeight: 600, cursor: "pointer" }}
-              title="Browse full Stage 1–4 catalog and upcoming Track 2/3 tracks"
+              className="hud-glass-pill"
+              style={{ fontSize: 12.5, fontWeight: 500, cursor: "pointer" }}
+              title="Browse the full catalog, including upcoming LLD and Coding tracks"
             >
-              <LayoutGrid size={12} color="var(--accent)" />
-              <span>Full Index</span>
+              <LayoutGrid size={13} color="var(--accent)" />
+              <span>Full index</span>
             </button>
           </div>
-
-          <div className="hud-segmented hud-glass-pill" style={{ padding: "3px 4px", minHeight: 34, pointerEvents: "auto" }}>
-            <button
-              onClick={() => setDisplayMode("3d")}
-              className={`hud-seg-btn ${displayMode === "3d" ? "active" : ""}`}
-            >
-              3D
-            </button>
-            <button
-              onClick={() => setDisplayMode("2d")}
-              className={`hud-seg-btn ${displayMode === "2d" ? "active" : ""}`}
-            >
-              2D Grid
-            </button>
-          </div>
+        </div>
+        <div className="path-scroll">
+          <RoadmapPath
+            stops={pathStops}
+            selectedId={universeScope === "modules" ? selectedModuleId : selectedCaseId}
+            onSelect={(id) => {
+              if (universeScope === "modules") setSelectedModuleId(id);
+              else setSelectedCaseId(id);
+            }}
+          />
         </div>
       </div>
 
@@ -598,7 +510,7 @@ export const RoadmapView: React.FC<RoadmapViewProps> = ({
                   {activeCase.title}
                 </h2>
                 <p style={{ fontSize: 12.5, lineHeight: 1.55, color: "var(--ink-secondary)", margin: "10px 0 12px" }}>
-                  Inspect end-to-end functional/NFR contracts, back-of-the-envelope capacity estimates, interactive 3D request flows, and a 100-point Staff rubric.
+                  Inspect end-to-end functional/NFR contracts, back-of-the-envelope capacity estimates, step-by-step request flows, and a 100-point Staff rubric.
                 </p>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: "auto" }}>
                   {activeCase.tags.map((tag) => (
@@ -607,7 +519,7 @@ export const RoadmapView: React.FC<RoadmapViewProps> = ({
                 </div>
                 <div style={{ display: "flex", gap: 8, marginTop: 14, paddingTop: 10, borderTop: "1px solid var(--border-soft)" }}>
                   <button className="btn-primary" style={{ flex: 1 }} onClick={() => onOpenCaseStudy(activeCase.id)}>
-                    <Layers size={13} /> Launch 3D Case Study →
+                    <Layers size={13} /> Open case study →
                   </button>
                 </div>
               </>
@@ -655,7 +567,7 @@ export const RoadmapView: React.FC<RoadmapViewProps> = ({
                     <Flame size={15} color="#fbbf24" /> {streak?.currentStreak ?? 0}d
                   </span>
                   <span style={{ fontSize: 11, color: "var(--ink-muted)", fontWeight: 600 }}>
-                    Goal {streak?.todayActions ?? 0}/{streak?.dailyGoal ?? 3}
+                    Goal {Math.min(streak?.todayActions ?? 0, streak?.dailyGoal ?? 3)}/{streak?.dailyGoal ?? 3}
                   </span>
                 </div>
                 <div className="mono" style={{ fontSize: 10.5, color: "var(--ink-secondary)", marginTop: 2 }}>
