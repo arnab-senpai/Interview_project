@@ -309,12 +309,12 @@ export function App() {
               aria-label="Open study profile, streak and API tokens"
               title={currentUser?.isGuest ? "Sign in / Personalize workspace" : "Account, Streak & Study Tokens"}
               style={{
-                borderColor: currentUser && !currentUser.isGuest ? "rgba(56, 189, 248, 0.48)" : undefined,
+                borderColor: currentUser && !currentUser.isGuest ? "color-mix(in srgb, var(--accent) 48%, transparent)" : undefined,
                 background: currentUser && !currentUser.isGuest ? "var(--accent-soft)" : undefined,
               }}
             >
-              <Flame size={12} color="#fbbf24" />
-              <span style={{ fontWeight: 700 }}>{streak?.currentStreak ?? 0}d</span>
+              <Flame size={12} color="var(--highlight)" />
+              <span className="streak-hand">{streak?.currentStreak ?? 0}d</span>
               <span style={{ opacity: 0.45 }}>|</span>
               <User size={12} />
               <span>{currentUser && !currentUser.isGuest ? currentUser.displayName : "Sign In"}</span>

@@ -97,22 +97,21 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
               gridTemplateColumns: "minmax(280px, 1.02fr) minmax(320px, 0.98fr)",
               borderRadius: 16,
               overflow: "hidden",
-              border: "1px solid rgba(56, 189, 248, 0.28)",
+              border: "1px solid var(--border)",
               background: "var(--bg-surface-solid)",
-              boxShadow: "0 28px 80px rgba(0, 0, 0, 0.65), 0 0 42px rgba(99, 102, 241, 0.22)",
+              boxShadow: "var(--shadow-md)",
             }}
           >
-            {/* Left Studio 1 Atmospheric Nebula showcase */}
+            {/* Left: product summary panel */}
             <div
               style={{
                 padding: "30px 28px",
-                background:
-                  "radial-gradient(circle at 20% 20%, rgba(56, 189, 248, 0.28), transparent 55%), radial-gradient(circle at 82% 84%, rgba(168, 85, 247, 0.34), transparent 58%), linear-gradient(155deg, #070d22 0%, #0d1536 52%, #130f2e 100%)",
-                color: "#f8fafc",
+                background: "var(--bg-subtle)",
+                color: "var(--ink-primary)",
                 display: "flex",
                 flexDirection: "column",
                 justifyContent: "space-between",
-                borderRight: "1px solid rgba(148, 163, 184, 0.14)",
+                borderRight: "1px solid var(--border)",
               }}
             >
               <div>
@@ -124,8 +123,8 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
                     <div className="mono" style={{ fontSize: 13.5, fontWeight: 700, letterSpacing: "0.08em" }}>
                       SYSTEMCRAFT STUDIO
                     </div>
-                    <div className="mono" style={{ fontSize: 9.5, color: "#38bdf8", letterSpacing: "0.09em" }}>
-                      3D NEBULA ARCHITECTURE WORKBENCH
+                    <div className="mono" style={{ fontSize: 9.5, color: "var(--accent)", letterSpacing: "0.09em" }}>
+                      SYSTEM DESIGN, PRACTISED
                     </div>
                   </div>
                 </div>
@@ -133,16 +132,16 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
                 <h2 className="mono" style={{ margin: "0 0 10px", fontSize: 21, lineHeight: 1.3 }}>
                   Your Personal Distributed Systems Lab
                 </h2>
-                <p style={{ margin: 0, fontSize: 13, color: "#cbd5e1", lineHeight: 1.6 }}>
+                <p style={{ margin: 0, fontSize: 13, color: "var(--ink-secondary)", lineHeight: 1.6 }}>
                   Sign in with an isolated JWT study profile to track daily momentum, build spaced-repetition mastery, and keep searchable Markdown architecture notes per lesson.
                 </p>
 
                 <div style={{ display: "grid", gap: 10, marginTop: 22 }}>
                   {[
-                    { icon: Flame, color: "#34d399", label: "Daily Study Streak & 12-Week Heatmap" },
-                    { icon: BookOpen, color: "#38bdf8", label: "Topic-Linked Markdown Study Vault" },
-                    { icon: KeyRound, color: "#c084fc", label: "Personal sc_live_* Study API Tokens" },
-                    { icon: Layers, color: "#60a5fa", label: "16 3D Interactive Lessons · 8 Case Studies" },
+                    { icon: Flame, color: "var(--highlight)", label: "Daily Study Streak & 12-Week Heatmap" },
+                    { icon: BookOpen, color: "var(--accent)", label: "Topic-Linked Markdown Study Vault" },
+                    { icon: KeyRound, color: "var(--purple)", label: "Personal sc_live_* Study API Tokens" },
+                    { icon: Layers, color: "var(--accent)", label: "16 Interactive Lessons · 8 Case Studies" },
                   ].map((item) => {
                     const Icon = item.icon;
                     return (
@@ -154,10 +153,10 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
                           gap: 10,
                           padding: "8px 11px",
                           borderRadius: 8,
-                          background: "rgba(15, 23, 42, 0.55)",
-                          border: "1px solid rgba(148, 163, 184, 0.14)",
+                          background: "var(--bg-surface)",
+                          border: "1px solid var(--border)",
                           fontSize: 12,
-                          color: "#e2e8f0",
+                          color: "var(--ink-primary)",
                         }}
                       >
                         <Icon size={14} color={item.color} />
@@ -168,8 +167,8 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
                 </div>
               </div>
 
-              <div className="mono" style={{ fontSize: 10.5, color: "#94a3b8", display: "flex", alignItems: "center", gap: 6, marginTop: 18 }}>
-                <ShieldCheck size={13} color="#38bdf8" />
+              <div className="mono" style={{ fontSize: 10.5, color: "var(--ink-muted)", display: "flex", alignItems: "center", gap: 6, marginTop: 18 }}>
+                <ShieldCheck size={13} color="var(--accent)" />
                 <span>HS256 JWT Sessions · scrypt Salted Local Auth</span>
               </div>
             </div>

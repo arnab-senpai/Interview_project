@@ -4,6 +4,8 @@ import App from "./App";
 import "@fontsource-variable/inter";
 import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/600.css";
+import "@fontsource/kalam/latin-400.css";
+import "@fontsource/kalam/latin-700.css";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

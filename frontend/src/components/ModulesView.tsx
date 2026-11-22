@@ -217,7 +217,7 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
                       type="button"
                       disabled={!meta?.ready}
                       className="btn-secondary"
-                      style={{ fontSize: 11, padding: "4px 10px", borderColor: "rgba(56, 189, 248, 0.4)" }}
+                      style={{ fontSize: 11, padding: "4px 10px", borderColor: "color-mix(in srgb, var(--accent) 40%, transparent)" }}
                       onClick={() => onOpenTopic(cid)}
                     >
                       <Layers size={12} /> {meta?.title ?? cid}
