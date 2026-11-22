@@ -17,6 +17,7 @@ import type { HldCaseStudy } from "../types/hld";
 import { humanizeKey, renderInlineCode } from "../utils/format";
 import { ExplorerWorkspace } from "./ExplorerWorkspace";
 import { NotesDrawer } from "./NotesDrawer";
+import { ReportIssueButton } from "./ReportIssueButton";
 
 interface CaseStudiesViewProps {
   caseStudiesIndex: CaseStudyIndexItem[];
@@ -266,6 +267,12 @@ export const CaseStudiesView: React.FC<CaseStudiesViewProps> = ({
                 </div>
                 <h1 className="mono" style={{ margin: "2px 0", fontSize: 18 }}>{caseStudy.title}</h1>
                 <div style={{ fontSize: 12.5, color: "var(--ink-secondary)" }}>{caseStudy.subtitle}</div>
+                <ReportIssueButton
+                  topicId={caseStudy.id}
+                  blockId={tab === "topology" ? "topology" : `section:${tab}`}
+                  blockLabel={`${tab} section`}
+                  compact={false}
+                />
               </div>
 
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -384,7 +391,10 @@ export const CaseStudiesView: React.FC<CaseStudiesViewProps> = ({
                     <div className="mono" style={{ fontSize: 12, fontWeight: 700 }}>SENIOR / STAFF DEEP DIVES</div>
                     {caseStudy.deepDives.map((dd, i) => (
                       <div key={i} className="card">
-                        <h3 className="mono" style={{ margin: "0 0 6px", fontSize: 14, color: "var(--accent)" }}>{dd.title}</h3>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 6 }}>
+                          <h3 className="mono" style={{ margin: "0 0 6px", fontSize: 14, color: "var(--accent)" }}>{dd.title}</h3>
+                          <ReportIssueButton topicId={caseStudy.id} blockId={`deepDive:${i}`} blockLabel={`Deep dive: ${dd.title}`} />
+                        </div>
                         <div style={{ fontSize: 12.5, marginBottom: 5 }}>
                           <strong style={{ color: "var(--danger)" }}>Bottleneck:</strong> {renderInlineCode(dd.bottleneck)}
                         </div>

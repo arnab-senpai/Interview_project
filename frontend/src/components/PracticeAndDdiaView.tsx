@@ -3,6 +3,7 @@ import { BookMarked, CheckCircle2, Compass, Layers, RotateCw, XCircle } from "lu
 import { api, type FlashcardWithSm2, type QuizAnswerResult, type QuizWithAttempt } from "../api/client";
 import type { PatternPlaybook } from "../types/hld";
 import { humanizeKey, renderInlineCode } from "../utils/format";
+import { ReportIssueButton } from "./ReportIssueButton";
 
 interface PracticeAndDdiaViewProps {
   topicFilter: string | null;
@@ -122,7 +123,10 @@ export const PracticeAndDdiaView: React.FC<PracticeAndDdiaViewProps> = ({
             ) : (
               <div className="card" style={{ padding: 24 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-                  <span className="badge badge-accent">Layer {activeCard.layer} · {activeCard.difficulty}</span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <span className="badge badge-accent">Layer {activeCard.layer} · {activeCard.difficulty}</span>
+                    <ReportIssueButton topicId={activeCard.topicId} blockId={`flashcard:${activeCard.id}`} blockLabel={`Flashcard ${activeCard.id}`} />
+                  </span>
                   <span className="mono" style={{ fontSize: 11, color: "var(--ink-muted)" }}>
                     Interval: {activeCard.sm2.intervalDays}d · EF {activeCard.sm2.easinessFactor}
                   </span>
@@ -175,11 +179,14 @@ export const PracticeAndDdiaView: React.FC<PracticeAndDdiaViewProps> = ({
                     <span className="mono" style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)" }}>
                       SCENARIO #{qIdx + 1} · {topicMetaById[q.topicId]?.title ?? humanizeKey(q.topicId)} · Layer {q.layer} ({q.difficulty})
                     </span>
-                    {q.lastAttempt && !fb && (
-                      <span className={`badge ${q.lastAttempt.isCorrect ? "badge-success" : "badge-warn"}`}>
-                        Last try: {q.lastAttempt.isCorrect ? "Correct" : "Needs review"}
-                      </span>
-                    )}
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      {q.lastAttempt && !fb && (
+                        <span className={`badge ${q.lastAttempt.isCorrect ? "badge-success" : "badge-warn"}`}>
+                          Last try: {q.lastAttempt.isCorrect ? "Correct" : "Needs review"}
+                        </span>
+                      )}
+                      <ReportIssueButton topicId={q.topicId} blockId={`quiz:${q.id}`} blockLabel={`Quiz ${q.id}`} />
+                    </span>
                   </div>
                   <div style={{ padding: 10, borderRadius: 6, background: "var(--bg-subtle)", fontSize: 13, marginBottom: 10 }}>
                     {renderInlineCode(q.scenario)}
