@@ -344,7 +344,7 @@ export const NotesVaultView: React.FC<NotesVaultViewProps> = ({
                   lineHeight: 1.62,
                 }}
               />
-              <div style={{ overflowY: "auto", padding: "14px 18px" }}>{renderMarkdown(contentMd)}</div>
+              <div className="hand-notes" style={{ overflowY: "auto", padding: "14px 18px" }}>{renderMarkdown(contentMd)}</div>
             </div>
           </div>
         )}

@@ -107,10 +107,10 @@ const SUPPLEMENTAL_MODULE_CASES: Record<string, string[]> = {
 
 const HEATMAP_COLORS: Record<StreakDay["level"], string> = {
   0: "var(--bg-subtle)",
-  1: "rgba(56, 189, 248, 0.3)",
-  2: "rgba(56, 189, 248, 0.58)",
-  3: "rgba(52, 211, 153, 0.74)",
-  4: "rgba(52, 211, 153, 0.98)",
+  1: "color-mix(in srgb, var(--highlight) 25%, var(--bg-subtle))",
+  2: "color-mix(in srgb, var(--highlight) 45%, var(--bg-subtle))",
+  3: "color-mix(in srgb, var(--highlight) 70%, var(--bg-subtle))",
+  4: "color-mix(in srgb, var(--highlight) 100%, var(--bg-subtle))",
 };
 
 interface EnrichedModuleCluster {
@@ -414,9 +414,9 @@ export const RoadmapView: React.FC<RoadmapViewProps> = ({
                         padding: "9px 11px",
                         borderRadius: 10,
                         border: isDone
-                          ? "1px solid rgba(52, 211, 153, 0.38)"
+                          ? "1px solid color-mix(in srgb, var(--success) 38%, transparent)"
                           : isRecommended
-                            ? "1px solid rgba(56, 189, 248, 0.45)"
+                            ? "1px solid color-mix(in srgb, var(--accent) 45%, transparent)"
                             : "1px solid var(--border-soft)",
                         background: isRecommended ? "var(--bg-active-card)" : "var(--bg-subtle)",
                         color: "var(--ink-primary)",
@@ -548,8 +548,8 @@ export const RoadmapView: React.FC<RoadmapViewProps> = ({
                   />
                   <defs>
                     <linearGradient id="roadmap-readiness-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                      <stop offset="0%" stopColor="#38bdf8" />
-                      <stop offset="100%" stopColor="#34d399" />
+                      <stop offset="0%" style={{ stopColor: "var(--accent)" }} />
+                      <stop offset="100%" style={{ stopColor: "var(--success)" }} />
                     </linearGradient>
                   </defs>
                 </svg>
@@ -563,8 +563,8 @@ export const RoadmapView: React.FC<RoadmapViewProps> = ({
                   DAILY READINESS & STREAK
                 </div>
                 <div className="mono" style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 3, fontSize: 16, fontWeight: 700 }}>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                    <Flame size={15} color="#fbbf24" /> {streak?.currentStreak ?? 0}d
+                  <span className="streak-hand" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <Flame size={15} color="var(--highlight)" /> {streak?.currentStreak ?? 0}d
                   </span>
                   <span style={{ fontSize: 11, color: "var(--ink-muted)", fontWeight: 600 }}>
                     Goal {Math.min(streak?.todayActions ?? 0, streak?.dailyGoal ?? 3)}/{streak?.dailyGoal ?? 3}
@@ -596,7 +596,7 @@ export const RoadmapView: React.FC<RoadmapViewProps> = ({
                       height: 8,
                       borderRadius: 2,
                       background: HEATMAP_COLORS[day.level],
-                      border: "1px solid rgba(148, 163, 184, 0.14)",
+                      border: "1px solid var(--border-soft)",
                     }}
                   />
                 ))}

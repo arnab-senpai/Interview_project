@@ -452,10 +452,10 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
 
   const tierColor =
     telemetry.healthTier === "fault" || telemetry.healthTier === "saturated"
-      ? "#fb7185"
+      ? "var(--danger)"
       : telemetry.healthTier === "warm"
-        ? "#fbbf24"
-        : "#34d399";
+        ? "var(--warn)"
+        : "var(--success)";
 
   const breadcrumbPrefix = linkedModule
     ? `Module ${linkedModule.moduleNumber}`
@@ -605,19 +605,19 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
                   fontSize: 11,
                   fontWeight: 700,
                   cursor: "pointer",
-                  borderColor: activeChaos ? "rgba(244, 63, 94, 0.72)" : undefined,
-                  color: activeChaos ? "#fb7185" : undefined,
+                  borderColor: activeChaos ? "color-mix(in srgb, var(--danger) 72%, transparent)" : undefined,
+                  color: activeChaos ? "var(--danger)" : undefined,
                 }}
                 title="Inject distributed systems chaos scenarios"
               >
                 {activeChaos ? (
                   <>
-                    <Flame size={13} color="#fb7185" />
+                    <Flame size={13} color="var(--danger)" />
                     <span>Chaos: {truncateText(activeChaos.title.split("(")[0].trim(), 20)}</span>
                   </>
                 ) : (
                   <>
-                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#34d399", boxShadow: "0 0 8px #34d399" }} />
+                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--success)", boxShadow: "none" }} />
                     <span>Steady State</span>
                   </>
                 )}
@@ -684,14 +684,14 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
                           border: "none",
                           marginTop: 2,
                           background: chaosId === cs.id ? "var(--danger-bg)" : "transparent",
-                          color: chaosId === cs.id ? "#fb7185" : "var(--ink-primary)",
+                          color: chaosId === cs.id ? "var(--danger)" : "var(--ink-primary)",
                           fontSize: 11.5,
                           cursor: "pointer",
                           textAlign: "left",
                         }}
                         className="mono"
                       >
-                        <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 2 }} color="#fb7185" />
+                        <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 2 }} color="var(--danger)" />
                         <span>{cs.title}</span>
                       </button>
                     ))}
@@ -1210,7 +1210,7 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
                         style={{
                           fontSize: 11,
                           fontWeight: 700,
-                          color: activeNodeUtilPct >= 95 ? "#fb7185" : activeNodeUtilPct >= 72 ? "#fbbf24" : "#34d399",
+                          color: activeNodeUtilPct >= 95 ? "var(--danger)" : activeNodeUtilPct >= 72 ? "var(--warn)" : "var(--success)",
                         }}
                       >
                         {activeNodeUtilPct}%
@@ -1422,7 +1422,7 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
               bottom: effectiveTraceOpen ? "calc(min(272px, 36vh) + 84px)" : 74,
               maxWidth: "min(620px, calc(100vw - 380px))",
               padding: "9px 14px",
-              borderColor: "rgba(251, 191, 36, 0.55)",
+              borderColor: "color-mix(in srgb, var(--warn) 55%, transparent)",
               zIndex: 23,
               fontSize: 12,
             }}

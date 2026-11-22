@@ -111,11 +111,9 @@ export const DeepDiveDrawer: React.FC<DeepDiveDrawerProps> = ({
                   </div>
                 )}
 
-                <div className="card">
-                  <div className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: "var(--accent)", marginBottom: 6 }}>
-                    KEY TAKEAWAYS
-                  </div>
-                  <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, lineHeight: 1.6 }}>
+                <div className="card key-insight">
+                  <div className="key-insight-label">KEY TAKEAWAYS</div>
+                  <ul className="key-insight-body" style={{ margin: "0 0 0 18px", padding: 0 }}>
                     {lesson.keyTakeaways.map((kt, i) => (
                       <li key={i} style={{ marginBottom: 4 }}>
                         {renderInlineCode(kt)}

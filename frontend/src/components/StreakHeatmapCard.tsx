@@ -9,10 +9,10 @@ interface StreakHeatmapCardProps {
 
 const LEVEL_STYLES: Record<0 | 1 | 2 | 3 | 4, string> = {
   0: "var(--bg-subtle)",
-  1: "rgba(56, 189, 248, 0.28)",
-  2: "rgba(56, 189, 248, 0.56)",
-  3: "rgba(52, 211, 153, 0.72)",
-  4: "rgba(52, 211, 153, 0.98)",
+  1: "color-mix(in srgb, var(--highlight) 25%, var(--bg-subtle))",
+  2: "color-mix(in srgb, var(--highlight) 45%, var(--bg-subtle))",
+  3: "color-mix(in srgb, var(--highlight) 70%, var(--bg-subtle))",
+  4: "color-mix(in srgb, var(--highlight) 100%, var(--bg-subtle))",
 };
 
 export const StreakHeatmapCard: React.FC<StreakHeatmapCardProps> = ({ streak, compact = false }) => {
@@ -56,8 +56,8 @@ export const StreakHeatmapCard: React.FC<StreakHeatmapCardProps> = ({ streak, co
             />
             <defs>
               <linearGradient id="streak-ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="#38bdf8" />
-                <stop offset="100%" stopColor="#34d399" />
+                <stop offset="0%" style={{ stopColor: "var(--accent)" }} />
+                <stop offset="100%" style={{ stopColor: "var(--success)" }} />
               </linearGradient>
             </defs>
           </svg>
@@ -69,9 +69,9 @@ export const StreakHeatmapCard: React.FC<StreakHeatmapCardProps> = ({ streak, co
         <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
           <div>
             <div className="mono" style={{ fontSize: 10, color: "var(--ink-muted)", fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
-              <Flame size={11} color="#fbbf24" /> CURRENT STREAK
+              <Flame size={11} color="var(--highlight)" /> CURRENT STREAK
             </div>
-            <div className="mono" style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>
+            <div className="streak-hand" style={{ fontSize: 22, marginTop: 2 }}>
               {streak?.currentStreak ?? 0}d
             </div>
           </div>
@@ -123,8 +123,8 @@ export const StreakHeatmapCard: React.FC<StreakHeatmapCardProps> = ({ streak, co
                 height: 11,
                 borderRadius: 2.5,
                 background: LEVEL_STYLES[day.level],
-                border: "1px solid rgba(148, 163, 184, 0.14)",
-                boxShadow: day.level >= 3 ? "0 0 8px rgba(52, 211, 153, 0.35)" : undefined,
+                border: "1px solid var(--border-soft)",
+                
               }}
             />
           ))}

@@ -58,7 +58,7 @@ export const SearchModal: React.FC<SearchModalProps> = ({ open, onClose, onSelec
               border: "1px solid var(--border)",
               borderRadius: 12,
               overflow: "hidden",
-              boxShadow: "0 24px 70px rgba(0, 0, 0, 0.45), 0 0 28px rgba(56, 189, 248, 0.14)",
+              boxShadow: "0 24px 70px rgba(0, 0, 0, 0.45), 0 0 28px color-mix(in srgb, var(--accent) 14%, transparent)",
             }}
           >
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderBottom: "1px solid var(--border-soft)" }}>

@@ -277,7 +277,7 @@ export const NotesDrawer: React.FC<NotesDrawerProps> = ({
                   />
                 )}
                 {viewMode !== "edit" && (
-                  <div style={{ overflowY: "auto", padding: "14px 18px" }}>
+                  <div className="hand-notes" style={{ overflowY: "auto", padding: "14px 18px" }}>
                     {renderMarkdown(contentMd)}
                   </div>
                 )}
