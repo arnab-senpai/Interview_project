@@ -30,7 +30,7 @@ An interactive, blueprint-styled engineering learning studio for **High-Level De
 │       ├── ddia_and_pragmatic_foundations.json # 12 DDIA chapters + 6 Pragmatic Programmer principles
 │       ├── reference_numbers_and_rubric.json # 45-min framework, L3–L7 rubric, latency numbers, GenAI metrics
 │       ├── patterns.json                     # 12 reusable HLD pattern playbooks
-│       ├── flashcards_and_quizzes.json       # 25 SM-2 flashcards & 25 scenario quizzes
+│       ├── practice/<topicId>.json           # Flashcards & graded quizzes, one file per topic
 │       ├── lessons/                          # 10 interactive Explorer lessons (story + 3 lenses + isometric flow + chaos)
 │       └── case_studies/                     # 5 tiered end-to-end case studies
 └── tests/
@@ -59,6 +59,21 @@ Open `http://localhost:5173` (Vite proxies `/api/*` directly to FastAPI on port 
 npm --prefix frontend run build
 .\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 ```
+
+## Alpha Deployment (internal VM)
+
+Every content and progress route requires sign-in; a missing or invalid token returns `401`. FastAPI serves the built frontend from the same origin, so no CORS is needed in production.
+
+| Variable | Purpose |
+| --- | --- |
+| `SYSTEMCRAFT_ENV=production` | Turns on production checks: startup fails unless `SYSTEMCRAFT_JWT_SECRET` is set and at least 32 characters. |
+| `SYSTEMCRAFT_JWT_SECRET` | Secret used to sign access tokens. Generate with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. |
+| `SYSTEMCRAFT_CORS_ORIGINS` | Comma-separated allowed origins. Unset means the local dev origins; set it to an empty string for same-origin serving. |
+| `SYSTEMCRAFT_ADMIN_USERNAMES` | Comma-separated usernames that can open the reviewer feedback view. |
+| `SYSTEMCRAFT_ISSUES_URL` | Optional, e.g. `https://github.com/<owner>/<repo>/issues/new`. Adds a prefilled "GitHub issue" link to each report. |
+| `SYSTEMCRAFT_DB_PATH` | Optional SQLite file location. The database runs in WAL mode with a 5 s busy timeout. |
+
+Reviewers flag problems with the flag button on lesson steps, lenses, case study sections, flashcards and quizzes. Reports land in the `content_feedback` table with the content version they were made against.
 
 ## Verification Tests
 

@@ -17,20 +17,20 @@ from backend.app.db.database import (
     upsert_lesson_progress,
     utc_now_iso,
 )
-from backend.app.services.auth import resolve_optional_user
+from backend.app.services.auth import require_user
 from backend.app.services.curriculum_loader import get_store
 from backend.app.services.estimator import calculate_capacity
 from backend.app.services.sm2 import Rating, Sm2State, compute_next_sm2
 
-router = APIRouter(prefix="/api", tags=["practice"])
+router = APIRouter(prefix="/api", tags=["practice"], dependencies=[Depends(require_user)])
 
 
-def _uid(user: Any) -> str:
-    return user["id"] if isinstance(user, dict) else "guest"
+def _uid(user: dict) -> str:
+    return user["id"]
 
 
-def _goal(user: Any) -> int:
-    return int(user.get("dailyGoal", 3)) if isinstance(user, dict) else 3
+def _goal(user: dict) -> int:
+    return int(user.get("dailyGoal", 3))
 
 
 class LessonProgressIn(BaseModel):
@@ -80,7 +80,7 @@ class RubricSaveIn(BaseModel):
 def save_lesson_progress(
     topic_id: str,
     payload: LessonProgressIn,
-    user: dict = Depends(resolve_optional_user),
+    user: dict = Depends(require_user),
 ) -> dict:
     return upsert_lesson_progress(
         topic_id=topic_id,
@@ -93,12 +93,12 @@ def save_lesson_progress(
 
 
 @router.get("/progress/streak")
-def get_daily_streak(user: dict = Depends(resolve_optional_user)) -> dict:
+def get_daily_streak(user: dict = Depends(require_user)) -> dict:
     return get_streak_summary(_uid(user), daily_goal=_goal(user))
 
 
 @router.get("/progress/summary")
-def get_progress_summary(user: dict = Depends(resolve_optional_user)) -> dict:
+def get_progress_summary(user: dict = Depends(require_user)) -> dict:
     uid = _uid(user)
     store = get_store()
     progress = list_lesson_progress(uid)
@@ -161,7 +161,7 @@ def list_flashcards(
     topic_id: str | None = Query(default=None),
     layer: int | None = Query(default=None),
     due_only: bool = Query(default=False),
-    user: dict = Depends(resolve_optional_user),
+    user: dict = Depends(require_user),
 ) -> dict:
     uid = _uid(user)
     store = get_store()
@@ -212,7 +212,7 @@ def list_flashcards(
 def review_flashcard(
     card_id: str,
     payload: FlashcardReviewIn,
-    user: dict = Depends(resolve_optional_user),
+    user: dict = Depends(require_user),
 ) -> dict:
     uid = _uid(user)
     store = get_store()
@@ -266,7 +266,7 @@ def review_flashcard(
 def list_quizzes(
     topic_id: str | None = Query(default=None),
     layer: int | None = Query(default=None),
-    user: dict = Depends(resolve_optional_user),
+    user: dict = Depends(require_user),
 ) -> dict:
     uid = _uid(user)
     store = get_store()
@@ -306,7 +306,7 @@ def list_quizzes(
 def submit_quiz_answer(
     question_id: str,
     payload: QuizAnswerIn,
-    user: dict = Depends(resolve_optional_user),
+    user: dict = Depends(require_user),
 ) -> dict:
     uid = _uid(user)
     store = get_store()
@@ -340,7 +340,7 @@ def submit_quiz_answer(
 @router.post("/estimator/calculate")
 def run_estimator(
     payload: CapacityCalcIn,
-    user: dict = Depends(resolve_optional_user),
+    user: dict = Depends(require_user),
 ) -> dict:
     uid = _uid(user)
     result = calculate_capacity(
@@ -378,7 +378,7 @@ def run_estimator(
 
 
 @router.get("/estimator/runs")
-def list_saved_estimations(user: dict = Depends(resolve_optional_user)) -> dict:
+def list_saved_estimations(user: dict = Depends(require_user)) -> dict:
     uid = _uid(user)
     with get_conn() as conn:
         rows = conn.execute(
@@ -407,7 +407,7 @@ def list_saved_estimations(user: dict = Depends(resolve_optional_user)) -> dict:
 @router.get("/case-studies/{case_study_id}/rubric")
 def get_case_study_rubric(
     case_study_id: str,
-    user: dict = Depends(resolve_optional_user),
+    user: dict = Depends(require_user),
 ) -> dict:
     uid = _uid(user)
     with get_conn() as conn:
@@ -430,7 +430,7 @@ def get_case_study_rubric(
 def save_case_study_rubric(
     case_study_id: str,
     payload: RubricSaveIn,
-    user: dict = Depends(resolve_optional_user),
+    user: dict = Depends(require_user),
 ) -> dict:
     uid = _uid(user)
     store = get_store()

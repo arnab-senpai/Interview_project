@@ -94,10 +94,24 @@ def _migrate_single_user_tables(conn: sqlite3.Connection) -> None:
         )
 
 
+# Several colleagues share one SQLite file during the alpha. WAL lets readers run
+# while one writer commits, and busy_timeout makes a second writer wait for the
+# lock instead of failing at once with "database is locked".
+SQLITE_BUSY_TIMEOUT_MS = 5000
+
+
+def _connect(target: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(target, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
+    conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA synchronous = NORMAL")  # safe with WAL: a crash can lose the last commit, never corrupt the file
+    return conn
+
+
 def init_db(db_path: Path | None = None) -> None:
     target = db_path or get_db_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(target) as conn:
+    with _connect(target) as conn:
+        conn.execute("PRAGMA journal_mode = WAL")  # persistent: stored in the database file
         _migrate_single_user_tables(conn)
         conn.executescript(
             """
@@ -196,6 +210,22 @@ def init_db(db_path: Path | None = None) -> None:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS content_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                topic_id TEXT NOT NULL,
+                block_id TEXT NOT NULL,
+                content_version TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'other',
+                message TEXT NOT NULL,
+                page_url TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'open',
+                admin_note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                resolved_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_content_feedback_topic ON content_feedback (topic_id, status);
+
             CREATE TABLE IF NOT EXISTS case_study_rubrics (
                 user_id TEXT NOT NULL DEFAULT 'guest',
                 case_study_id TEXT NOT NULL,
@@ -220,7 +250,7 @@ def init_db(db_path: Path | None = None) -> None:
 @contextmanager
 def get_conn(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
     target = db_path or get_db_path()
-    conn = sqlite3.connect(target)
+    conn = _connect(target)
     conn.row_factory = sqlite3.Row
     try:
         yield conn

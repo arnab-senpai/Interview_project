@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from functools import lru_cache
 from pathlib import Path
@@ -71,6 +72,29 @@ class CurriculumStore:
 
         self.flashcards_by_id = {c.id: c for c in self.fq_bundle.flashcards}
         self.quizzes_by_id = {q.id: q for q in self.fq_bundle.quizzes}
+        self.content_versions = self._compute_content_versions()
+
+    def _compute_content_versions(self) -> dict[str, str]:
+        """A short hash per topic of its lesson/case-study JSON and its practice file.
+
+        Feedback reports store it, so a report can be matched to the exact text the
+        reviewer saw even after the content is edited.
+        """
+        parts: dict[str, list[Any]] = {}
+        for lesson in self.lessons_by_id.values():
+            parts.setdefault(lesson.id, []).append(lesson.model_dump(by_alias=True))
+        for cs in self.case_studies_by_id.values():
+            parts.setdefault(cs.id, []).append(cs.model_dump(by_alias=True))
+        for mod in self.modules.modules:
+            parts.setdefault(mod.id, []).append(mod.model_dump(by_alias=True))
+        for item in [*self.fq_bundle.flashcards, *self.fq_bundle.quizzes]:
+            parts.setdefault(item.topic_id, []).append(item.model_dump(by_alias=True))
+        return {
+            topic_id: hashlib.sha256(
+                json.dumps(chunks, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()[:12]
+            for topic_id, chunks in parts.items()
+        }
 
     def search(self, query: str) -> list[dict[str, Any]]:
         q = query.strip().lower()

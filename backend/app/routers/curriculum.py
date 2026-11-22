@@ -2,22 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.app.db.database import list_lesson_progress
-from backend.app.services.auth import resolve_optional_user
+from backend.app.services.auth import require_user
 from backend.app.services.curriculum_loader import get_store
 
-router = APIRouter(prefix="/api", tags=["curriculum"])
+# /api/health stays public for uptime checks; every content route needs a signed-in user.
+public_router = APIRouter(prefix="/api", tags=["curriculum"])
+router = APIRouter(prefix="/api", tags=["curriculum"], dependencies=[Depends(require_user)])
 
 
-def _uid(user: Any) -> str:
-    return user["id"] if isinstance(user, dict) else "guest"
+def _uid(user: dict) -> str:
+    return user["id"]
 
 
-@router.get("/health")
+@public_router.get("/health")
 def health_check() -> dict:
     store = get_store()
     return {
@@ -35,7 +36,7 @@ def get_tracks() -> dict:
 
 
 @router.get("/hld/overview")
-def get_hld_overview(user: dict = Depends(resolve_optional_user)) -> dict:
+def get_hld_overview(user: dict = Depends(require_user)) -> dict:
     store = get_store()
     progress = list_lesson_progress(_uid(user))
     return {

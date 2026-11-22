@@ -15,7 +15,7 @@ from backend.app.services.auth import (
     generate_personal_token,
     hash_password,
     require_authenticated_user,
-    resolve_optional_user,
+    require_user,
     serialize_user,
     verify_password,
 )
@@ -118,19 +118,19 @@ def login_user(payload: LoginIn) -> dict:
 
 
 @router.get("/me")
-def get_me(user: dict = Depends(resolve_optional_user)) -> dict:
-    uid = user["id"] if isinstance(user, dict) else "guest"
-    goal = user.get("dailyGoal", 3) if isinstance(user, dict) else 3
+def get_me(user: dict = Depends(require_user)) -> dict:
+    uid = user["id"]
+    goal = user.get("dailyGoal", 3)
     return {
-        "authenticated": uid != "guest",
+        "authenticated": True,
         "user": user,
         "streak": get_streak_summary(uid, daily_goal=goal),
     }
 
 
 @router.patch("/preferences")
-def update_preferences(payload: PreferencesIn, user: dict = Depends(resolve_optional_user)) -> dict:
-    uid = user["id"] if isinstance(user, dict) else "guest"
+def update_preferences(payload: PreferencesIn, user: dict = Depends(require_user)) -> dict:
+    uid = user["id"]
     allowed_lenses = {"intuition", "mechanics", "staffTradeoffs"}
     if payload.preferred_lens and payload.preferred_lens not in allowed_lenses:
         raise HTTPException(status_code=400, detail="Invalid preferredLens")

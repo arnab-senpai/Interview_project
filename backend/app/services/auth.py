@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import time
@@ -13,19 +14,40 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 
-from backend.app.core.config import BACKEND_DIR
+from backend.app.core.config import BACKEND_DIR, get_admin_usernames, is_production
 from backend.app.db.database import get_conn, utc_now_iso
 
 JWT_SECRET_FILE = BACKEND_DIR / ".jwt_secret"
 DEFAULT_TOKEN_TTL_HOURS = 24 * 7  # 7 days
+MIN_JWT_SECRET_LENGTH = 32
+
+logger = logging.getLogger("systemcraft.auth")
+
+
+def check_jwt_secret_config() -> None:
+    """Fail fast in production when SYSTEMCRAFT_JWT_SECRET is missing or weak.
+
+    Without the variable, the dev fallback writes a random secret to
+    backend/.jwt_secret. On a rebuilt container that file is gone, the secret
+    changes, and every colleague is signed out, so production refuses to start.
+    """
+    secret = os.environ.get("SYSTEMCRAFT_JWT_SECRET", "")
+    if secret and len(secret) < MIN_JWT_SECRET_LENGTH:
+        raise RuntimeError(f"SYSTEMCRAFT_JWT_SECRET must be at least {MIN_JWT_SECRET_LENGTH} characters")
+    if not secret:
+        if is_production():
+            raise RuntimeError("SYSTEMCRAFT_JWT_SECRET must be set when SYSTEMCRAFT_ENV=production")
+        logger.warning("SYSTEMCRAFT_JWT_SECRET is not set; using a local dev secret in %s", JWT_SECRET_FILE)
 
 
 def _get_jwt_secret() -> bytes:
     env_secret = os.environ.get("SYSTEMCRAFT_JWT_SECRET")
     if env_secret:
         return env_secret.encode("utf-8")
+    if is_production():
+        raise RuntimeError("SYSTEMCRAFT_JWT_SECRET must be set when SYSTEMCRAFT_ENV=production")
     if JWT_SECRET_FILE.exists():
         secret = JWT_SECRET_FILE.read_text(encoding="utf-8").strip()
         if secret:
@@ -103,7 +125,10 @@ def decode_access_token(token: str) -> dict[str, Any] | None:
     if len(parts) != 3:
         return None
     header_b64, payload_b64, sig_b64 = parts
-    signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
+    try:
+        signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
+    except UnicodeEncodeError:
+        return None
     expected_sig = _b64url_encode(hmac.new(_get_jwt_secret(), signing_input, hashlib.sha256).digest())
     if not hmac.compare_digest(sig_b64, expected_sig):
         return None
@@ -135,7 +160,8 @@ def serialize_user(row: Any) -> dict[str, Any]:
         "email": row["email"] or "",
         "dailyGoal": row["daily_goal"],
         "preferredLens": row["preferred_lens"],
-        "isGuest": row["id"] == "guest",
+        "isGuest": False,
+        "isAdmin": row["username"].lower() in get_admin_usernames(),
         "createdAt": row["created_at"],
     }
 
@@ -152,70 +178,67 @@ def _extract_raw_token(authorization: Any, x_study_token: Any) -> str | None:
     return None
 
 
-def resolve_optional_user(
-    authorization: str | None = Header(default=None),
-    x_study_token: str | None = Header(default=None),
-) -> dict[str, Any]:
-    """Resolve authenticated user via JWT or sc_live_* token; falls back cleanly to local guest."""
-    token = _extract_raw_token(authorization, x_study_token)
+def _user_for_token(token: str) -> dict[str, Any] | None:
+    """Return the user a JWT or sc_live_* token belongs to, or None if it is not valid."""
     with get_conn() as conn:
-        if token:
-            if token.startswith("sc_live_"):
-                thash = hash_personal_token(token)
-                tok_row = conn.execute(
-                    "SELECT * FROM personal_tokens WHERE token_hash = ? AND revoked = 0",
-                    (thash,),
-                ).fetchone()
-                if tok_row:
-                    exp = tok_row["expires_at"]
-                    if not exp or exp > utc_now_iso():
-                        user_row = conn.execute("SELECT * FROM users WHERE id = ?", (tok_row["user_id"],)).fetchone()
-                        if user_row:
-                            conn.execute(
-                                "UPDATE personal_tokens SET last_used_at = ? WHERE id = ?",
-                                (utc_now_iso(), tok_row["id"]),
-                            )
-                            return serialize_user(user_row)
-            else:
-                payload = decode_access_token(token)
-                if payload and payload.get("sub"):
-                    user_row = conn.execute("SELECT * FROM users WHERE id = ?", (payload["sub"],)).fetchone()
-                    if user_row:
-                        return serialize_user(user_row)
+        if token.startswith("sc_live_"):
+            tok_row = conn.execute(
+                "SELECT * FROM personal_tokens WHERE token_hash = ? AND revoked = 0",
+                (hash_personal_token(token),),
+            ).fetchone()
+            if not tok_row:
+                return None
+            exp = tok_row["expires_at"]
+            if exp and exp <= utc_now_iso():
+                return None
+            user_row = conn.execute("SELECT * FROM users WHERE id = ?", (tok_row["user_id"],)).fetchone()
+            if not user_row or user_row["id"] == "guest":
+                return None
+            conn.execute("UPDATE personal_tokens SET last_used_at = ? WHERE id = ?", (utc_now_iso(), tok_row["id"]))
+            return serialize_user(user_row)
 
-        guest_row = conn.execute("SELECT * FROM users WHERE id = 'guest'").fetchone()
-        if guest_row:
-            return serialize_user(guest_row)
-
-    return {
-        "id": "guest",
-        "username": "guest",
-        "displayName": "Local Guest",
-        "email": "",
-        "dailyGoal": 3,
-        "preferredLens": "intuition",
-        "isGuest": True,
-        "createdAt": utc_now_iso(),
-    }
+        payload = decode_access_token(token)
+        if not payload or not payload.get("sub"):
+            return None
+        user_row = conn.execute("SELECT * FROM users WHERE id = ?", (payload["sub"],)).fetchone()
+        if not user_row or user_row["id"] == "guest":
+            return None
+        return serialize_user(user_row)
 
 
-def require_authenticated_user(
+def require_user(
     authorization: str | None = Header(default=None),
     x_study_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    """Require a valid non-guest user session or personal token."""
+    """Every learner-facing route needs a signed-in user. There is no shared guest fallback.
+
+    A missing token and an invalid, expired or revoked token both return 401, so
+    the browser can send the person back to sign in.
+    """
     token = _extract_raw_token(authorization, x_study_token)
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required (Bearer JWT or X-Study-Token)",
+            detail="Sign in required (Bearer JWT or X-Study-Token)",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    user = resolve_optional_user(authorization=authorization, x_study_token=x_study_token)
-    if user["id"] == "guest":
+    user = _user_for_token(token)
+    if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
         )
+    return user
+
+
+# Kept for routes and callers written against the older name.
+require_authenticated_user = require_user
+
+
+def require_admin(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    if not user.get("isAdmin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return user
 
 
