@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 from backend.app.routers import curriculum, practice
+from backend.app.services.curriculum_loader import get_store
 
 
 @pytest.fixture()
@@ -95,7 +96,10 @@ def test_search_patterns_foundations_and_reference(isolated_db) -> None:
     assert len(curriculum.get_tracks()["tracks"]) == 3
     assert len(curriculum.get_patterns()["patterns"]) == 12
     assert len(curriculum.get_foundations()["ddiaChapterMap"]) == 12
-    assert len(curriculum.get_reference()["latencyBenchmarks"]) == 10
+    reference = curriculum.get_reference()
+    assert len(reference["latencyBenchmarks"]) == 13
+    assert reference["latencyBenchmarksMeta"]["asOf"]
+    assert [row["level"] for row in reference["levelMapping"]["rows"]] == ["Junior", "Mid", "Senior", "Staff"]
 
     hits = curriculum.search_curriculum(q="raft")["results"]
     assert any(item["id"] == "replication-and-consensus" for item in hits)
@@ -134,11 +138,31 @@ def test_progress_sm2_quiz_estimator_and_rubric_persistence(isolated_db) -> None
     quizzes = practice.list_quizzes(topic_id="caching-and-stampede", layer=None)["quizzes"]
     assert len(quizzes) >= 2
     q0 = quizzes[0]
+    # The browser never receives the answer key or explanations before answering.
+    for q in quizzes:
+        assert "correctIndex" not in q
+        assert "explanation" not in q
+        assert "optionExplanations" not in q
+        assert q["lastAttempt"] is None
+    key = get_store().quizzes_by_id[q0["id"]].correct_index
+    wrong = (key + 1) % len(q0["options"])
+    miss = practice.submit_quiz_answer(
+        q0["id"],
+        practice.QuizAnswerIn.model_validate({"selectedIndex": wrong}),
+    )
+    assert miss["isCorrect"] is False
+    assert miss["correctIndex"] == key
+    assert len(miss["optionExplanations"]) == len(q0["options"])
     ans = practice.submit_quiz_answer(
         q0["id"],
-        practice.QuizAnswerIn.model_validate({"selectedIndex": q0["correctIndex"]}),
+        practice.QuizAnswerIn.model_validate({"selectedIndex": key}),
     )
     assert ans["isCorrect"] is True
+    answered = practice.list_quizzes(topic_id="caching-and-stampede", layer=None)["quizzes"]
+    revealed = next(q for q in answered if q["id"] == q0["id"])
+    assert revealed["lastAttempt"]["isCorrect"] is True
+    assert revealed["lastAttempt"]["correctIndex"] == key
+    assert all(q["lastAttempt"] is None for q in answered if q["id"] != q0["id"])
 
     calc = practice.run_estimator(
         practice.CapacityCalcIn.model_validate(

@@ -285,14 +285,18 @@ def list_quizzes(
                 "answeredAt": row["answered_at"],
             }
 
+    # The answer key and explanations never leave the server for a question the
+    # learner has not answered yet. After an attempt the reveal is attached,
+    # exactly as POST /answer would have returned it.
     items = []
     for q in store.fq_bundle.quizzes:
         if topic_id and q.topic_id != topic_id:
             continue
         if layer and q.layer != layer:
             continue
-        entry = q.model_dump(by_alias=True)
-        entry["lastAttempt"] = latest.get(q.id)
+        entry = q.public_view()
+        attempt = latest.get(q.id)
+        entry["lastAttempt"] = {**attempt, **q.reveal()} if attempt else None
         items.append(entry)
 
     return {"quizzes": items}
@@ -327,10 +331,9 @@ def submit_quiz_answer(
     return {
         "questionId": question_id,
         "selectedIndex": payload.selected_index,
-        "correctIndex": question.correct_index,
         "isCorrect": is_correct,
-        "explanation": question.explanation,
         "answeredAt": now,
+        **question.reveal(),
     }
 
 

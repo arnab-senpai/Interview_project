@@ -4,6 +4,7 @@ import type {
   HldExplorerLesson,
   PatternPlaybook,
   QuizQuestion,
+  QuizReveal,
 } from "../types/hld";
 
 export interface LayerMeta {
@@ -185,12 +186,19 @@ export interface FlashcardWithSm2 extends FlashcardItem {
   isDue: boolean;
 }
 
+export interface QuizAnswerResult extends QuizReveal {
+  questionId: string;
+  selectedIndex: number;
+  isCorrect: boolean;
+  answeredAt: string;
+}
+
 export interface QuizWithAttempt extends QuizQuestion {
-  lastAttempt?: {
+  lastAttempt?: (QuizReveal & {
     selectedIndex: number;
     isCorrect: boolean;
     answeredAt: string;
-  } | null;
+  }) | null;
 }
 
 export interface CapacityResult {
@@ -291,13 +299,7 @@ export const api = {
     return fetchJson<{ quizzes: QuizWithAttempt[] }>(`/api/quizzes${suffix}`);
   },
   answerQuiz: (questionId: string, selectedIndex: number) =>
-    fetchJson<{
-      questionId: string;
-      selectedIndex: number;
-      correctIndex: number;
-      isCorrect: boolean;
-      explanation: string;
-    }>(`/api/quizzes/${questionId}/answer`, {
+    fetchJson<QuizAnswerResult>(`/api/quizzes/${questionId}/answer`, {
       method: "POST",
       body: JSON.stringify({ selectedIndex }),
     }),

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { BookMarked, CheckCircle2, Compass, Layers, RotateCw, XCircle } from "lucide-react";
-import { api, type FlashcardWithSm2, type QuizWithAttempt } from "../api/client";
+import { api, type FlashcardWithSm2, type QuizAnswerResult, type QuizWithAttempt } from "../api/client";
 import type { PatternPlaybook } from "../types/hld";
 import { humanizeKey, renderInlineCode } from "../utils/format";
 
@@ -32,7 +32,7 @@ export const PracticeAndDdiaView: React.FC<PracticeAndDdiaViewProps> = ({
   const [dueOnly, setDueOnly] = useState(false);
 
   const [quizzes, setQuizzes] = useState<QuizWithAttempt[]>([]);
-  const [quizFeedback, setQuizFeedback] = useState<Record<string, { selectedIndex: number; correctIndex: number; isCorrect: boolean; explanation: string }>>({});
+  const [quizFeedback, setQuizFeedback] = useState<Record<string, QuizAnswerResult>>({});
 
   useEffect(() => {
     if (topicFilter) setSubtab("quizzes");
@@ -233,6 +233,22 @@ export const PracticeAndDdiaView: React.FC<PracticeAndDdiaViewProps> = ({
                         {fb.isCorrect ? "Spot on!" : "Not quite — here is why:"}
                       </div>
                       {renderInlineCode(fb.explanation)}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8 }}>
+                        {q.options.map((_, idx) => {
+                          const why = fb.optionExplanations[idx];
+                          if (!why) return null;
+                          const tag = idx === fb.correctIndex ? "Answer" : idx === fb.selectedIndex ? "Your pick" : null;
+                          return (
+                            <div key={idx} style={{ display: "flex", gap: 6, opacity: tag ? 1 : 0.75 }}>
+                              <span className="mono" style={{ fontWeight: 700, minWidth: 18 }}>{String.fromCharCode(65 + idx)}.</span>
+                              <span>
+                                {tag && <strong>{tag}: </strong>}
+                                {renderInlineCode(why)}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
