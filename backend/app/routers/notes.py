@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.app.db.database import delete_user_note, get_user_note, list_user_notes, upsert_user_note
-from backend.app.services.auth import resolve_optional_user
+from backend.app.services.auth import require_user
 
-router = APIRouter(prefix="/api/notes", tags=["notes"])
+router = APIRouter(prefix="/api/notes", tags=["notes"], dependencies=[Depends(require_user)])
 
 
-def _uid(user: Any) -> str:
-    return user["id"] if isinstance(user, dict) else "guest"
+def _uid(user: dict) -> str:
+    return user["id"]
 
 
 class NoteSaveIn(BaseModel):
@@ -30,13 +29,13 @@ class NoteSaveIn(BaseModel):
 def list_notes(
     topic_id: str | None = Query(default=None),
     q: str = Query(default=""),
-    user: dict = Depends(resolve_optional_user),
+    user: dict = Depends(require_user),
 ) -> dict:
     return {"notes": list_user_notes(_uid(user), topic_id=topic_id, q=q)}
 
 
 @router.get("/{topic_id}")
-def get_note(topic_id: str, user: dict = Depends(resolve_optional_user)) -> dict:
+def get_note(topic_id: str, user: dict = Depends(require_user)) -> dict:
     note = get_user_note(_uid(user), topic_id)
     if note:
         return {"exists": True, "note": note}
@@ -56,7 +55,7 @@ def get_note(topic_id: str, user: dict = Depends(resolve_optional_user)) -> dict
 
 
 @router.put("/{topic_id}")
-def save_note(topic_id: str, payload: NoteSaveIn, user: dict = Depends(resolve_optional_user)) -> dict:
+def save_note(topic_id: str, payload: NoteSaveIn, user: dict = Depends(require_user)) -> dict:
     saved = upsert_user_note(
         user_id=_uid(user),
         topic_id=topic_id,
@@ -69,7 +68,7 @@ def save_note(topic_id: str, payload: NoteSaveIn, user: dict = Depends(resolve_o
 
 
 @router.delete("/{topic_id}")
-def remove_note(topic_id: str, user: dict = Depends(resolve_optional_user)) -> dict:
+def remove_note(topic_id: str, user: dict = Depends(require_user)) -> dict:
     deleted = delete_user_note(_uid(user), topic_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Note for topic '{topic_id}' not found")

@@ -1,0 +1,92 @@
+{
+  "version": "2.0.0",
+  "topicId": "caching-and-stampede",
+  "flashcards": [
+    {
+      "id": "fc-cache-1",
+      "topicId": "caching-and-stampede",
+      "layer": 3,
+      "difficulty": "Mid",
+      "front": "Distinguish Cache Penetration, Cache Stampede (Thundering Herd), and Cache Avalanche.",
+      "back": "Penetration: queries for non-existent keys miss cache and hit DB (fix: Bloom filter or null-caching). Stampede: 1 hot key expires under heavy concurrency (fix: Singleflight coalescing / soft TTL). Avalanche: many keys expire at once or Redis crashes (fix: jittered TTLs + cluster HA).",
+      "tags": ["Caching", "Stampede", "Bloom Filter"]
+    },
+    {
+      "id": "fc-cache-2",
+      "topicId": "caching-and-stampede",
+      "layer": 3,
+      "difficulty": "Mid",
+      "front": "What is the main risk of Write-Behind (Write-Back) caching compared to Write-Through?",
+      "back": "Write-Behind acks writes after updating Redis and flushes asynchronously to the database in batches, risking permanent data loss if the cache node crashes before flushing.",
+      "tags": ["Write-Behind", "Durability", "Caching"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-cache-1",
+      "topicId": "caching-and-stampede",
+      "layer": 3,
+      "difficulty": "Mid",
+      "scenario": "Bots request millions of random product ids that do not exist. Redis misses every time, so all of the attack traffic reaches Postgres.",
+      "question": "Which defense stops this cache penetration with the least memory?",
+      "options": [
+        "More aggressive LRU eviction so Redis frees memory faster",
+        "Read replicas so Postgres can absorb the extra lookups",
+        "Longer TTLs on existing keys so fewer requests miss",
+        "A shared Bloom filter of valid ids, updated on every create"
+      ],
+      "correctIndex": 3,
+      "explanation": "A Bloom filter has no false negatives for keys that were added, so a 'not present' answer can return 404 without touching Postgres. It must be shared (or updated on every write) so new keys are visible to every pod. Short-TTL negative caching is the simpler alternative when the key space is small.",
+      "optionExplanations": [
+        "Eviction policy does not help; the attacked keys were never in the cache.",
+        "Replicas add capacity but still pay for every bogus query; attackers scale cheaper.",
+        "The misses are for keys that do not exist, so TTLs on real keys change nothing.",
+        "Correct. Unknown ids are rejected before the database, and new ids stay visible."
+      ]
+    },
+    {
+      "id": "q-cache-2",
+      "topicId": "caching-and-stampede",
+      "layer": 3,
+      "difficulty": "Senior",
+      "scenario": "At midnight, 500,000 homepage items that were cached together at noon all reach their 12-hour TTL at once, and the database falls over.",
+      "question": "What is this failure, and what prevents it?",
+      "options": [
+        "A cache avalanche; add random jitter to each TTL",
+        "Cache penetration; add a Bloom filter in front of the DB",
+        "A hot key; replicate the homepage key across shards",
+        "Write-behind data loss; switch the cache to write-through"
+      ],
+      "correctIndex": 0,
+      "explanation": "Many keys expiring together is a cache avalanche. Adding random jitter to each TTL (for example 12 h plus up to 30 min) spreads the refills out over time.",
+      "optionExplanations": [
+        "Correct. Jitter spreads expiries so refills arrive gradually.",
+        "Penetration is about keys that do not exist. These keys exist and expired together.",
+        "There is no single hot key here; it is half a million keys expiring at once.",
+        "The write policy is unrelated; the problem is synchronized expiry on reads."
+      ]
+    },
+    {
+      "id": "q-cache-3",
+      "topicId": "caching-and-stampede",
+      "layer": 3,
+      "difficulty": "Senior",
+      "scenario": "A flash-sale key expires while 8,000 requests per second for it arrive, spread across 40 app pods. Each pod runs Singleflight, which collapses duplicate in-flight fetches inside one process.",
+      "question": "About how many database queries does the refill cause, and how do you get it to one?",
+      "options": [
+        "About 200, one per database connection in the pool",
+        "Exactly 1, because Singleflight coalesces across the fleet",
+        "About 40, one per pod; add a shared SET NX refresh lease",
+        "About 8,000, because Singleflight only works for writes"
+      ],
+      "correctIndex": 2,
+      "explanation": "Singleflight works per process, so each of the 40 pods still sends its own query. A fleet-wide refresh lease (SET key NX PX) lets one pod refill while others serve a slightly stale value, and probabilistic early refresh avoids the synchronized expiry in the first place.",
+      "optionExplanations": [
+        "Connection count caps concurrency, but coalescing already cut it to one per pod.",
+        "Singleflight state lives in each process's memory; other pods cannot see it.",
+        "Correct. Per-process coalescing stops at the pod boundary.",
+        "Singleflight coalesces reads well; it simply cannot cross pod boundaries."
+      ]
+    }
+  ]
+}

@@ -11,6 +11,7 @@ import {
   Layers,
   Map,
   Maximize2,
+  MessageSquareWarning,
   Moon,
   NotebookPen,
   Search,
@@ -19,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  SIGNED_OUT_EVENT,
   api,
   authStorage,
   type AuthSessionResponse,
@@ -30,6 +32,7 @@ import {
   type UserProfile,
 } from "./api/client";
 import { AccountModal } from "./components/AccountModal";
+import { AdminFeedbackView } from "./components/AdminFeedbackView";
 import { AuthPortalModal } from "./components/AuthPortalModal";
 import { CapacityLabView, type CapacityPresetInput } from "./components/CapacityLabView";
 import { CaseStudiesView } from "./components/CaseStudiesView";
@@ -41,7 +44,7 @@ import { RoadmapView } from "./components/RoadmapView";
 import { SearchModal } from "./components/SearchModal";
 import type { HldCaseStudy, HldExplorerLesson, PatternPlaybook } from "./types/hld";
 
-type MainView = "roadmap" | "modules" | "explorer" | "cases" | "notes" | "capacity" | "practice";
+type MainView = "roadmap" | "modules" | "explorer" | "cases" | "notes" | "capacity" | "practice" | "feedback";
 
 const NAV_ITEMS: Array<{ key: MainView; label: string; icon: typeof Map }> = [
   { key: "roadmap", label: "Roadmap", icon: Map },
@@ -62,9 +65,9 @@ export function App() {
   const [summary, setSummary] = useState<ProgressSummary | null>(null);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [streak, setStreak] = useState<StreakSummary | null>(null);
-  const [authModalOpen, setAuthModalOpen] = useState<boolean>(
-    () => !authStorage.getToken() && !authStorage.isGuestEntered()
-  );
+  // The alpha requires sign-in: nothing loads until there is a token, and any 401 signs the person out.
+  const [signedIn, setSignedIn] = useState<boolean>(() => Boolean(authStorage.getToken()));
+  const [authModalOpen, setAuthModalOpen] = useState<boolean>(() => !authStorage.getToken());
   const [accountModalOpen, setAccountModalOpen] = useState<boolean>(false);
   const [patterns, setPatterns] = useState<PatternPlaybook[]>([]);
   const [foundations, setFoundations] = useState<any>(null);
@@ -119,6 +122,21 @@ export function App() {
   };
 
   useEffect(() => {
+    const onSignedOut = () => {
+      setSignedIn(false);
+      setAuthModalOpen(true);
+      setAccountModalOpen(false);
+      setCurrentUser(null);
+      setOverview(null);
+      setSummary(null);
+    };
+    window.addEventListener(SIGNED_OUT_EVENT, onSignedOut);
+    return () => window.removeEventListener(SIGNED_OUT_EVENT, onSignedOut);
+  }, []);
+
+  useEffect(() => {
+    if (!signedIn) return;
+    setErrorMsg(null);
     Promise.all([
       api.getOverview(),
       api.getModules(),
@@ -134,29 +152,31 @@ export function App() {
         setSummary(sum);
         setCurrentUser(me.user);
         setStreak(me.streak);
-        if (!me.authenticated && authStorage.getToken()) {
-          authStorage.setToken(null);
-        }
         setPatterns(pats.patterns);
         setFoundations(fnd);
         setReferenceData(ref);
       })
       .catch((err) => setErrorMsg(err.message));
-  }, []);
+  }, [signedIn]);
 
   const handleAuthenticatedSession = async (session: AuthSessionResponse) => {
     setCurrentUser(session.user);
     setStreak(session.streak);
     setAuthModalOpen(false);
-    await refreshSummary();
+    if (signedIn) {
+      await refreshSummary();
+    } else {
+      setSignedIn(true);
+    }
   };
 
   const handleLogoutSession = async () => {
-    await refreshSummary();
-    setAuthModalOpen(true);
+    authStorage.setToken(null);
+    window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
   };
 
   useEffect(() => {
+    if (!signedIn) return;
     let cancelled = false;
     setLoadingLesson(true);
     api
@@ -173,7 +193,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeLessonId]);
+  }, [activeLessonId, signedIn]);
 
   const handleLayerSelect = (layer: number | null) => {
     setSelectedLayer(layer);
@@ -247,7 +267,10 @@ export function App() {
             </div>
 
             <nav className="nav-pills">
-              {NAV_ITEMS.map((item) => {
+              {(currentUser?.isAdmin
+                ? [...NAV_ITEMS, { key: "feedback" as MainView, label: "Feedback", icon: MessageSquareWarning }]
+                : NAV_ITEMS
+              ).map((item) => {
                 const isActive = view === item.key;
                 const Icon = item.icon;
                 return (
@@ -344,7 +367,7 @@ export function App() {
 
         {!overview ? (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }} className="mono">
-            Loading your workspace…
+            {signedIn ? "Loading your workspace…" : "Sign in to open your workspace."}
           </div>
         ) : (
           <AnimatePresence mode="wait">
@@ -465,6 +488,14 @@ export function App() {
                     }
                   }}
                 />
+              ) : view === "feedback" && currentUser?.isAdmin ? (
+                <AdminFeedbackView
+                  topicTitleById={Object.fromEntries([
+                    ...overview.lessons.map((l) => [l.id, l.title]),
+                    ...overview.caseStudies.map((c) => [c.id, c.title]),
+                    ...modules.map((m) => [m.id, m.title]),
+                  ])}
+                />
               ) : view === "capacity" ? (
                 <CapacityLabView referenceData={referenceData} initialPreset={estimatorPreset} />
               ) : (
@@ -538,14 +569,10 @@ export function App() {
         )}
 
         <AuthPortalModal
-          open={authModalOpen}
-          canDismiss={Boolean(overview)}
-          onClose={() => {
-            authStorage.setGuestEntered(true);
-            setAuthModalOpen(false);
-          }}
+          open={authModalOpen || !signedIn}
+          canDismiss={signedIn}
+          onClose={() => setAuthModalOpen(false)}
           onAuthenticated={handleAuthenticatedSession}
-          onContinueAsGuest={() => setAuthModalOpen(false)}
         />
 
         <AccountModal

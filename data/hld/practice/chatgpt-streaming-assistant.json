@@ -1,0 +1,39 @@
+{
+  "version": "2.0.0",
+  "topicId": "chatgpt-streaming-assistant",
+  "flashcards": [
+    {
+      "id": "fc-gpt-1",
+      "topicId": "chatgpt-streaming-assistant",
+      "layer": 7,
+      "difficulty": "Staff",
+      "front": "How do PagedAttention and Continuous Batching dramatically increase LLM serving throughput?",
+      "back": "Continuous batching schedules requests at each token step instead of waiting for the longest batch sequence to finish, while PagedAttention eliminates >60% KV-cache VRAM fragmentation using non-contiguous memory blocks.",
+      "tags": ["LLM Serving", "PagedAttention", "KV-Cache"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-gpt-1",
+      "topicId": "chatgpt-streaming-assistant",
+      "layer": 7,
+      "difficulty": "Staff",
+      "scenario": "Your gateway limits each user to 60 requests per minute. One user sends 60 prompts a minute, each with 100,000 tokens of context, and saturates the GPU fleet.",
+      "question": "Which change closes this gap?",
+      "options": [
+        "Limit by IP subnet so one office cannot send so many calls",
+        "Add a per-user token budget alongside the request limit",
+        "Cap the response length while leaving input unlimited",
+        "Lower the request limit from 60 to 20 per minute per user"
+      ],
+      "correctIndex": 1,
+      "explanation": "GPU time and KV-cache memory scale with tokens, not requests. Add a tokens-per-minute budget next to the request limit: reserve the estimated tokens when a request starts and refund unused output tokens when the stream ends.",
+      "optionExplanations": [
+        "Subnet limits punish shared offices and still count requests, not tokens.",
+        "Correct. Long prompts now cost what they actually consume.",
+        "The cost here comes from 100,000-token inputs, which this leaves untouched.",
+        "Twenty huge prompts can still saturate GPUs while hurting normal users."
+      ]
+    }
+  ]
+}

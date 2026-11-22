@@ -1,0 +1,61 @@
+{
+  "version": "2.0.0",
+  "topicId": "url-shortener",
+  "flashcards": [
+    {
+      "id": "fc-url-1",
+      "topicId": "url-shortener",
+      "layer": 3,
+      "difficulty": "Junior",
+      "front": "In a URL shortener, when should you return HTTP 301 vs HTTP 302?",
+      "back": "HTTP 301 (Moved Permanently) makes browsers cache the target directly—saving server QPS but blinding click analytics and preventing link updates. HTTP 302 (Found) hits your server every click for accurate telemetry.",
+      "tags": ["HTTP 301", "HTTP 302", "URL Shortener"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-url-1",
+      "topicId": "url-shortener",
+      "layer": 3,
+      "difficulty": "Junior",
+      "scenario": "Marketing wants per-link country and referrer analytics on every click, and redirects must stay fast.",
+      "question": "Which redirect status and analytics pattern fit?",
+      "options": [
+        "302 redirects, with a synchronous SQL update per click",
+        "301 redirects, with a synchronous counter update per click",
+        "301 redirects, with analytics read from CDN access logs",
+        "302 redirects, with click events sent asynchronously"
+      ],
+      "correctIndex": 3,
+      "explanation": "Browsers cache a 301, so repeat clicks skip your service and analytics. A 302 sends every click through you, and emitting the click event asynchronously (for example to Kafka) keeps counting off the redirect path.",
+      "optionExplanations": [
+        "302 is right, but a synchronous write puts the database on the redirect path.",
+        "Browsers cache 301s, and a synchronous update slows every redirect.",
+        "Cached 301s never reach the CDN again, so repeat clicks go uncounted.",
+        "Correct. Every click is seen, and counting stays off the hot path."
+      ]
+    },
+    {
+      "id": "q-url-2",
+      "topicId": "url-shortener",
+      "layer": 3,
+      "difficulty": "Mid",
+      "scenario": "Your shortener serves about 400 million redirects a day. A teammate sizes Redis at 20% of daily reads times 500 bytes, which gives 40 GB.",
+      "question": "What is wrong with that estimate?",
+      "options": [
+        "It forgets that each redirect also stores the full long URL",
+        "It should use 80% of reads, since most traffic is cacheable",
+        "It counts reads, but cache size depends on distinct hot links",
+        "It ignores replication, so the real figure is three times larger"
+      ],
+      "correctIndex": 2,
+      "explanation": "Cache size depends on the number of distinct hot keys, not on the number of reads. Most of the 400 million reads hit a much smaller set of popular links, so estimate the distinct links clicked per day, take the hot share of those, and multiply by the entry size.",
+      "optionExplanations": [
+        "The 500 bytes already include the long URL; the count is the issue.",
+        "A larger share of reads makes the same counting mistake worse.",
+        "Correct. Repeated reads of one link need one cache entry.",
+        "Replication matters later, but the base number is already wrong."
+      ]
+    }
+  ]
+}

@@ -3,7 +3,7 @@
   "tier": 3,
   "title": "Design Ticketmaster / Flash-Sale Booking",
   "subtitle": "Virtual waiting room, atomic Redis seat holds with TTL & ACID checkout finalization",
-  "levelTag": "L5-L6",
+  "levelTag": "Senior",
   "estimatedMinutes": 45,
   "tags": ["Virtual Waiting Room", "Seat Hold TTL", "Concurrency", "ACID"],
   "functionalReqs": [
@@ -67,7 +67,7 @@
     "layer": 7,
     "title": "Flash-Sale Waiting Room & Atomic Seat Hold Flow",
     "subtitle": "Edge queue admission -> Redis Lua seat hold -> ACID Postgres booking",
-    "difficulty": "L5-L6",
+    "difficulty": "Senior",
     "estimatedMinutes": 22,
     "overview": "Letting 500,000 users lock rows in Postgres simultaneously creates catastrophic lock queues. Instead, an Edge Virtual Waiting Room admits bounded batches via signed queue tokens, CDN caches static seat maps, Redis Lua grants sub-millisecond 10-minute seat holds, and Postgres enforces final ACID booking + idempotency.",
     "keyTakeaways": [

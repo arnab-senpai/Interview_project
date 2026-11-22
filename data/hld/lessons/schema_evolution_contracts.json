@@ -5,14 +5,14 @@
   "layer": 6,
   "title": "Binary Contracts, Protobuf & Schema Evolution",
   "subtitle": "Tag-numbered wire compatibility, Schema Registry gates & poison-pill DLQs",
-  "difficulty": "L5-L6",
+  "difficulty": "Senior",
   "estimatedMinutes": 18,
   "overview": "In continuous rolling deployments across dozens of microservices, old and new versions of producers and consumers run side by side simultaneously. Schema evolution via binary field tags (Protobuf/Thrift) and Schema Registries (Avro) keeps rolling releases 100% zero-downtime without breaking upstream callers or consumers.",
   "firstPrinciplesStory": "You ship Billing Service v2.1 adding one new required JSON field `tax_jurisdiction`. Halfway through the rolling deploy, v2.0 pods reject v2.1 events with HTTP 400 while older consumers crash trying to parse fields they didn't expect—cascading across Kafka into 100k stuck invoices. Binary schema tags paired with strict forward/backward compatibility rules prevent rolling schema breaks at CI build time.",
   "adaptiveLenses": {
     "intuition": "Imagine sending packages with numbered slot stickers instead of long English labels: if slot #14 appears on a form printed next week, an older clerk simply skips slot #14 cleanly while still processing slots #1–#13—never throwing away the envelope.",
     "mechanics": "Protobuf/Thrift encode integers (`tag = 1, 2, 14`) rather than string field names, saving 3–7x payload size. Avro omits tags per record and embeds a 5-byte Schema Registry ID header. Both require never reusing deleted tag numbers and adding new fields strictly as `optional` with safe defaults via Expand-Contract deploys.",
-    "staffTradeoffs": "Adopt TPP Design by Contract: fail breaking wire changes cleanly in CI (`FULL_TRANSITIVE` compatibility checks) rather than discovering schema breaks in production. Wrap Kafka deserializers with a monitored Dead-Letter Queue (`billing.dlq`) so corrupted external payloads quarantine safely instead of starving an entire consumer partition."
+    "staffTradeoffs": "Adopt TPP Design by Contract: fail breaking wire changes cleanly in CI (`FULL_TRANSITIVE` compatibility checks) rather than discovering schema breaks in production. Wrap Kafka deserializers with a monitored Dead-Letter Queue (`billing.dlq`) so corrupted external payloads quarantine safely instead of starving an entire consumer partition, and park the record's key when per-key order matters so later events for it wait behind it."
   },
   "ddiaAnchors": [
     {
@@ -31,7 +31,7 @@
   "keyTakeaways": [
     "NEVER reuse retired Protobuf/Thrift tag numbers or narrow field numeric types (`int64` -> `int32`).",
     "Binary encoding (Protobuf / Avro) eliminates JSON key bloat and cuts internal RPC bandwidth by ~70%.",
-    "Always quarantine unparseable poison-pill events into a monitored DLQ rather than crash-looping a partition."
+    "Quarantine unparseable poison-pill events into a monitored DLQ rather than crash-looping a partition; when per-key order matters, park the key so its later events wait too."
   ],
   "nodes": [
     {
@@ -147,9 +147,9 @@
       "latencyDeltaMs": 2.0,
       "inspectorNote": "Forward compatibility lets teams ship producer v2.1 hours or days before upgrading all consumer deployments.",
       "predictPrompt": {
-        "prompt": "If Tax Consumer v2.0 reads the v2.1 message, parses tags 1..13, and then emits a derived event re-serialized from its v2.0 in-memory struct, what subtle bug occurs?",
-        "hint": "What happens to unknown field tag #14 when a strict struct-to-bytes serializer writes downstream?",
-        "reveal": "Unless unknown byte fields are preserved (`UnknownFieldSet` pass-through), re-serializing drops tag #14 permanently downstream!"
+        "prompt": "If Tax Consumer v2.0 decodes the v2.1 message, copies tags 1..13 into its own domain struct, and then emits a derived event serialized from that struct, what subtle bug occurs?",
+        "hint": "Where would unknown tag #14 live once the data has left the generated Protobuf message?",
+        "reveal": "Tag #14 is dropped downstream. Version note: proto2, and proto3 since protobuf 3.5, keep unknown fields when you decode and re-encode the same message type (proto3 3.0–3.4 discarded them). Today the bug appears mainly when you map the message into your own struct or DTO, or convert through JSON, which has no slot for unknown tags."
       }
     }
   ],
@@ -160,7 +160,7 @@
       "faultType": "partition",
       "targetNodeId": "tax-v20",
       "triggerSummary": "External webhook gateway bypasses CI validation and produces corrupted bytes onto `billing.events` partition 3.",
-      "mitigationSummary": "Consumer deserializes inside a contract try-catch boundary, isolates malformed record + metadata to `billing.dlq`, and commits partition 3 offset cleanly.",
+      "mitigationSummary": "Consumer deserializes inside a contract try-catch boundary, isolates the malformed record + metadata to `billing.dlq`, parks its invoice_id so later events for that invoice wait behind it, and commits the partition 3 offset.",
       "steps": [
         {
           "stepNo": 1,
@@ -186,11 +186,11 @@
           "edgeId": "e4",
           "category": "failover",
           "protocol": "Kafka DLQ",
-          "info": "Quarantines bad frame + `trace_id` to `billing.dlq`, commits offset `90822`, and alerts owners immediately.",
+          "info": "Quarantines bad frame + `trace_id` to `billing.dlq`, parks its invoice_id, commits offset `90822`, and alerts owners.",
           "payloadSize": "410 B",
           "payloadInspector": "Topic: billing.dlq\nsource_partition: 3 | offset: 90821\nreason: SchemaDeserializationError",
           "latencyDeltaMs": 2.5,
-          "inspectorNote": "Decouples malformed single events from healthy stream throughput while preserving forensic evidence for fast fixes."
+          "inspectorNote": "Decouples one malformed event from healthy stream throughput while preserving forensic evidence. Because the stream is keyed by invoice, later events for the parked invoice are diverted too, so they never apply out of order."
         }
       ]
     }
@@ -209,6 +209,6 @@
       "bestFor": "High-throughput Kafka event topics and Iceberg/Parquet archival pipelines."
     }
   ],
-  "quizQuestionIds": ["q-schema-1", "q-schema-2"],
+  "quizQuestionIds": ["q-schema-1", "q-schema-2", "q-schema-3"],
   "flashcardIds": ["fc-schema-1", "fc-schema-2"]
 }

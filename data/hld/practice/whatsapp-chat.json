@@ -1,0 +1,39 @@
+{
+  "version": "2.0.0",
+  "topicId": "whatsapp-chat",
+  "flashcards": [
+    {
+      "id": "fc-chat-1",
+      "topicId": "whatsapp-chat",
+      "layer": 1,
+      "difficulty": "Senior",
+      "front": "Why do chat servers pair Cassandra with `(chat_id, bucket)` partition keys and Snowflake/seq clustering keys?",
+      "back": "LSM-tree storage handles massive write rates (hundreds of thousands of messages/sec), while partitioning by `(chat_id, month)` keeps single-conversation scroll queries sequential on one shard without unbounded partition growth.",
+      "tags": ["WhatsApp", "Cassandra", "Data Modeling"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-chat-1",
+      "topicId": "whatsapp-chat",
+      "layer": 1,
+      "difficulty": "Senior",
+      "scenario": "A chat gateway pod holding 100,000 WebSockets crashes. All 100,000 clients reconnect immediately and overload the auth and session tier.",
+      "question": "Which mitigation stops the reconnect storm?",
+      "options": [
+        "Client backoff with full jitter plus edge connection shaping",
+        "Sticky routing so each client returns to its original pod",
+        "Larger session tokens so each reconnect skips the auth check",
+        "Client retries at a fixed 2-second delay to stay predictable"
+      ],
+      "correctIndex": 0,
+      "explanation": "Clients reconnecting on a fixed schedule arrive together. Exponential backoff with random (full) jitter spreads the reconnects over tens of seconds, and rate-shaping new connections at the edge protects the auth tier from whatever burst remains.",
+      "optionExplanations": [
+        "Correct. Jitter spreads reconnects, and shaping caps the rest.",
+        "The original pod crashed, and stickiness does not slow the reconnects.",
+        "Skipping auth is a security change and does not spread the load.",
+        "A fixed delay makes every client retry at the same moment again."
+      ]
+    }
+  ]
+}

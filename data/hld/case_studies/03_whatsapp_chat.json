@@ -3,7 +3,7 @@
   "tier": 2,
   "title": "Design an Instant Messaging System (WhatsApp)",
   "subtitle": "Sticky WebSocket gateways, delivery receipts, offline queue & group fan-out",
-  "levelTag": "L5-L6",
+  "levelTag": "Senior",
   "estimatedMinutes": 45,
   "tags": ["WebSockets", "Presence", "Delivery Receipts", "Offline Sync"],
   "functionalReqs": [
@@ -67,7 +67,7 @@
     "layer": 1,
     "title": "1-on-1 & Offline Chat Delivery Flow",
     "subtitle": "Stateful WebSocket gateway routing via Redis session map + Cassandra LSM storage",
-    "difficulty": "L5-L6",
+    "difficulty": "Senior",
     "estimatedMinutes": 22,
     "overview": "Unlike stateless REST APIs, chat servers maintain millions of persistent WebSocket connections. A shared Redis Session Registry maps `user_id -> gateway_host` so Gateway A can route messages directly to Bob's Gateway B (or store in Cassandra + trigger APNs/FCM push if Bob is offline).",
     "keyTakeaways": [

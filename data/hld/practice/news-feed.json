@@ -1,0 +1,39 @@
+{
+  "version": "2.0.0",
+  "topicId": "news-feed",
+  "flashcards": [
+    {
+      "id": "fc-feed-1",
+      "topicId": "news-feed",
+      "layer": 6,
+      "difficulty": "Mid",
+      "front": "Why is Hybrid Fan-Out preferred over pure Fan-Out-on-Write for Twitter/X?",
+      "back": "Pushing a single tweet from a 50M-follower celebrity into 50M Redis timelines causes minutes-long queue lag and massive write amplification. Hybrid pushes normal users and merges celebrity posts on read.",
+      "tags": ["News Feed", "Fan-Out", "Celebrity Skew"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-feed-1",
+      "topicId": "news-feed",
+      "layer": 6,
+      "difficulty": "Mid",
+      "scenario": "Your social app uses pure fan-out on write. When an account with 45 million followers posts, ordinary users wait 12 minutes to see their friends' posts.",
+      "question": "What caused the delay, and what is the usual fix?",
+      "options": [
+        "Feed reads use OFFSET pagination; switch to cursor paging",
+        "The 45M-entry fan-out floods the queue; pull big accounts at read time",
+        "Fan-out workers lack capacity; autoscale them on queue depth",
+        "Timeline cache TTLs are too short; cache feeds for longer"
+      ],
+      "correctIndex": 1,
+      "explanation": "Fan-out on write pushes one timeline entry per follower, so a 45-million-follower post floods the fan-out queue and delays everyone else. Hybrid fan-out skips the push for very large accounts and merges their recent posts in at read time.",
+      "optionExplanations": [
+        "Cursor paging speeds deep reads, but the delay comes from the write fan-out.",
+        "Correct. Hybrid fan-out removes the giant write burst.",
+        "Autoscaling helps, but each celebrity post still costs 45M writes.",
+        "Longer TTLs keep stale feeds; they do not shrink a 45M-entry burst."
+      ]
+    }
+  ]
+}

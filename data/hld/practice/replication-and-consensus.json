@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "replication-and-consensus",
+  "flashcards": [
+    {
+      "id": "fc-raft-1",
+      "topicId": "replication-and-consensus",
+      "layer": 5,
+      "difficulty": "Senior",
+      "front": "How does Raft prevent split-brain when an old Leader gets partitioned and reconnects?",
+      "back": "A majority cluster elects a new Leader at a higher monotonic Term (`T+1`). Any RPC or client heartbeat carrying stale Term `T` is immediately rejected by nodes at `T+1`, forcing the deposed leader to step down.",
+      "tags": ["Raft", "Split-Brain", "Consensus"]
+    },
+    {
+      "id": "fc-quorum-2",
+      "topicId": "replication-and-consensus",
+      "layer": 5,
+      "difficulty": "Senior",
+      "front": "What does `W + R > N` guarantee in Dynamo-style quorum replication, and what does it NOT prevent?",
+      "back": "It guarantees every read quorum overlaps at least one node from the latest write quorum. However, concurrent writes or sloppy quorums can still diverge, requiring vector clocks / CRDTs or Last-Write-Wins reconciliation.",
+      "tags": ["Quorum", "Dynamo", "Consistency"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-raft-1",
+      "topicId": "replication-and-consensus",
+      "layer": 5,
+      "difficulty": "Senior",
+      "scenario": "A 5-node Raft cluster is partitioned into {Node1 (old leader), Node2} and {Node3, Node4, Node5}.",
+      "question": "Which side can elect a leader and commit new writes?",
+      "options": [
+        "Only {Node3, Node4, Node5}, since 3 of 5 is a majority",
+        "Neither side, because a partition halts the whole cluster",
+        "Both sides, and they reconcile their logs after healing",
+        "Only {Node1, Node2}, because Node1 was already the leader"
+      ],
+      "correctIndex": 0,
+      "explanation": "Raft needs a majority, floor(5/2)+1 = 3 votes, to elect a leader and to commit. Only the three-node side has that. The old leader keeps its title briefly but cannot commit anything, and it steps down when it sees the higher term.",
+      "optionExplanations": [
+        "Correct. The three-node side can elect a leader and commit.",
+        "The majority side keeps working; only the minority side stalls.",
+        "That would be split-brain; Raft prevents the minority from committing.",
+        "Being leader is not enough; Node1 cannot reach a majority to commit."
+      ]
+    },
+    {
+      "id": "q-quorum-2",
+      "topicId": "replication-and-consensus",
+      "layer": 5,
+      "difficulty": "Senior",
+      "scenario": "In a Dynamo-style store with N=3 replicas you set W=2 and R=1 to make reads fast.",
+      "question": "What consistency does W=2, R=1 give you?",
+      "options": [
+        "Stale reads are possible, because W + R equals N",
+        "No writes succeed during any single replica outage",
+        "Linearizable reads, because a majority acked every write",
+        "Strong reads only while all three replicas are healthy"
+      ],
+      "correctIndex": 0,
+      "explanation": "Reads are only guaranteed to see the latest write when the read and write sets must overlap, W + R > N. Here 2 + 1 = 3 is not greater than 3, so a read can hit the one replica that missed the write. Even with overlap, sloppy quorums and concurrent writes weaken the guarantee.",
+      "optionExplanations": [
+        "Correct. The single read can land on the replica that missed the write.",
+        "W=2 still succeeds with one replica down; availability is not the issue.",
+        "A majority write does not help if the read does not overlap it.",
+        "Even with all replicas healthy, the read can hit a lagging one."
+      ]
+    }
+  ]
+}

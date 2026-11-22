@@ -1,0 +1,92 @@
+{
+  "version": "2.0.0",
+  "topicId": "distributed-transactions-saga",
+  "flashcards": [
+    {
+      "id": "fc-saga-1",
+      "topicId": "distributed-transactions-saga",
+      "layer": 6,
+      "difficulty": "Senior",
+      "front": "Why do microservices avoid Two-Phase Commit (2PC) across service boundaries and use Sagas instead?",
+      "back": "2PC holds locks across all participants during coordinator pauses (`in-doubt` state if the coordinator crashes), coupling availability to every node. A Saga breaks the workflow into local ACID steps paired with idempotent compensating transactions.",
+      "tags": ["DDIA Ch. 7 & 9", "Saga", "2PC"]
+    },
+    {
+      "id": "fc-saga-2",
+      "topicId": "distributed-transactions-saga",
+      "layer": 6,
+      "difficulty": "Senior",
+      "front": "When choosing between Choreography and Orchestration for a multi-step Saga, what is the pragmatic rule?",
+      "back": "Choreography suits simple 2–3 step flows with loose coupling; Orchestration wins beyond ~4 steps or branching failure recovery because one explicit state machine owns timeouts, retries, and compensation order.",
+      "tags": ["Saga", "Orchestration", "Pragmatic Design"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-saga-1",
+      "topicId": "distributed-transactions-saga",
+      "layer": 6,
+      "difficulty": "Senior",
+      "scenario": "A travel booking saga runs Flight, then Hotel, then Payment. Flight and Hotel succeed, then Payment fails for good because of insufficient funds.",
+      "question": "How does the saga get back to a consistent state?",
+      "options": [
+        "Run CancelHotel, then CancelFlight, each idempotent and retried",
+        "Hold XA prepare locks on all three until the user adds funds",
+        "Leave both bookings and let a nightly job release stale holds",
+        "Retry the payment forward until it eventually goes through"
+      ],
+      "correctIndex": 0,
+      "explanation": "Each earlier step already committed locally, so there is nothing to roll back. The saga runs compensating actions in reverse order (CancelHotel, then CancelFlight), each idempotent so it can be retried safely.",
+      "optionExplanations": [
+        "Correct. Compensation undoes committed steps in reverse order.",
+        "That is two-phase commit, which sagas exist to avoid.",
+        "Customers would see a booked trip they never paid for until the job runs.",
+        "Retrying forward is for steps after the pivot; a declined card will not succeed."
+      ]
+    },
+    {
+      "id": "q-saga-2",
+      "topicId": "distributed-transactions-saga",
+      "layer": 6,
+      "difficulty": "Senior",
+      "scenario": "Sagas have no global isolation. User B reads an order as INVENTORY_RESERVED before User A's saga compensates and cancels it.",
+      "question": "What common countermeasure stops half-finished saga state from misleading readers?",
+      "options": [
+        "Cache the order status so readers see the previous version",
+        "Delay all reads of the order until a fixed timeout passes",
+        "Run every saga step inside one distributed database transaction",
+        "Explicit pending states that readers treat as not yet final"
+      ],
+      "correctIndex": 3,
+      "explanation": "Mark records with explicit pending states, such as PENDING_PAYMENT, that readers and other flows treat as not final. This semantic lock makes the in-progress state visible instead of looking committed.",
+      "optionExplanations": [
+        "A cached older version is just a different stale state.",
+        "A timeout guesses at completion and still shows wrong state when it is off.",
+        "That brings back the cross-service locking a saga is meant to avoid.",
+        "Correct. Readers can tell an unsettled order from a final one."
+      ]
+    },
+    {
+      "id": "q-saga-3",
+      "topicId": "distributed-transactions-saga",
+      "layer": 6,
+      "difficulty": "Senior",
+      "scenario": "A ticket saga reserves a seat, then calls the card network to authorize $120, then plans to capture the payment and issue the ticket.",
+      "question": "Which step is the pivot, after which the saga should only retry forward?",
+      "options": [
+        "Issuing the ticket, since that is the step the customer sees",
+        "Reserving the seat, since it is the first step that commits",
+        "Capturing the payment, since an authorization can be voided",
+        "Authorizing the card, since money is committed at that point"
+      ],
+      "correctIndex": 2,
+      "explanation": "An authorization only places a hold and can be voided, so it is still compensable. Capture moves the money and is the practical point of no return, so steps after it (issuing the ticket) should retry forward rather than refund.",
+      "optionExplanations": [
+        "Issuing happens after capture and should retry forward, not be the pivot.",
+        "The seat hold has an easy compensation: release it.",
+        "Correct. Capture is the first step you cannot cleanly undo.",
+        "An authorization is a hold; voiding it releases the funds."
+      ]
+    }
+  ]
+}

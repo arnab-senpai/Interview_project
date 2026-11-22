@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "distributed-rate-limiter",
+  "flashcards": [
+    {
+      "id": "fc-rl-1",
+      "topicId": "distributed-rate-limiter",
+      "layer": 2,
+      "difficulty": "Mid",
+      "front": "Why execute Token Bucket check-and-decrement inside a Redis Lua script?",
+      "back": "Separate GET then SET calls across concurrent gateway pods cause race conditions (double-spending tokens). Redis executes Lua scripts atomically on its single-threaded event loop without distributed lock overhead.",
+      "tags": ["Rate Limiter", "Redis Lua", "Atomicity"]
+    },
+    {
+      "id": "fc-rl-2",
+      "topicId": "distributed-rate-limiter",
+      "layer": 2,
+      "difficulty": "Mid",
+      "front": "When should a distributed rate limiter fail-open vs fail-closed if Redis goes unreachable?",
+      "back": "Fail-open (with an in-memory per-pod soft cap) for revenue/consumer APIs so a Redis blip never causes a total outage; fail-closed for strict security, anti-fraud, or compliance quotas.",
+      "tags": ["Rate Limiter", "Resilience", "Fail-Open"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-rl-1",
+      "topicId": "distributed-rate-limiter",
+      "layer": 2,
+      "difficulty": "Mid",
+      "scenario": "You enforce 100 requests per minute with a fixed window counter that resets at :00. A client sends 100 requests at 12:00:59 and 100 more at 12:01:01.",
+      "question": "What allowed 200 requests in 2 seconds, and what fixes it with little memory?",
+      "options": [
+        "Clock skew between pods; sync every pod with NTP more often",
+        "Token bucket refill was too fast; lower the refill rate",
+        "A fixed-window boundary burst; use a sliding window counter",
+        "A race in INCR; wrap the counter update in a Redis lock"
+      ],
+      "correctIndex": 2,
+      "explanation": "Fixed windows reset at a boundary, so a client can spend two full quotas around it. A sliding window counter weights the previous window's count by how much of it still overlaps, which smooths the boundary with two counters per key.",
+      "optionExplanations": [
+        "Skew can blur boundaries, but this burst happens even on one perfectly synced pod.",
+        "The limiter in the scenario is a fixed window counter, not a token bucket.",
+        "Correct. Two weighted counters remove the double quota at the boundary.",
+        "INCR is atomic in Redis; the counts were right, the window rule was the problem."
+      ]
+    },
+    {
+      "id": "q-rl-2",
+      "topicId": "distributed-rate-limiter",
+      "layer": 2,
+      "difficulty": "Mid",
+      "scenario": "Your rate limiter keeps counters in Redis. During a 10-second Redis failover, the API gateway returns HTTP 500 to every checkout request.",
+      "question": "What should a checkout gateway do when the limiter's store is unavailable?",
+      "options": [
+        "Skip rate limiting entirely until the next deploy",
+        "Fail open to a conservative per-pod in-memory limit",
+        "Retry the Redis call several times inside each request",
+        "Fail closed and return 429 until Redis is healthy again"
+      ],
+      "correctIndex": 1,
+      "explanation": "For revenue paths, the limiter should not become a single point of total failure. Failing open to a conservative per-pod in-memory limit keeps checkouts working while still bounding abuse. Security-critical limits, such as login attempts, may reasonably fail closed instead.",
+      "optionExplanations": [
+        "Dropping all limits leaves the backend unprotected for far longer than needed.",
+        "Correct. Checkouts keep working and each pod still caps traffic.",
+        "Retries add latency to every request and pile more load on a failing store.",
+        "That turns a 10-second Redis blip into a 10-second checkout outage."
+      ]
+    }
+  ]
+}

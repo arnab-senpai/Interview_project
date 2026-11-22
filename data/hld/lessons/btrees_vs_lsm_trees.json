@@ -5,14 +5,14 @@
   "layer": 4,
   "title": "Storage Engines: B-Trees vs LSM-Trees",
   "subtitle": "Write-Ahead Logs, MemTables, SSTable compaction vs in-place B-Tree page splits",
-  "difficulty": "L5-L6",
+  "difficulty": "Senior",
   "estimatedMinutes": 22,
   "overview": "Why do Cassandra and RocksDB ingest hundreds of thousands of writes per second while PostgreSQL shines on predictable point reads and complex indexes? The answer lies inside the storage engine on disk: append-only Log-Structured Merge-Trees (LSM-Trees) versus page-oriented B-Trees.",
   "firstPrinciplesStory": "Imagine you are building an append-only audit log for 100,000 events/sec. You start with a single flat file—writes are blazingly fast sequential appends, until you realize searching for one key requires scanning gigabytes. Adding a sorted B-Tree solves lookups in O(log N) page hops, yet random writes now bounce disk heads/NVMe pages across 4 KB blocks, triggering write amplification and dirty-page splits. What if you keep writes purely sequential in RAM + WAL and merge sorted immutable segments asynchronously in the background? That tension—sequential writes vs predictable read latency—is the core story of DDIA Chapter 3.",
   "adaptiveLenses": {
     "intuition": "A B-Tree is like an alphabetically sorted filing cabinet: finding a folder is instant, but squeezing a new folder into a full drawer forces shifting folders and splitting drawers on the spot. An LSM-Tree is like dropping notes onto your desk pad in arrival order, then sorting stacks neatly into labeled boxes at night—instant drop-off, occasional cleanup tax, and searching might check 2–3 boxes unless you keep a sticky-note checklist (Bloom filter).",
     "mechanics": "LSM engines append mutations to a disk WAL for durability and insert sorted keys into an in-memory Red-Black/SkipList MemTable. When full, the MemTable flushes sequentially as an immutable SSTable (Sorted String Table) with sparse index + per-SSTable Bloom filter. Background Leveled/Size-Tiered Compaction merges overlapping SSTables and drops tombstones. B-Trees mutate fixed 4–16 KB pages in place (buffered via Page Cache + WAL recovery), using latch crabbing for concurrent tree traversal.",
-    "staffTradeoffs": "Evaluate Write, Read, and Space Amplification together (the RUM Conjecture). LSM trees slash write amplification for random keys and compress tightly (often 50% smaller footprint), making them ideal for write-heavy time-series/messaging (RocksDB, Cassandra, ScyllaDB). Yet unbounded background compaction steals disk IOPS and causes p99 tail-latency spikes—whereas B-Trees offer tight p99 read bounds and clean range/lock semantics for OLTP."
+    "staffTradeoffs": "Evaluate write, read and space amplification together (the RUM Conjecture). LSM trees win on write throughput by turning random writes into sequential ones, and they compress tightly, which suits write-heavy time-series and messaging (RocksDB, Cassandra, ScyllaDB). They do not have lower write amplification everywhere: leveled compaction commonly rewrites each byte 10 to 30 times in exchange for low space and read amplification, while size-tiered compaction writes less but uses more space and makes reads check more files. Unbounded compaction also steals disk IOPS and causes p99 spikes, whereas B-Trees offer tight p99 read bounds and clean range and lock semantics for OLTP."
   },
   "ddiaAnchors": [
     {
@@ -121,7 +121,7 @@
       "edgeId": "e-w-wal",
       "category": "write",
       "protocol": "WAL Append",
-      "info": "PUT user:4812 appended sequentially to WAL (0 random disk seeks)",
+      "info": "PUT user:4812 appended sequentially to the WAL buffer (0 random disk seeks)",
       "payloadSize": "128 B",
       "payloadInspector": "LSN 994102: OP=PUT key=user:4812 val={...} crc32=0x8A12F",
       "latencyDeltaMs": 0.3,
@@ -129,23 +129,38 @@
     },
     {
       "stepNo": 2,
-      "phaseTitle": "2. MEMTABLE SORTED INSERT",
+      "phaseTitle": "2. GROUP-COMMIT FSYNC",
       "timestampMs": 0.3,
+      "sourceNodeId": "writer",
+      "targetNodeId": "wal",
+      "edgeId": "e-w-wal",
+      "category": "write",
+      "protocol": "fsync",
+      "info": "WAL batch fsync'd to stable storage (group commit every ~1–2 ms) before any ack",
+      "payloadSize": "64 KB",
+      "payloadInspector": "fdatasync(wal-000184.log) covers 512 writes in one flush -> durable at LSN 994102",
+      "latencyDeltaMs": 1.0,
+      "inspectorNote": "Durability depends on the fsync policy, not on the append. Cassandra's default commitlog_sync=periodic (10 s) and RocksDB's default WriteOptions.sync=false can both lose acknowledged writes on power loss; group commit makes per-write sync affordable."
+    },
+    {
+      "stepNo": 3,
+      "phaseTitle": "3. MEMTABLE SORTED INSERT",
+      "timestampMs": 1.3,
       "sourceNodeId": "writer",
       "targetNodeId": "memtable",
       "edgeId": "e-w-mem",
       "category": "write",
       "protocol": "RAM SkipList",
-      "info": "Key inserted in O(log N) into RAM SkipList -> Write ACK returned!",
+      "info": "Key inserted in O(log N) into RAM SkipList -> write ACK returned after the WAL fsync",
       "payloadSize": "128 B",
-      "payloadInspector": "MemTable usage: 63.9 MB / 64.0 MB -> Write acknowledged in 0.31ms",
+      "payloadInspector": "MemTable usage: 63.9 MB / 64.0 MB -> write acknowledged at 1.35 ms (fsync included)",
       "latencyDeltaMs": 0.05,
       "inspectorNote": "Notice how fast random writes complete—zero B-Tree page splitting or random 4 KB page dirties on disk."
     },
     {
-      "stepNo": 3,
-      "phaseTitle": "3. IMMUTABLE SSTABLE FLUSH",
-      "timestampMs": 0.35,
+      "stepNo": 4,
+      "phaseTitle": "4. IMMUTABLE SSTABLE FLUSH",
+      "timestampMs": 1.35,
       "sourceNodeId": "memtable",
       "targetNodeId": "sstable-l0",
       "edgeId": "e-mem-sst",
@@ -163,9 +178,9 @@
       }
     },
     {
-      "stepNo": 4,
-      "phaseTitle": "4. B-TREE COMPARISON (PAGE SPLIT)",
-      "timestampMs": 1.55,
+      "stepNo": 5,
+      "phaseTitle": "5. B-TREE COMPARISON (PAGE SPLIT)",
+      "timestampMs": 2.55,
       "sourceNodeId": "writer",
       "targetNodeId": "btree-ref",
       "edgeId": "e-w-btree",
@@ -234,6 +249,6 @@
       "bestFor": "Relational OLTP workloads with complex queries, transactions, and mixed read/write"
     }
   ],
-  "quizQuestionIds": ["q-lsm-1", "q-lsm-2"],
+  "quizQuestionIds": ["q-lsm-1", "q-lsm-2", "q-lsm-3"],
   "flashcardIds": ["fc-lsm-1", "fc-lsm-2"]
 }

@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "dns-and-cdn",
+  "flashcards": [
+    {
+      "id": "fc-dns-1",
+      "topicId": "dns-and-cdn",
+      "layer": 1,
+      "difficulty": "Junior",
+      "front": "Why should GeoDNS records for regional failover use a low TTL (e.g., 30–60s) instead of 24 hours?",
+      "back": "Recursive ISP and client resolvers cache DNS records for the full TTL. A 24-hour TTL leaves users routed to a dead region long after health checks fail; a 60s TTL limits failover lag while balancing resolver query load.",
+      "tags": ["DNS", "Failover", "TTL"]
+    },
+    {
+      "id": "fc-cdn-2",
+      "topicId": "dns-and-cdn",
+      "layer": 1,
+      "difficulty": "Junior",
+      "front": "What problem does an Origin Shield solve in a global Pull CDN?",
+      "back": "When a popular uncached object is requested across 50 edge PoPs simultaneously, an Origin Shield acts as a regional L2 collapsing cache so only 1 request hits your origin instead of 50.",
+      "tags": ["CDN", "Origin Shield", "Request Coalescing"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-dns-1",
+      "topicId": "dns-and-cdn",
+      "layer": 1,
+      "difficulty": "Junior",
+      "scenario": "Your primary US-East region goes down. A Route 53 health check flips the DNS record to US-West within 10 seconds, yet 40% of users keep hitting US-East for about 3 hours.",
+      "question": "What is the most likely misconfiguration?",
+      "options": [
+        "The failover record had a high TTL, such as 4 hours",
+        "The health check interval was too long to detect the outage",
+        "The CDN kept serving cached pages from the US-East origin",
+        "The load balancer in US-West was not pre-warmed for traffic"
+      ],
+      "correctIndex": 0,
+      "explanation": "Resolvers and OS caches keep the old answer until its TTL runs out, so the failover window is bounded by the record's TTL. Failover records usually use 30 to 60 second TTLs. Some clients and JVMs also ignore TTLs, which is why a small tail lingers even with low TTLs.",
+      "optionExplanations": [
+        "Correct. Cached answers live for the TTL, which matches the 3-hour tail.",
+        "The scenario says the record flipped within 10 seconds, so detection worked.",
+        "Cached pages would not send users to a dead region's IPs; the users are resolving to US-East.",
+        "A cold balancer causes errors or latency in US-West, not traffic still arriving at US-East."
+      ]
+    },
+    {
+      "id": "q-cdn-2",
+      "topicId": "dns-and-cdn",
+      "layer": 1,
+      "difficulty": "Mid",
+      "scenario": "Every time a breaking-news video drops, 80 CDN edge PoPs miss at the same moment and send 80 identical 50 MB fetches to your origin.",
+      "question": "Which CDN feature collapses those 80 misses into roughly one origin fetch?",
+      "options": [
+        "Lower DNS TTLs so clients spread across more edge PoPs",
+        "A longer max-age so edges keep the video cached longer",
+        "Serving the video over HTTP/3 to cut handshake overhead",
+        "An origin shield tier that collapses concurrent misses"
+      ],
+      "correctIndex": 3,
+      "explanation": "An origin shield is a regional mid-tier cache between the edges and the origin. Edges miss into the shield, and the shield collapses concurrent requests for the same key into one origin fetch.",
+      "optionExplanations": [
+        "Spreading clients across more PoPs creates more cold caches, not fewer origin fetches.",
+        "Longer caching helps later requests, but the first wave of misses still reaches the origin.",
+        "HTTP/3 changes the client transport; it does nothing about cache misses at the edge.",
+        "Correct. The shield turns many edge misses into a single origin request."
+      ]
+    }
+  ]
+}

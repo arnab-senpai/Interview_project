@@ -5,7 +5,7 @@
   "layer": 2,
   "title": "Distributed Rate Limiter",
   "subtitle": "Token Bucket, Sliding Window Log & atomic Redis Lua enforcement",
-  "difficulty": "L4-L5",
+  "difficulty": "Mid",
   "estimatedMinutes": 18,
   "overview": "Rate limiters protect downstream databases and GPU clusters from abuse, noisy neighbors, and cascading traffic spikes. In distributed fleets, local in-memory counters drift across nodes—requiring atomic Redis Lua scripts (Token Bucket or Sliding Window Counter) paired with explicit fail-open vs fail-closed policies.",
   "firstPrinciplesStory": "A single misconfigured partner retry script wakes up at 3 AM firing 10,000 POST /checkout calls per second. Your API pods auto-scale eagerly, which only multiplies the thundering wave hitting your single Postgres Primary until connection pools exhaust and paying customers get 503s. Putting a fixed-window counter in app memory fails because 20 gateway pods don't share state—and a naive Redis GET+SET races under concurrency. Thus you need atomic central accounting plus graceful failure boundaries.",

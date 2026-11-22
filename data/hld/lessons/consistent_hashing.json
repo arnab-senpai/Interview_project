@@ -5,7 +5,7 @@
   "layer": 5,
   "title": "Consistent Hashing & Virtual Nodes",
   "subtitle": "Minimizing key movement when nodes join, fail, or scale",
-  "difficulty": "L4-L5",
+  "difficulty": "Mid",
   "estimatedMinutes": 16,
   "overview": "Naive modulo partitioning (`hash(key) % N`) remaps almost every key whenever a cache or database node is added or crashes, triggering massive cache miss avalanches. Consistent Hashing maps both servers and keys onto a 0..2^32-1 hash ring using Virtual Nodes (vnodes) so adding/removing 1 node moves only ~K/N keys.",
   "firstPrinciplesStory": "You shard 100 million user profiles across 10 cache servers using `hash(user_id) % 10`. Everything runs smoothly until Server #4 overheats on Friday afternoon and drops out. Changing the divisor from 10 to 9 changes the remainder for ~90% of all keys! Overnight, 90 million cache lookups turn into misses, slamming your primary database straight into collapse. Consistent Hashing solves that exact topological fragility by decoupling key positions from the total node count.",

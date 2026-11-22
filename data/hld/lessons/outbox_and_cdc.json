@@ -5,9 +5,9 @@
   "layer": 6,
   "title": "Transactional Outbox & Change Data Capture (CDC)",
   "subtitle": "Eliminating dual-write bugs between Postgres and Kafka",
-  "difficulty": "L5-L6",
+  "difficulty": "Senior",
   "estimatedMinutes": 18,
-  "overview": "Writing to Postgres AND publishing to Kafka in two separate network calls is one of the most common distributed data bugs: if the app crashes or Kafka blips between the two writes, your database and search/billing caches silently diverge forever. The Transactional Outbox + CDC pattern guarantees atomic dual-state propagation without distributed 2PC.",
+  "overview": "Writing to Postgres AND publishing to Kafka in two separate network calls is one of the most common distributed data bugs: if the app crashes or Kafka blips between the two writes, your database and search/billing caches silently diverge. The Transactional Outbox + CDC pattern makes the state change and its event commit together, without distributed 2PC.",
   "firstPrinciplesStory": "Your Checkout Service runs `INSERT INTO orders ...` in Postgres, then calls `kafka.produce('OrderCreated')`. Everything looks great in staging until a pod OOM-kills right between the SQL `COMMIT` and the Kafka call—leaving a paid order in Postgres that Shipping and Billing NEVER hear about! Reversing the order fails too: publishing to Kafka before SQL commits lets Shipping mail items for orders that rolled back! Making the database WAL itself the single commit point solves both bugs cleanly.",
   "adaptiveLenses": {
     "intuition": "Instead of mailing a letter at the post office AND trying to update your checkbook separately (and dropping one if you trip on the stairs), you write BOTH the order AND the 'mail this receipt' slip on the exact same checkbook page in one transaction. A dedicated courier (Debezium CDC) reads your ledger's carbon copy (WAL) and guarantees every slip reaches Kafka.",
@@ -141,7 +141,7 @@
       "edgeId": "e-deb-kfk",
       "category": "async",
       "protocol": "Kafka",
-      "info": "Debezium publishes OrderCreated to Kafka -> Search & Billing stay 100% consistent",
+      "info": "Debezium publishes OrderCreated to Kafka -> Search & Billing converge (eventually consistent, usually sub-second lag)",
       "payloadSize": "460 B",
       "payloadInspector": "Topic: orders.events | Key: order_7 | Header x-event-id: evt_8841",
       "latencyDeltaMs": 2.0,
@@ -156,11 +156,11 @@
   "chaosScenarios": [
     {
       "id": "kafka-outage-cdc-recovery",
-      "title": "Kafka Cluster Outage During Checkout (Zero Lost Events)",
+      "title": "Kafka Cluster Outage During Checkout (Events Wait in the WAL)",
       "faultType": "node_down",
       "targetNodeId": "kafka",
       "triggerSummary": "Kafka brokers become unreachable for 5 minutes while customers keep placing orders.",
-      "mitigationSummary": "Order Service checkouts keep succeeding at 100% availability via Postgres ACID commits; Debezium resumes cleanly from Postgres WAL offset once Kafka recovers.",
+      "mitigationSummary": "Checkouts keep succeeding because they only depend on Postgres; Debezium resumes from its replication-slot position once Kafka recovers.",
       "steps": [
         {
           "stepNo": 1,
@@ -173,7 +173,7 @@
           "protocol": "SQL",
           "info": "Orders + outbox_events persist safely in Postgres even while Kafka is unreachable",
           "payloadSize": "420 B",
-          "payloadInspector": "Checkout API availability remains 100%; outbox queues durably in Postgres WAL",
+          "payloadInspector": "Checkout keeps succeeding; outbox_events rows and their WAL wait in Postgres",
           "latencyDeltaMs": 4.0,
           "inspectorNote": "Notice the resilience gain: a downstream Kafka outage no longer takes down customer checkout!"
         },
@@ -186,11 +186,51 @@
           "edgeId": "e-deb-kfk",
           "category": "failover",
           "protocol": "Kafka",
-          "info": "Kafka returns -> Debezium drains 5m WAL backlog in order -> 0 lost events",
+          "info": "Kafka returns -> Debezium drains the 5-minute WAL backlog in order -> no committed event is lost",
           "payloadSize": "2.4 KB",
           "payloadInspector": "Resumed from replication slot LSN 0/4A20B1 -> synced all pending orders to Search & Billing",
           "latencyDeltaMs": 8.0,
-          "inspectorNote": "Zero reconciliation scripts needed—every committed order automatically streams to derived consumers."
+          "inspectorNote": "Committed orders stream to consumers automatically once Kafka is back. Keep a periodic reconciliation job anyway, as a safety net for consumer bugs or connector misconfiguration."
+        }
+      ]
+    },
+    {
+      "id": "replication-slot-wal-pileup",
+      "title": "Debezium Down -> Replication Slot Pins WAL and Fills the Primary's Disk",
+      "faultType": "node_down",
+      "targetNodeId": "debezium",
+      "triggerSummary": "The Debezium connector crashes on Friday night and nobody notices; its logical replication slot stays in place.",
+      "mitigationSummary": "Alert on replication-slot lag in bytes, cap retention with max_slot_wal_keep_size (Postgres 13+), and restart or re-snapshot the connector before the disk fills.",
+      "steps": [
+        {
+          "stepNo": 1,
+          "phaseTitle": "1. INACTIVE SLOT PINS WAL",
+          "timestampMs": 0.0,
+          "sourceNodeId": "postgres",
+          "targetNodeId": "debezium",
+          "edgeId": "e-pg-deb",
+          "category": "failover",
+          "protocol": "PG WAL",
+          "info": "debezium_slot active=false -> Postgres must keep every WAL segment since its confirmed LSN",
+          "payloadSize": "180 GB",
+          "payloadInspector": "pg_replication_slots: slot=debezium_slot active=f retained_wal=180 GB | disk 92% used and rising",
+          "latencyDeltaMs": 5.0,
+          "inspectorNote": "Checkout still works, so nothing looks wrong, until the primary runs out of disk and stops accepting writes."
+        },
+        {
+          "stepNo": 2,
+          "phaseTitle": "2. LAG ALERT + RETENTION CAP",
+          "timestampMs": 5.0,
+          "sourceNodeId": "order-svc",
+          "targetNodeId": "postgres",
+          "edgeId": "e-svc-pg",
+          "category": "write",
+          "protocol": "SQL",
+          "info": "Alert fires at slot lag > 10 GB; max_slot_wal_keep_size=50GB bounds the worst case",
+          "payloadSize": "96 B",
+          "payloadInspector": "SELECT slot_name, pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn) FROM pg_replication_slots;",
+          "latencyDeltaMs": 2.0,
+          "inspectorNote": "If the cap is hit, Postgres invalidates the slot to protect the primary; the connector then needs a fresh snapshot, which is slower but far better than a full disk."
         }
       ]
     }
@@ -209,6 +249,6 @@
       "bestFor": "Best-effort non-critical analytics/click telemetry only"
     }
   ],
-  "quizQuestionIds": ["q-cdc-1", "q-cdc-2"],
+  "quizQuestionIds": ["q-cdc-1", "q-cdc-2", "q-cdc-3"],
   "flashcardIds": ["fc-cdc-1", "fc-cdc-2"]
 }

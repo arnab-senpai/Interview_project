@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "realtime-fraud-pipeline",
+  "flashcards": [
+    {
+      "id": "fc-fraud-1",
+      "topicId": "realtime-fraud-pipeline",
+      "layer": 6,
+      "difficulty": "Staff",
+      "front": "Why must stream velocity windows use Event-Time Watermarks rather than Processing-Time clocks?",
+      "back": "Delayed mobile retries arrive minutes late; Event-Time Watermarks (`MaxEventTime - MaxOutOfOrderDelay`) paired with `allowedLateness` evaluate bursts by when transactions actually occurred.",
+      "tags": ["DDIA Ch. 11", "Watermarks", "Flink"]
+    },
+    {
+      "id": "fc-fraud-2",
+      "topicId": "realtime-fraud-pipeline",
+      "layer": 6,
+      "difficulty": "Staff",
+      "front": "How do Actor + Blackboard patterns break temporal and structural coupling in streaming systems?",
+      "back": "Keyed Actors maintain lock-free isolated entity state from partitioned streams, publishing independent anomaly signals onto a shared Blackboard coordinator so ML/rule evaluators evolve independently.",
+      "tags": ["TPP Actors", "Blackboard", "Decoupling"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-fraud-1",
+      "topicId": "realtime-fraud-pipeline",
+      "layer": 6,
+      "difficulty": "Staff",
+      "scenario": "Subway riders lose signal after tapping their cards, so transaction events reach Kafka up to 90 seconds out of order.",
+      "question": "How does a streaming fraud job still compute accurate 5-minute card velocity windows?",
+      "options": [
+        "Hourly batch jobs that recompute velocity from the database",
+        "Processing-time windows based on when Kafka received events",
+        "Event-time windows with watermarks and allowed lateness",
+        "Drop any event that arrives more than 5 seconds late"
+      ],
+      "correctIndex": 2,
+      "explanation": "Window by the event's own timestamp, not by arrival time. Watermarks tell the job how far event time has progressed, and an allowed lateness (here at least 90 seconds) lets late events update their window before it closes.",
+      "optionExplanations": [
+        "Accurate, but an hour is far too late to block fraud.",
+        "Delayed taps would be counted in the wrong window.",
+        "Correct. Late events still land in the window they belong to.",
+        "Subway taps would vanish, hiding exactly the bursts you want to catch."
+      ]
+    },
+    {
+      "id": "q-fraud-2",
+      "topicId": "realtime-fraud-pipeline",
+      "layer": 6,
+      "difficulty": "Staff",
+      "scenario": "Fraud counters, an ML scorer, and an activity feed all need each payment event, and they are owned by different teams.",
+      "question": "Which design avoids dual writes and tight coupling between those teams?",
+      "options": [
+        "Checkout calls each team's service synchronously after commit",
+        "Outbox plus CDC into Kafka, with an idempotent consumer per team",
+        "A two-phase commit spanning Postgres and each team's store",
+        "Checkout writes to Postgres and to Kafka in separate calls"
+      ],
+      "correctIndex": 1,
+      "explanation": "Emit payment events once, through a transactional outbox and CDC, into a Kafka log. Each team runs its own consumer with idempotent sinks, so a slow or failing consumer does not block checkout or the other teams.",
+      "optionExplanations": [
+        "Every team's outage or latency becomes a checkout problem.",
+        "Correct. One commit point feeds independent consumers.",
+        "2PC couples every team's availability to every checkout.",
+        "A crash between the two writes leaves the systems out of sync."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "enterprise-rag-pipeline",
+  "flashcards": [
+    {
+      "id": "fc-rag-1",
+      "topicId": "enterprise-rag-pipeline",
+      "layer": 7,
+      "difficulty": "Senior",
+      "front": "Why must user ACL permissions be enforced BEFORE or INSIDE vector retrieval rather than post-filtering?",
+      "back": "Post-filtering top-K retrieved chunks risks returning zero allowed results when top matches are confidential—and caching or passing unauthorized text into LLM prompts creates severe data-leak vulnerabilities.",
+      "tags": ["RAG", "Security", "ACL"]
+    },
+    {
+      "id": "fc-rag-2",
+      "topicId": "enterprise-rag-pipeline",
+      "layer": 7,
+      "difficulty": "Senior",
+      "front": "Why pair dense HNSW vector search with sparse BM25 keyword search (Hybrid Retrieval)?",
+      "back": "Dense embeddings capture semantic meaning but often miss exact error codes, SKUs, or acronyms; BM25 nails exact lexical matches. Reciprocal Rank Fusion (RRF) + reranking combines both strengths.",
+      "tags": ["Hybrid Search", "BM25", "HNSW"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-rag-1",
+      "topicId": "enterprise-rag-pipeline",
+      "layer": 7,
+      "difficulty": "Senior",
+      "scenario": "An internal RAG assistant fetches the global top-10 vector matches, sends them to the LLM, and then removes citations the user is not allowed to see from the answer.",
+      "question": "What is wrong with this design?",
+      "options": [
+        "Vector search cannot rank documents that mix text and tables",
+        "Citations must be added before the model generates its text",
+        "Ten chunks is too few for the model to cite sources reliably",
+        "Restricted text already shaped the answer before filtering"
+      ],
+      "correctIndex": 3,
+      "explanation": "Filtering after generation is too late: restricted text has already shaped the answer and may sit in logs or caches. It also hurts recall, because the top 10 can be filled with chunks the user cannot see. Apply the ACL filter inside the retrieval query, and scope caches by it too.",
+      "optionExplanations": [
+        "Mixed content can be chunked and embedded; this is not the flaw.",
+        "Citation timing is secondary; the leak happens because the model saw restricted text.",
+        "Chunk count is a tuning choice; the security flaw is where filtering happens.",
+        "Correct. The ACL must filter retrieval, not the final text."
+      ]
+    },
+    {
+      "id": "q-rag-2",
+      "topicId": "enterprise-rag-pipeline",
+      "layer": 7,
+      "difficulty": "Staff",
+      "scenario": "At peak, your 70B model pool fills its KV-cache memory and time to first token rises from 300 ms to 6 seconds.",
+      "question": "Which response keeps the assistant usable?",
+      "options": [
+        "Serve scoped cache hits and route routine asks to a small model",
+        "Rerank more candidates so each answer needs fewer retries",
+        "Disable continuous batching so each request runs on its own",
+        "Raise client timeouts to 60 s so fewer requests are dropped"
+      ],
+      "correctIndex": 0,
+      "explanation": "Answer repeats from an ACL-scoped semantic cache so they never reach a GPU, and route routine questions to a smaller, faster model while the large pool is saturated. Longer timeouts only hide the queue; they do not shorten it.",
+      "optionExplanations": [
+        "Correct. Both cut load on the saturated pool immediately.",
+        "More reranking adds latency per request without freeing KV-cache memory.",
+        "Batching is what keeps GPU utilization high; turning it off lowers throughput.",
+        "Longer timeouts keep more requests waiting and make the queue worse."
+      ]
+    }
+  ]
+}

@@ -3,7 +3,7 @@
   "tier": 5,
   "title": "Design a ChatGPT-Scale Conversational Assistant",
   "subtitle": "SSE token streaming, KV-cache & PagedAttention, TPM rate limiting, guardrails & SLM fallback",
-  "levelTag": "L6-L7",
+  "levelTag": "Staff",
   "estimatedMinutes": 50,
   "tags": ["SSE Streaming", "KV-Cache", "TPM Rate Limit", "Guardrails", "PagedAttention"],
   "functionalReqs": [
@@ -67,7 +67,7 @@
     "layer": 7,
     "title": "ChatGPT-Scale Inference & Streaming Pipeline",
     "subtitle": "TPM reservation -> Context assembly -> Semantic cache -> vLLM PagedAttention SSE stream",
-    "difficulty": "L6-L7",
+    "difficulty": "Staff",
     "estimatedMinutes": 25,
     "overview": "Unlike CRUD apps scaled around stateless CPU and SQL read replicas, a ChatGPT-scale assistant scales around **token budgets, context-window compaction, prefix/KV-cache reuse, continuous GPU batching, and graceful SLM degradation**.",
     "keyTakeaways": [

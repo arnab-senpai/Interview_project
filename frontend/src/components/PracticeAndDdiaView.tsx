@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { BookMarked, CheckCircle2, Compass, Layers, RotateCw, XCircle } from "lucide-react";
-import { api, type FlashcardWithSm2, type QuizWithAttempt } from "../api/client";
+import { api, type FlashcardWithSm2, type QuizAnswerResult, type QuizWithAttempt } from "../api/client";
 import type { PatternPlaybook } from "../types/hld";
 import { humanizeKey, renderInlineCode } from "../utils/format";
+import { ReportIssueButton } from "./ReportIssueButton";
 
 interface PracticeAndDdiaViewProps {
   topicFilter: string | null;
@@ -32,7 +33,7 @@ export const PracticeAndDdiaView: React.FC<PracticeAndDdiaViewProps> = ({
   const [dueOnly, setDueOnly] = useState(false);
 
   const [quizzes, setQuizzes] = useState<QuizWithAttempt[]>([]);
-  const [quizFeedback, setQuizFeedback] = useState<Record<string, { selectedIndex: number; correctIndex: number; isCorrect: boolean; explanation: string }>>({});
+  const [quizFeedback, setQuizFeedback] = useState<Record<string, QuizAnswerResult>>({});
 
   useEffect(() => {
     if (topicFilter) setSubtab("quizzes");
@@ -122,7 +123,10 @@ export const PracticeAndDdiaView: React.FC<PracticeAndDdiaViewProps> = ({
             ) : (
               <div className="card" style={{ padding: 24 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-                  <span className="badge badge-accent">Layer {activeCard.layer} · {activeCard.difficulty}</span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <span className="badge badge-accent">Layer {activeCard.layer} · {activeCard.difficulty}</span>
+                    <ReportIssueButton topicId={activeCard.topicId} blockId={`flashcard:${activeCard.id}`} blockLabel={`Flashcard ${activeCard.id}`} />
+                  </span>
                   <span className="mono" style={{ fontSize: 11, color: "var(--ink-muted)" }}>
                     Interval: {activeCard.sm2.intervalDays}d · EF {activeCard.sm2.easinessFactor}
                   </span>
@@ -175,11 +179,14 @@ export const PracticeAndDdiaView: React.FC<PracticeAndDdiaViewProps> = ({
                     <span className="mono" style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)" }}>
                       SCENARIO #{qIdx + 1} · {topicMetaById[q.topicId]?.title ?? humanizeKey(q.topicId)} · Layer {q.layer} ({q.difficulty})
                     </span>
-                    {q.lastAttempt && !fb && (
-                      <span className={`badge ${q.lastAttempt.isCorrect ? "badge-success" : "badge-warn"}`}>
-                        Last try: {q.lastAttempt.isCorrect ? "Correct" : "Needs review"}
-                      </span>
-                    )}
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      {q.lastAttempt && !fb && (
+                        <span className={`badge ${q.lastAttempt.isCorrect ? "badge-success" : "badge-warn"}`}>
+                          Last try: {q.lastAttempt.isCorrect ? "Correct" : "Needs review"}
+                        </span>
+                      )}
+                      <ReportIssueButton topicId={q.topicId} blockId={`quiz:${q.id}`} blockLabel={`Quiz ${q.id}`} />
+                    </span>
                   </div>
                   <div style={{ padding: 10, borderRadius: 6, background: "var(--bg-subtle)", fontSize: 13, marginBottom: 10 }}>
                     {renderInlineCode(q.scenario)}
@@ -233,6 +240,22 @@ export const PracticeAndDdiaView: React.FC<PracticeAndDdiaViewProps> = ({
                         {fb.isCorrect ? "Spot on!" : "Not quite — here is why:"}
                       </div>
                       {renderInlineCode(fb.explanation)}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8 }}>
+                        {q.options.map((_, idx) => {
+                          const why = fb.optionExplanations[idx];
+                          if (!why) return null;
+                          const tag = idx === fb.correctIndex ? "Answer" : idx === fb.selectedIndex ? "Your pick" : null;
+                          return (
+                            <div key={idx} style={{ display: "flex", gap: 6, opacity: tag ? 1 : 0.75 }}>
+                              <span className="mono" style={{ fontWeight: 700, minWidth: 18 }}>{String.fromCharCode(65 + idx)}.</span>
+                              <span>
+                                {tag && <strong>{tag}: </strong>}
+                                {renderInlineCode(why)}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>

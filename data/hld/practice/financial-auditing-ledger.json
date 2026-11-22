@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "financial-auditing-ledger",
+  "flashcards": [
+    {
+      "id": "fc-audit-1",
+      "topicId": "financial-auditing-ledger",
+      "layer": 4,
+      "difficulty": "Staff",
+      "front": "What does an SSTable Bloom Filter optimize in an LSM-Tree engine, and roughly how much RAM does it need?",
+      "back": "A per-SSTable Bloom Filter rejects lookups for non-existent keys in O(1) RAM before touching NVMe disk (~9.6 bits/key for 1% false-positive rate ≈ ~1.2 MB per 1M keys).",
+      "tags": ["DDIA Ch. 3", "LSM-Tree", "Bloom Filter"]
+    },
+    {
+      "id": "fc-audit-2",
+      "topicId": "financial-auditing-ledger",
+      "layer": 4,
+      "difficulty": "Staff",
+      "front": "Why do analytics/audit queries achieve >90% I/O savings on Parquet/ClickHouse compared to Postgres rows?",
+      "back": "Columnar formats pack values of each column contiguously using Dictionary Encoding, RLE, and Bitmaps, so a 3-of-40-column scan reads only those 3 compressed stripes via SIMD execution.",
+      "tags": ["DDIA Ch. 3", "Columnar OLAP", "Compression"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-audit-1",
+      "topicId": "financial-auditing-ledger",
+      "layer": 4,
+      "difficulty": "Staff",
+      "scenario": "An audit engine takes 150k immutable writes per second and must also answer quarterly aggregations over 5 billion rows in under 2 seconds.",
+      "question": "Which storage design serves both workloads?",
+      "options": [
+        "LSM hot storage for ingest, compacted into columnar files",
+        "A columnar store only, writing each event as its own file",
+        "An in-memory store sized to hold all five years of events",
+        "One large Postgres table with indexes on the query columns"
+      ],
+      "correctIndex": 0,
+      "explanation": "Ingest into LSM-based hot storage, which handles high write rates with sequential I/O, then compact older data into sorted, compressed columnar files (such as Parquet) for analytics. Columnar scans skip irrelevant columns and row groups, and analytics no longer compete with ingest.",
+      "optionExplanations": [
+        "Correct. Each workload gets a format built for it.",
+        "Tiny files per event make writes and scans slow.",
+        "Holding years of audit data in memory is costly and still not durable.",
+        "Indexes help lookups, but 5-billion-row scans still contend with ingest."
+      ]
+    },
+    {
+      "id": "q-audit-2",
+      "topicId": "financial-auditing-ledger",
+      "layer": 4,
+      "difficulty": "Staff",
+      "scenario": "During 400k writes per second bursts, RocksDB flushes L0 SSTables faster than compaction can merge them into L1.",
+      "question": "What breaks first, and what mitigates it?",
+      "options": [
+        "MemTables corrupt under load; lower the MemTable size",
+        "The block cache thrashes; double the cache size",
+        "The WAL fills first; increase the WAL size limit",
+        "L0 write stalls and slower reads; reserve compaction I/O"
+      ],
+      "correctIndex": 3,
+      "explanation": "L0 files pile up, so reads check more files, and RocksDB eventually throttles or stops writes (write stalls). Reserve disk bandwidth for compaction, tune L0 slowdown thresholds, and keep Bloom filters sized (around 10 bits per key) so reads skip files.",
+      "optionExplanations": [
+        "Smaller MemTables create even more L0 files.",
+        "A bigger cache helps reads somewhat but does not stop write stalls.",
+        "A larger WAL delays flushes but does not add compaction capacity.",
+        "Correct. Compaction capacity sets the sustainable write rate."
+      ]
+    }
+  ]
+}

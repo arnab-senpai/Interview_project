@@ -5,7 +5,7 @@
   "layer": 4,
   "title": "Relational DBs, MVCC & Isolation Levels",
   "subtitle": "Read Committed, Snapshot Isolation, Write Skew anomalies & Serializable SSI",
-  "difficulty": "L5-L6",
+  "difficulty": "Senior",
   "estimatedMinutes": 22,
   "overview": "Calling a database 'ACID' does not mean concurrent transactions cannot corrupt business invariants! Default Postgres (`Read Committed`) and even `Repeatable Read` (`Snapshot Isolation`) permit subtle anomalies like **Write Skew**—where two transactions read the same valid state concurrently and commit mutually violating updates.",
   "firstPrinciplesStory": "Suppose your hospital requires at least one doctor on-call at all times. Two doctors, Alice and Bob, both feel sick at 11:02 PM and open the scheduling portal simultaneously. Both transactions run under Snapshot Isolation: Alice checks 'Count of on-call doctors = 2 (Alice, Bob)' and removes herself; Bob checks the exact same snapshot 'Count = 2' and removes himself! Because Alice updates Alice's row and Bob updates Bob's row, there is ZERO dirty write conflict—both commit cleanly, leaving zero doctors on call. That classic DDIA Chapter 7 trap is Write Skew.",

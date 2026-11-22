@@ -1,0 +1,92 @@
+{
+  "version": "2.0.0",
+  "topicId": "btrees-vs-lsm-trees",
+  "flashcards": [
+    {
+      "id": "fc-lsm-1",
+      "topicId": "btrees-vs-lsm-trees",
+      "layer": 4,
+      "difficulty": "Senior",
+      "front": "Why do LSM-Trees convert random writes into fast sequential disk I/O compared to B-Trees?",
+      "back": "Mutations append sequentially to a WAL and insert into an in-memory sorted MemTable, which later flushes sequentially as immutable SSTables—avoiding B-Tree random 4–16 KB page read-modify-writes and page splits.",
+      "tags": ["DDIA Ch. 3", "LSM-Tree", "Write Amplification"]
+    },
+    {
+      "id": "fc-lsm-2",
+      "topicId": "btrees-vs-lsm-trees",
+      "layer": 4,
+      "difficulty": "Senior",
+      "front": "How do LSM-Trees avoid probing every SSTable on disk when looking up a non-existent key?",
+      "back": "Each SSTable pairs with a compact in-memory Bloom filter; if the Bloom filter reports negative, that SSTable definitely does not hold the key and is skipped immediately.",
+      "tags": ["DDIA Ch. 3", "Bloom Filter", "SSTable"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-lsm-1",
+      "topicId": "btrees-vs-lsm-trees",
+      "layer": 4,
+      "difficulty": "Senior",
+      "scenario": "A RocksDB-backed chat service ingests 250k writes per second smoothly, but every few minutes point-read p99 jumps from 2 ms to 55 ms.",
+      "question": "What most likely causes the periodic spikes?",
+      "options": [
+        "B-tree page splits happening during the point reads",
+        "MemTable flushes blocking every read until they finish",
+        "Background compaction competing with reads for disk I/O",
+        "WAL fsyncs on each write stalling the read threads"
+      ],
+      "correctIndex": 2,
+      "explanation": "LSM engines merge SSTables in the background. While compaction runs, it competes with foreground reads for disk bandwidth, and if L0 files pile up each read has to check more files. Rate-limiting compaction and watching L0 file counts keeps p99 stable.",
+      "optionExplanations": [
+        "RocksDB is an LSM engine; it does not split B-tree pages on reads.",
+        "Flushes run in the background and do not block reads outright.",
+        "Correct. Compaction bursts line up with the periodic spikes.",
+        "WAL syncs affect write latency; reads do not wait on them."
+      ]
+    },
+    {
+      "id": "q-lsm-2",
+      "topicId": "btrees-vs-lsm-trees",
+      "layer": 4,
+      "difficulty": "Senior",
+      "scenario": "A write-heavy LSM store uses random UUID keys. Reads for keys that do not exist are slow because each one touches many SSTables.",
+      "question": "Which structure cuts the wasted disk reads for missing keys?",
+      "options": [
+        "A Bloom filter per SSTable, held in memory",
+        "Less frequent WAL syncs to free disk bandwidth for reads",
+        "A larger block cache so more SSTable blocks stay in memory",
+        "A larger MemTable so fewer SSTables get created"
+      ],
+      "correctIndex": 0,
+      "explanation": "Each SSTable keeps a Bloom filter in memory. If the filter says the key is absent, the engine skips that file without reading it. With about 10 bits per key the false-positive rate is around 1%.",
+      "optionExplanations": [
+        "Correct. A negative answer lets the engine skip that file.",
+        "This risks losing writes and does not reduce read probes.",
+        "A cache helps hot data, but missing keys still probe every file.",
+        "Fewer files helps a little, but every read still checks each one."
+      ]
+    },
+    {
+      "id": "q-lsm-3",
+      "topicId": "btrees-vs-lsm-trees",
+      "layer": 4,
+      "difficulty": "Staff",
+      "scenario": "A teammate says 'LSM trees always have lower write amplification than B-trees, so pick RocksDB for any write-heavy table.'",
+      "question": "What is the more accurate statement?",
+      "options": [
+        "Write amplification only matters on spinning disks today",
+        "The claim is reversed; B-trees always have lower write amp",
+        "LSM wins by making writes sequential; its write amp varies",
+        "The claim is right; LSM writes each byte only once to disk"
+      ],
+      "correctIndex": 2,
+      "explanation": "LSM engines win on write throughput by turning random writes into sequential ones. Their write amplification depends on compaction: leveled compaction commonly rewrites each byte 10 to 30 times, trading that for lower space and read amplification, while size-tiered compaction writes less but uses more space. Compare read, write and space amplification together.",
+      "optionExplanations": [
+        "It matters a lot on SSDs too, because it wears flash and eats bandwidth.",
+        "B-trees rewrite whole pages for small updates; neither side always wins.",
+        "Correct. Leveled compaction can rewrite data 10 to 30 times.",
+        "Compaction rewrites data repeatedly; one write per byte is not how LSM works."
+      ]
+    }
+  ]
+}

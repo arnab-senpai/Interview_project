@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "ticketmaster-flash-sale",
+  "flashcards": [
+    {
+      "id": "fc-tkt-1",
+      "topicId": "ticketmaster-flash-sale",
+      "layer": 5,
+      "difficulty": "Senior",
+      "front": "How do ticketing systems protect the primary SQL database when 500,000 fans click Buy at 10:00:00 AM?",
+      "back": "Put a distributed Virtual Waiting Room token gate in front of checkout so only bounded capacity reaches checkout, and enforce seat uniqueness with a Redis hold TTL plus an ACID unique constraint (`(event_id, seat_id)`) in PostgreSQL.",
+      "tags": ["Case Study", "Flash Sale", "Virtual Queue"]
+    },
+    {
+      "id": "fc-tkt-2",
+      "topicId": "ticketmaster-flash-sale",
+      "layer": 5,
+      "difficulty": "Senior",
+      "front": "What happens if a user's 10-minute seat hold expires in Redis right as their payment webhook settles?",
+      "back": "Re-verify seat status inside a conditional SQL `UPDATE ... WHERE status = 'HELD' AND hold_token = :tok` before finalizing the ticket; if already released or sold to another buyer, trigger an automatic refund rather than double-booking the seat.",
+      "tags": ["Case Study", "Seat Locking", "Correctness"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-tkt-1",
+      "topicId": "ticketmaster-flash-sale",
+      "layer": 5,
+      "difficulty": "Senior",
+      "scenario": "For a 20,000-seat drop, 800,000 users refresh the seat map in the opening second.",
+      "question": "Which two pieces keep the Postgres seats table from melting?",
+      "options": [
+        "A shorter seat-hold TTL so seats return to the pool faster",
+        "More read replicas, with every refresh served from a replica",
+        "SELECT ... FOR UPDATE on each seat as soon as the map loads",
+        "Cached seat-map snapshots plus a waiting room for checkout"
+      ],
+      "correctIndex": 3,
+      "explanation": "Serve the seat map as cached snapshots from a CDN or Redis so reads never reach Postgres, and put a virtual waiting room in front of checkout that admits users in controlled batches. Postgres then only sees the writes it can handle.",
+      "optionExplanations": [
+        "Shorter holds change churn, not the 800,000-request spike.",
+        "Replicas help reads, but checkout writes still stampede the primary.",
+        "Locking on page load would create 800,000 lock waiters.",
+        "Correct. Reads come from cache and writes arrive at a safe rate."
+      ]
+    },
+    {
+      "id": "q-tkt-2",
+      "topicId": "ticketmaster-flash-sale",
+      "layer": 5,
+      "difficulty": "Senior",
+      "scenario": "Two friends select seat A12 within 3 ms of each other just as the old hold expires. Holds live in Redis.",
+      "question": "What is the final guard that A12 is never sold twice, even if Redis loses a hold?",
+      "options": [
+        "A client-side check that the seat still shows as available",
+        "A unique constraint plus a conditional update in the database",
+        "A Redis hold with a longer TTL so it cannot expire mid-checkout",
+        "Routing both requests for one seat to the same app server"
+      ],
+      "correctIndex": 1,
+      "explanation": "Redis holds are a fast first filter, but the database is the source of truth. A unique constraint on (event_id, seat_id) for sales, plus a conditional update such as WHERE status = 'AVAILABLE', means only one purchase can commit.",
+      "optionExplanations": [
+        "Both clients see it as available; the client cannot arbitrate.",
+        "Correct. Only one transaction can commit the sale.",
+        "Redis can still evict or lose the key; it is not the final guard.",
+        "That narrows the race but still needs an atomic check at storage."
+      ]
+    }
+  ]
+}

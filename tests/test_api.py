@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 from backend.app.routers import curriculum, practice
+from backend.app.services.curriculum_loader import get_store
 
 
 @pytest.fixture()
@@ -25,7 +26,22 @@ def isolated_db(tmp_path: Path):
     os.environ.pop("SYSTEMCRAFT_DB_PATH", None)
 
 
-def test_fastapi_routes_registered_and_curriculum_loads(isolated_db) -> None:
+def _register(username: str, password: str = "strongpassword123", **extra) -> dict:
+    """Register a learner and return (user dict, bearer header)."""
+    from backend.app.routers import auth as auth_router
+
+    reg = auth_router.register_user(
+        auth_router.RegisterIn.model_validate({"username": username, "password": password, **extra})
+    )
+    return {"user": reg["user"], "header": f"Bearer {reg['accessToken']}", "token": reg["accessToken"]}
+
+
+@pytest.fixture()
+def learner(isolated_db) -> dict:
+    return _register("learner_one")["user"]
+
+
+def test_fastapi_routes_registered_and_curriculum_loads(isolated_db, learner) -> None:
     paths = set(isolated_db.openapi()["paths"].keys())
     expected = {
         "/api/health",
@@ -57,6 +73,10 @@ def test_fastapi_routes_registered_and_curriculum_loads(isolated_db) -> None:
         "/api/progress/streak",
         "/api/notes",
         "/api/notes/{topic_id}",
+        "/api/feedback",
+        "/api/feedback/mine",
+        "/api/admin/feedback",
+        "/api/admin/feedback/{feedback_id}",
     }
     assert expected.issubset(paths)
 
@@ -72,7 +92,7 @@ def test_fastapi_routes_registered_and_curriculum_loads(isolated_db) -> None:
     assert mods[0]["moduleNumber"] == 1
     assert mods[5]["candidateRubric"]["staffPrincipal"]["signals"]
 
-    ov = curriculum.get_hld_overview()
+    ov = curriculum.get_hld_overview(user=learner)
     assert len(ov["layers"]) == 7
 
     for entry in ov["lessons"]:
@@ -95,7 +115,10 @@ def test_search_patterns_foundations_and_reference(isolated_db) -> None:
     assert len(curriculum.get_tracks()["tracks"]) == 3
     assert len(curriculum.get_patterns()["patterns"]) == 12
     assert len(curriculum.get_foundations()["ddiaChapterMap"]) == 12
-    assert len(curriculum.get_reference()["latencyBenchmarks"]) == 10
+    reference = curriculum.get_reference()
+    assert len(reference["latencyBenchmarks"]) == 13
+    assert reference["latencyBenchmarksMeta"]["asOf"]
+    assert [row["level"] for row in reference["levelMapping"]["rows"]] == ["Junior", "Mid", "Senior", "Staff"]
 
     hits = curriculum.search_curriculum(q="raft")["results"]
     assert any(item["id"] == "replication-and-consensus" for item in hits)
@@ -104,7 +127,8 @@ def test_search_patterns_foundations_and_reference(isolated_db) -> None:
     assert any(item["id"] == "btrees-vs-lsm-trees" for item in lsm_hits)
 
 
-def test_progress_sm2_quiz_estimator_and_rubric_persistence(isolated_db) -> None:
+def test_progress_sm2_quiz_estimator_and_rubric_persistence(isolated_db, learner) -> None:
+    user = learner
     p = practice.save_lesson_progress(
         "caching-and-stampede",
         practice.LessonProgressIn.model_validate(
@@ -115,30 +139,53 @@ def test_progress_sm2_quiz_estimator_and_rubric_persistence(isolated_db) -> None
                 "activeLens": "mechanics",
             }
         ),
+        user=user,
     )
     assert p["status"] == "completed"
     assert p["activeLens"] == "mechanics"
 
-    cards = practice.list_flashcards(topic_id="caching-and-stampede", layer=None, due_only=False)["flashcards"]
+    cards = practice.list_flashcards(topic_id="caching-and-stampede", layer=None, due_only=False, user=user)["flashcards"]
     assert len(cards) >= 2
     card_id = cards[0]["id"]
 
-    rev1 = practice.review_flashcard(card_id, practice.FlashcardReviewIn(rating="good"))
+    rev1 = practice.review_flashcard(card_id, practice.FlashcardReviewIn(rating="good"), user=user)
     assert rev1["sm2"]["repetitions"] == 1
     assert rev1["sm2"]["intervalDays"] == 1
 
-    rev2 = practice.review_flashcard(card_id, practice.FlashcardReviewIn(rating="easy"))
+    rev2 = practice.review_flashcard(card_id, practice.FlashcardReviewIn(rating="easy"), user=user)
     assert rev2["sm2"]["repetitions"] == 2
     assert rev2["sm2"]["intervalDays"] >= 6
 
-    quizzes = practice.list_quizzes(topic_id="caching-and-stampede", layer=None)["quizzes"]
+    quizzes = practice.list_quizzes(topic_id="caching-and-stampede", layer=None, user=user)["quizzes"]
     assert len(quizzes) >= 2
     q0 = quizzes[0]
+    # The browser never receives the answer key or explanations before answering.
+    for q in quizzes:
+        assert "correctIndex" not in q
+        assert "explanation" not in q
+        assert "optionExplanations" not in q
+        assert q["lastAttempt"] is None
+    key = get_store().quizzes_by_id[q0["id"]].correct_index
+    wrong = (key + 1) % len(q0["options"])
+    miss = practice.submit_quiz_answer(
+        q0["id"],
+        practice.QuizAnswerIn.model_validate({"selectedIndex": wrong}),
+        user=user,
+    )
+    assert miss["isCorrect"] is False
+    assert miss["correctIndex"] == key
+    assert len(miss["optionExplanations"]) == len(q0["options"])
     ans = practice.submit_quiz_answer(
         q0["id"],
-        practice.QuizAnswerIn.model_validate({"selectedIndex": q0["correctIndex"]}),
+        practice.QuizAnswerIn.model_validate({"selectedIndex": key}),
+        user=user,
     )
     assert ans["isCorrect"] is True
+    answered = practice.list_quizzes(topic_id="caching-and-stampede", layer=None, user=user)["quizzes"]
+    revealed = next(q for q in answered if q["id"] == q0["id"])
+    assert revealed["lastAttempt"]["isCorrect"] is True
+    assert revealed["lastAttempt"]["correctIndex"] == key
+    assert all(q["lastAttempt"] is None for q in answered if q["id"] != q0["id"])
 
     calc = practice.run_estimator(
         practice.CapacityCalcIn.model_validate(
@@ -153,12 +200,13 @@ def test_progress_sm2_quiz_estimator_and_rubric_persistence(isolated_db) -> None
                 "replicationFactor": 3,
                 "saveRun": True,
             }
-        )
+        ),
+        user=user,
     )
     assert calc["metrics"]["avgQps"] == 4000.0
     assert len(calc["workedSteps"]) == 6
 
-    runs = practice.list_saved_estimations()["runs"]
+    runs = practice.list_saved_estimations(user=user)["runs"]
     assert len(runs) == 1
 
     practice.save_case_study_rubric(
@@ -166,10 +214,11 @@ def test_progress_sm2_quiz_estimator_and_rubric_persistence(isolated_db) -> None
         practice.RubricSaveIn.model_validate(
             {"checkedCriteria": ["Identifies 100:1 read/write ratio"], "notes": "Nailed KGS", "score": 85}
         ),
+        user=user,
     )
-    assert practice.get_case_study_rubric("url-shortener")["score"] == 85
+    assert practice.get_case_study_rubric("url-shortener", user=user)["score"] == 85
 
-    summary = practice.get_progress_summary()
+    summary = practice.get_progress_summary(user=user)
     assert summary["completedLessons"] == 1
     assert summary["quizzesCorrect"] == 1
 
@@ -193,7 +242,7 @@ def test_built_frontend_dist_served_and_api_404_guarded(isolated_db) -> None:
 def test_user_auth_tokens_isolation_streak_and_notes(isolated_db) -> None:
     from backend.app.routers import auth as auth_router
     from backend.app.routers import notes as notes_router
-    from backend.app.services.auth import resolve_optional_user
+    from backend.app.services.auth import require_user
 
     reg = auth_router.register_user(
         auth_router.RegisterIn.model_validate(
@@ -210,7 +259,7 @@ def test_user_auth_tokens_isolation_streak_and_notes(isolated_db) -> None:
 
     login = auth_router.login_user(auth_router.LoginIn(username="alice_dev", password="strongpassword123"))
     jwt_header = f"Bearer {login['accessToken']}"
-    alice = resolve_optional_user(authorization=jwt_header, x_study_token=None)
+    alice = require_user(authorization=jwt_header, x_study_token=None)
     assert alice["username"] == "alice_dev"
     assert alice["isGuest"] is False
 
@@ -222,10 +271,11 @@ def test_user_auth_tokens_isolation_streak_and_notes(isolated_db) -> None:
         ),
         user=alice,
     )
+    bob = _register("bob_dev")["user"]
     alice_sum = practice.get_progress_summary(user=alice)
-    guest_sum = practice.get_progress_summary()
+    bob_sum = practice.get_progress_summary(user=bob)
     assert alice_sum["completedLessons"] == 1
-    assert guest_sum["completedLessons"] == 0
+    assert bob_sum["completedLessons"] == 0
 
     # Personal sc_live_* token creation, auth resolution, and revocation
     created_tok = auth_router.create_personal_token(
@@ -234,12 +284,13 @@ def test_user_auth_tokens_isolation_streak_and_notes(isolated_db) -> None:
     )
     raw_tok = created_tok["rawToken"]
     assert raw_tok.startswith("sc_live_")
-    tok_user = resolve_optional_user(authorization=f"Bearer {raw_tok}", x_study_token=None)
+    tok_user = require_user(authorization=f"Bearer {raw_tok}", x_study_token=None)
     assert tok_user["id"] == alice["id"]
 
     auth_router.revoke_personal_token(created_tok["token"]["id"], user=alice)
-    revoked_fallback = resolve_optional_user(authorization=f"Bearer {raw_tok}", x_study_token=None)
-    assert revoked_fallback["isGuest"] is True
+    with pytest.raises(HTTPException) as revoked:
+        require_user(authorization=f"Bearer {raw_tok}", x_study_token=None)
+    assert revoked.value.status_code == 401
 
     # Per-user Markdown notes CRUD & streak updates
     saved = notes_router.save_note(
@@ -256,7 +307,7 @@ def test_user_auth_tokens_isolation_streak_and_notes(isolated_db) -> None:
     )
     assert saved["note"]["pinned"] is True
     assert len(notes_router.list_notes(topic_id=None, q="WAL", user=alice)["notes"]) == 1
-    assert len(notes_router.list_notes(topic_id=None, q="WAL")["notes"]) == 0
+    assert len(notes_router.list_notes(topic_id=None, q="WAL", user=bob)["notes"]) == 0
 
     streak = practice.get_daily_streak(user=alice)
     assert streak["currentStreak"] >= 1

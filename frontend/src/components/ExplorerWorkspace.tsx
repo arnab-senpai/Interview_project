@@ -23,6 +23,7 @@ import {
   SkipForward,
   X,
 } from "lucide-react";
+import { ReportIssueButton } from "./ReportIssueButton";
 import type { HldModuleItem, LessonIndexItem, TopicProgress } from "../api/client";
 import type { HldExplorerLesson, TraceStep } from "../types/hld";
 import { renderInlineCode, truncateText } from "../utils/format";
@@ -1287,7 +1288,14 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
                     <button className="hud-dock-btn" style={{ height: 25, fontSize: 10 }} onClick={handleReset}>
                       <ChevronLeft size={12} /> Overview
                     </button>
-                    <span className="badge badge-accent">{currentStep.protocol} · +{currentStep.latencyDeltaMs}ms</span>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      <ReportIssueButton
+                        topicId={activeLessonId}
+                        blockId={chaosId ? `chaos:${chaosId}:step:${currentStep.stepNo}` : `step:${currentStep.stepNo}`}
+                        blockLabel={`${chaosId ? `Chaos ${chaosId}, ` : ""}step ${currentStep.stepNo}: ${currentStep.phaseTitle}`}
+                      />
+                      <span className="badge badge-accent">{currentStep.protocol} · +{currentStep.latencyDeltaMs}ms</span>
+                    </span>
                   </div>
 
                   <div className="mono" style={{ fontSize: 11.5, fontWeight: 700, color: "var(--ink-primary)", marginBottom: 6 }}>
@@ -1314,6 +1322,9 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
                       </div>
                       <div style={{ fontSize: 12, lineHeight: 1.55, color: "var(--ink-primary)" }}>
                         {renderInlineCode(activeLesson.adaptiveLenses[lens])}
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                        <ReportIssueButton topicId={activeLessonId} blockId={`lens:${lens}`} blockLabel={`${lens} lens`} compact={false} />
                       </div>
                     </div>
                   )}
@@ -1368,6 +1379,9 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
                       </div>
                       <div style={{ fontSize: 12.5, lineHeight: 1.56, color: "var(--ink-primary)" }}>
                         {renderInlineCode(activeLesson.adaptiveLenses[lens])}
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                        <ReportIssueButton topicId={activeLessonId} blockId={`lens:${lens}`} blockLabel={`${lens} lens`} compact={false} />
                       </div>
                     </div>
                   )}

@@ -52,7 +52,7 @@
       "category": "foundations",
       "title": "DNS, GeoDNS & Pull/Push CDN",
       "subtitle": "Anycast routing, recursive resolution, edge caching & origin shield",
-      "difficulty": "L3-L4",
+      "difficulty": "Junior",
       "estimatedMinutes": 15,
       "status": "ready",
       "dataFile": "data/hld/lessons/dns_and_cdn.json"
@@ -63,7 +63,7 @@
       "category": "foundations",
       "title": "HTTP/1.1 vs HTTP/2 vs HTTP/3 (QUIC)",
       "subtitle": "Multiplexing, head-of-line blocking, 0-RTT handshakes",
-      "difficulty": "L3-L4",
+      "difficulty": "Junior",
       "estimatedMinutes": 12,
       "status": "planned"
     },
@@ -73,7 +73,7 @@
       "category": "foundations",
       "title": "TCP Handshake & TLS 1.3 Termination",
       "subtitle": "SYN/ACK RTT tax, session resumption, edge TLS offload",
-      "difficulty": "L3-L4",
+      "difficulty": "Junior",
       "estimatedMinutes": 12,
       "status": "planned"
     },
@@ -83,7 +83,7 @@
       "category": "building-blocks",
       "title": "WebSockets vs SSE vs Long Polling vs gRPC",
       "subtitle": "Choosing bidirectional vs server-push vs binary RPC transport",
-      "difficulty": "L4-L5",
+      "difficulty": "Mid",
       "estimatedMinutes": 15,
       "status": "ready",
       "dataFile": "data/hld/lessons/realtime_transport_protocols.json"
@@ -94,7 +94,7 @@
       "category": "building-blocks",
       "title": "BGP Anycast & Multi-Region Edge PoPs",
       "subtitle": "Routing users to the closest healthy point of presence",
-      "difficulty": "L5-L6",
+      "difficulty": "Senior",
       "estimatedMinutes": 15,
       "status": "planned"
     },
@@ -104,7 +104,7 @@
       "category": "building-blocks",
       "title": "L4 vs L7 Load Balancing & Algorithms",
       "subtitle": "TLS termination, health checks, Least-Conn & PEWMA routing",
-      "difficulty": "L3-L4",
+      "difficulty": "Junior",
       "estimatedMinutes": 16,
       "status": "ready",
       "dataFile": "data/hld/lessons/l7_load_balancer.json"
@@ -115,7 +115,7 @@
       "category": "building-blocks",
       "title": "API Gateway & Backend-for-Frontend (BFF)",
       "subtitle": "Auth validation, schema aggregation, canary splits",
-      "difficulty": "L4-L5",
+      "difficulty": "Mid",
       "estimatedMinutes": 14,
       "status": "planned"
     },
@@ -125,7 +125,7 @@
       "category": "patterns",
       "title": "Distributed Rate Limiter",
       "subtitle": "Token Bucket, Sliding Window Log & atomic Redis Lua enforcement",
-      "difficulty": "L4-L5",
+      "difficulty": "Mid",
       "estimatedMinutes": 18,
       "status": "ready",
       "dataFile": "data/hld/lessons/distributed_rate_limiter.json"
@@ -136,7 +136,7 @@
       "category": "building-blocks",
       "title": "Reverse Proxies, Sidecars & mTLS Mesh",
       "subtitle": "Envoy data plane vs control plane for internal service traffic",
-      "difficulty": "L5-L6",
+      "difficulty": "Senior",
       "estimatedMinutes": 16,
       "status": "planned"
     },
@@ -146,7 +146,7 @@
       "category": "building-blocks",
       "title": "Caching Strategies & Thundering Herd Defense",
       "subtitle": "Cache-Aside, Write-Through/Behind, Singleflight & Bloom Filters",
-      "difficulty": "L4-L5",
+      "difficulty": "Mid",
       "estimatedMinutes": 20,
       "status": "ready",
       "dataFile": "data/hld/lessons/caching_and_stampede.json"
@@ -157,7 +157,7 @@
       "category": "foundations",
       "title": "LRU, LFU & Memory Fragmentation",
       "subtitle": "Doubly linked list + hash map O(1) eviction and slab allocators",
-      "difficulty": "L3-L4",
+      "difficulty": "Junior",
       "estimatedMinutes": 14,
       "status": "planned"
     },
@@ -167,7 +167,7 @@
       "category": "patterns",
       "title": "Bloom Filters, HyperLogLog & Count-Min Sketch",
       "subtitle": "Sub-linear memory membership, cardinality, and heavy-hitter tracking",
-      "difficulty": "L5-L6",
+      "difficulty": "Senior",
       "estimatedMinutes": 16,
       "status": "planned"
     },
@@ -177,7 +177,7 @@
       "category": "building-blocks",
       "title": "Redis Internals: Hash Slots, RDB & AOF",
       "subtitle": "16,384 hash slots, single-threaded event loop & persistence trade-offs",
-      "difficulty": "L4-L5",
+      "difficulty": "Mid",
       "estimatedMinutes": 16,
       "status": "planned"
     },
@@ -187,7 +187,7 @@
       "category": "foundations",
       "title": "Storage Engines: B-Trees vs LSM-Trees",
       "subtitle": "Write-Ahead Logs, MemTables, SSTable compaction vs in-place B-Tree page splits",
-      "difficulty": "L5-L6",
+      "difficulty": "Senior",
       "estimatedMinutes": 22,
       "status": "ready",
       "dataFile": "data/hld/lessons/btrees_vs_lsm_trees.json"
@@ -198,7 +198,7 @@
       "category": "foundations",
       "title": "Relational DBs, MVCC & Isolation Levels",
       "subtitle": "Read Committed, Snapshot Isolation, Write Skew anomalies & Serializable SSI",
-      "difficulty": "L5-L6",
+      "difficulty": "Senior",
       "estimatedMinutes": 22,
       "status": "ready",
       "dataFile": "data/hld/lessons/sql_acid_and_isolation.json"
@@ -209,7 +209,7 @@
       "category": "building-blocks",
       "title": "NoSQL Paradigms: KV, Document, Wide-Column & Graph",
       "subtitle": "Matching access patterns to DynamoDB, MongoDB, Cassandra & Neo4j",
-      "difficulty": "L4-L5",
+      "difficulty": "Mid",
       "estimatedMinutes": 16,
       "status": "planned"
     },
@@ -219,7 +219,7 @@
       "category": "patterns",
       "title": "Database Sharding, Resharding & Hot-Key Mitigation",
       "subtitle": "Range vs Hash partitioning, key salting & directory routers",
-      "difficulty": "L5-L6",
+      "difficulty": "Senior",
       "estimatedMinutes": 20,
       "status": "ready",
       "dataFile": "data/hld/lessons/sharding_and_hot_keys.json"
@@ -230,7 +230,7 @@
       "category": "building-blocks",
       "title": "Geospatial (Geohash, Quadtree, H3) & Time-Series Stores",
       "subtitle": "2D proximity search and high-ingest metric downsampling",
-      "difficulty": "L5-L6",
+      "difficulty": "Senior",
       "estimatedMinutes": 18,
       "status": "planned"
     },
@@ -240,7 +240,7 @@
       "category": "building-blocks",
       "title": "Inverted Indices (BM25) & Vector DBs (HNSW / IVF)",
       "subtitle": "Lexical vs ANN semantic retrieval and hybrid score fusion",
-      "difficulty": "L5-L6",
+      "difficulty": "Senior",
       "estimatedMinutes": 18,
       "status": "planned"
     },
@@ -250,7 +250,7 @@
       "category": "patterns",
       "title": "Consistent Hashing & Virtual Nodes",
       "subtitle": "Minimizing key movement when nodes join, fail, or scale",
-      "difficulty": "L4-L5",
+      "difficulty": "Mid",
       "estimatedMinutes": 16,
       "status": "ready",
       "dataFile": "data/hld/lessons/consistent_hashing.json"
@@ -261,7 +261,7 @@
       "category": "foundations",
       "title": "CAP & PACELC Theorems in Practice",
       "subtitle": "Choosing Consistency vs Availability under partitions and normal latency",
-      "difficulty": "L4-L5",
+      "difficulty": "Mid",
       "estimatedMinutes": 14,
       "status": "planned"
     },
@@ -271,7 +271,7 @@
       "category": "building-blocks",
       "title": "Replication Quorums & Raft Consensus",
       "subtitle": "Leader election, AppendEntries log replication, W+R>N & split-brain prevention",
-      "difficulty": "L5-L6",
+      "difficulty": "Senior",
       "estimatedMinutes": 22,
       "status": "ready",
       "dataFile": "data/hld/lessons/replication_and_consensus.json"
@@ -282,7 +282,7 @@
       "category": "patterns",
       "title": "Logical Clocks, Vector Clocks & CRDTs",
       "subtitle": "Detecting causality without synchronized physical clocks",
-      "difficulty": "L6-L7",
+      "difficulty": "Staff",
       "estimatedMinutes": 20,
       "status": "planned"
     },
@@ -292,7 +292,7 @@
       "category": "patterns",
       "title": "Distributed Locks, Redlock & Fencing Tokens",
       "subtitle": "Why GC pauses break naive TTL locks and how monotonic tokens save state",
-      "difficulty": "L5-L6",
+      "difficulty": "Senior",
       "estimatedMinutes": 18,
       "status": "ready",
       "dataFile": "data/hld/lessons/distributed_locking_fencing.json"
@@ -303,7 +303,7 @@
       "category": "building-blocks",
       "title": "Service Discovery (etcd/ZooKeeper) & Gossip Protocols",
       "subtitle": "Heartbeats, health convergence & failure detection at cluster scale",
-      "difficulty": "L5-L6",
+      "difficulty": "Senior",
       "estimatedMinutes": 15,
       "status": "planned"
     },
@@ -313,7 +313,7 @@
       "category": "building-blocks",
       "title": "Kafka Event Streaming & Consumer Groups",
       "subtitle": "Append-only logs, ISR durability, partition offsets, backpressure & DLQs",
-      "difficulty": "L4-L5",
+      "difficulty": "Mid",
       "estimatedMinutes": 20,
       "status": "ready",
       "dataFile": "data/hld/lessons/kafka_event_streaming.json"
@@ -324,7 +324,7 @@
       "category": "foundations",
       "title": "Message Queues (SQS/RabbitMQ) vs Event Logs",
       "subtitle": "Competing consumers vs replayable partitioned log semantics",
-      "difficulty": "L3-L4",
+      "difficulty": "Junior",
       "estimatedMinutes": 14,
       "status": "planned"
     },
@@ -334,7 +334,7 @@
       "category": "patterns",
       "title": "Transactional Outbox & Change Data Capture (CDC)",
       "subtitle": "Eliminating dual-write bugs between Postgres and Kafka",
-      "difficulty": "L5-L6",
+      "difficulty": "Senior",
       "estimatedMinutes": 18,
       "status": "ready",
       "dataFile": "data/hld/lessons/outbox_and_cdc.json"
@@ -345,7 +345,7 @@
       "category": "patterns",
       "title": "Distributed Transactions: 2PC vs Saga Pattern",
       "subtitle": "Orchestration vs choreography with compensating actions",
-      "difficulty": "L5-L6",
+      "difficulty": "Senior",
       "estimatedMinutes": 18,
       "status": "ready",
       "dataFile": "data/hld/lessons/distributed_transactions_saga.json"
@@ -356,7 +356,7 @@
       "category": "patterns",
       "title": "Binary Contracts, Protobuf & Schema Evolution",
       "subtitle": "Tag-numbered wire compatibility, Schema Registry gates & poison-pill DLQs",
-      "difficulty": "L5-L6",
+      "difficulty": "Senior",
       "estimatedMinutes": 18,
       "status": "ready",
       "dataFile": "data/hld/lessons/schema_evolution_contracts.json"
@@ -367,7 +367,7 @@
       "category": "patterns",
       "title": "Idempotency Keys, Circuit Breakers & Backoff Jitter",
       "subtitle": "Preventing duplicate charges and cascading retry storms",
-      "difficulty": "L4-L5",
+      "difficulty": "Mid",
       "estimatedMinutes": 16,
       "status": "ready",
       "dataFile": "data/hld/lessons/idempotency_and_circuit_breakers.json"
@@ -378,7 +378,7 @@
       "category": "foundations",
       "title": "Observability: RED Metrics, Traces & Error Budgets",
       "subtitle": "OpenTelemetry context propagation, p99 tail latency & alerting",
-      "difficulty": "L5-L6",
+      "difficulty": "Senior",
       "estimatedMinutes": 16,
       "status": "planned"
     },
@@ -388,7 +388,7 @@
       "category": "ai-infra",
       "title": "Enterprise RAG Pipeline & LLM Gateway",
       "subtitle": "Semantic caching, ACL-filtered hybrid retrieval, reranking & SLM fallback",
-      "difficulty": "L5-L6",
+      "difficulty": "Senior",
       "estimatedMinutes": 22,
       "status": "ready",
       "dataFile": "data/hld/lessons/enterprise_rag_pipeline.json"
@@ -399,7 +399,7 @@
       "id": "url-shortener",
       "tier": 1,
       "title": "Design a URL Shortener (TinyURL / Bit.ly)",
-      "levelTag": "L3-L4",
+      "levelTag": "Junior",
       "tags": ["Base62", "KGS", "Read-Heavy Cache", "301 vs 302"],
       "status": "ready",
       "dataFile": "data/hld/case_studies/01_url_shortener.json"
@@ -408,7 +408,7 @@
       "id": "rate-limiter-system",
       "tier": 1,
       "title": "Design a Distributed Rate Limiter",
-      "levelTag": "L3-L4",
+      "levelTag": "Junior",
       "tags": ["Token Bucket", "Redis Lua", "HTTP 429"],
       "status": "planned"
     },
@@ -416,7 +416,7 @@
       "id": "distributed-kv-cache",
       "tier": 1,
       "title": "Design an In-Memory Cache (Redis / Memcached)",
-      "levelTag": "L3-L4",
+      "levelTag": "Junior",
       "tags": ["LRU/LFU", "Consistent Hashing", "Replication"],
       "status": "planned"
     },
@@ -424,7 +424,7 @@
       "id": "unique-id-generator",
       "tier": 1,
       "title": "Design a Distributed Unique ID Generator (Snowflake)",
-      "levelTag": "L3-L4",
+      "levelTag": "Junior",
       "tags": ["64-bit ID", "Clock Skew", "Zero Coordination"],
       "status": "planned"
     },
@@ -432,7 +432,7 @@
       "id": "web-crawler",
       "tier": 1,
       "title": "Design a Web-Scale Crawler",
-      "levelTag": "L3-L4",
+      "levelTag": "Junior",
       "tags": ["URL Frontier", "Politeness", "Bloom Filter"],
       "status": "planned"
     },
@@ -440,7 +440,7 @@
       "id": "news-feed",
       "tier": 2,
       "title": "Design a Social News Feed (Twitter / X Timeline)",
-      "levelTag": "L4-L5",
+      "levelTag": "Mid",
       "tags": ["Hybrid Fan-Out", "Celebrity Skew", "Cursor Pagination"],
       "status": "ready",
       "dataFile": "data/hld/case_studies/02_news_feed.json"
@@ -449,7 +449,7 @@
       "id": "whatsapp-chat",
       "tier": 2,
       "title": "Design an Instant Messaging System (WhatsApp)",
-      "levelTag": "L5-L6",
+      "levelTag": "Senior",
       "tags": ["WebSockets", "Presence", "Delivery Receipts", "Offline Sync"],
       "status": "ready",
       "dataFile": "data/hld/case_studies/03_whatsapp_chat.json"
@@ -458,7 +458,7 @@
       "id": "metrics-monitoring",
       "tier": 2,
       "title": "Design Metrics Monitoring & Alerting (Datadog)",
-      "levelTag": "L4-L5",
+      "levelTag": "Mid",
       "tags": ["TSDB", "Push vs Pull", "Downsampling"],
       "status": "planned"
     },
@@ -466,7 +466,7 @@
       "id": "notification-system",
       "tier": 2,
       "title": "Design a Multi-Channel Notification System",
-      "levelTag": "L4-L5",
+      "levelTag": "Mid",
       "tags": ["Priority Queues", "Provider Fallback", "Deduplication"],
       "status": "planned"
     },
@@ -474,7 +474,7 @@
       "id": "search-typeahead",
       "tier": 2,
       "title": "Design Search Autocomplete / Typeahead",
-      "levelTag": "L4-L5",
+      "levelTag": "Mid",
       "tags": ["Trie", "Top-K Aggregation", "Edge Cache"],
       "status": "planned"
     },
@@ -482,7 +482,7 @@
       "id": "uber-rideshare",
       "tier": 3,
       "title": "Design Uber / Lyft Ride-Sharing Backend",
-      "levelTag": "L5-L6",
+      "levelTag": "Senior",
       "tags": ["Geospatial H3", "High-Write GPS", "Distributed Lock"],
       "status": "ready",
       "dataFile": "data/hld/case_studies/04_uber_rideshare.json"
@@ -491,7 +491,7 @@
       "id": "video-streaming",
       "tier": 3,
       "title": "Design YouTube / Netflix Video Streaming",
-      "levelTag": "L5-L6",
+      "levelTag": "Senior",
       "tags": ["DAG Transcoding", "HLS/ABR", "CDN Edge"],
       "status": "ready",
       "dataFile": "data/hld/case_studies/08_video_streaming_netflix.json"
@@ -500,7 +500,7 @@
       "id": "dropbox-sync",
       "tier": 3,
       "title": "Design Dropbox / Google Drive File Sync",
-      "levelTag": "L5-L6",
+      "levelTag": "Senior",
       "tags": ["Block Chunking", "Delta Sync", "Deduplication"],
       "status": "planned"
     },
@@ -508,7 +508,7 @@
       "id": "instagram-media",
       "tier": 3,
       "title": "Design Instagram Photo & Reels Platform",
-      "levelTag": "L5-L6",
+      "levelTag": "Senior",
       "tags": ["Object Storage", "Metadata Sharding", "CDN"],
       "status": "planned"
     },
@@ -516,7 +516,7 @@
       "id": "ticketmaster-flash-sale",
       "tier": 3,
       "title": "Design Ticketmaster / Flash-Sale Booking",
-      "levelTag": "L5-L6",
+      "levelTag": "Senior",
       "tags": ["Virtual Waiting Room", "Seat Hold TTL", "Concurrency"],
       "status": "ready",
       "dataFile": "data/hld/case_studies/06_ticketmaster_flash_sale.json"
@@ -525,7 +525,7 @@
       "id": "api-gateway-500k-ingestion",
       "tier": 3,
       "title": "Design 500k RPS API Gateway & Ingestion (p99 < 50ms)",
-      "levelTag": "L5-L6",
+      "levelTag": "Senior",
       "tags": ["Tail Latency p99", "Cell Architecture", "Hedged Requests", "CoDel"],
       "status": "ready",
       "dataFile": "data/hld/case_studies/09_api_gateway_ingestion_500k.json"
@@ -534,7 +534,7 @@
       "id": "multi-version-billing-api",
       "tier": 3,
       "title": "Design a Multi-Versioned Billing & Payment API",
-      "levelTag": "L5-L6",
+      "levelTag": "Senior",
       "tags": ["Protobuf", "Schema Registry", "Design by Contract", "DLQ"],
       "status": "ready",
       "dataFile": "data/hld/case_studies/11_billing_versioned_api.json"
@@ -543,7 +543,7 @@
       "id": "distributed-kv-store",
       "tier": 4,
       "title": "Design Global Distributed KV Store (Dynamo / Spanner)",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["Quorum", "Vector Clocks", "Anti-Entropy Merkle Tree"],
       "status": "planned"
     },
@@ -551,7 +551,7 @@
       "id": "distributed-message-queue",
       "tier": 4,
       "title": "Design a Distributed Event Streaming Platform (Kafka)",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["Append Log", "Zero-Copy sendfile", "ISR"],
       "status": "planned"
     },
@@ -559,7 +559,7 @@
       "id": "payment-gateway",
       "tier": 4,
       "title": "Design a Payment Gateway & Ledger (Stripe)",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["Double-Entry Ledger", "Idempotency", "PSP Reconciliation"],
       "status": "ready",
       "dataFile": "data/hld/case_studies/07_stripe_payment_ledger.json"
@@ -568,7 +568,7 @@
       "id": "financial-auditing-ledger",
       "tier": 4,
       "title": "Design a High-Volume Financial Auditing Ledger",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["LSM-Tree", "Columnar OLAP", "Bloom Filter", "Compaction Stalls"],
       "status": "ready",
       "dataFile": "data/hld/case_studies/10_financial_auditing_ledger.json"
@@ -577,7 +577,7 @@
       "id": "distributed-search-engine",
       "tier": 4,
       "title": "Design a Distributed Search Engine (Elasticsearch)",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["Inverted Index", "Scatter-Gather", "BM25"],
       "status": "planned"
     },
@@ -585,7 +585,7 @@
       "id": "stock-exchange",
       "tier": 4,
       "title": "Design a Low-Latency Stock Exchange",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["Order Book", "LMAX Disruptor", "Event Sourcing"],
       "status": "planned"
     },
@@ -593,7 +593,7 @@
       "id": "chatgpt-streaming-assistant",
       "tier": 5,
       "title": "Design a ChatGPT-Scale Conversational Assistant",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["SSE Streaming", "KV-Cache", "TPM Rate Limit", "Guardrails"],
       "status": "ready",
       "dataFile": "data/hld/case_studies/05_chatgpt_streaming_assistant.json"
@@ -602,7 +602,7 @@
       "id": "realtime-analytics-olap",
       "tier": 5,
       "title": "Design Real-Time Analytics (ClickHouse / Flink)",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["Columnar OLAP", "Stream Aggregation", "Lambda/Kappa"],
       "status": "planned"
     },
@@ -610,7 +610,7 @@
       "id": "enterprise-rag-system",
       "tier": 5,
       "title": "Design an Enterprise RAG Platform with ACLs",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["Hybrid Search", "Permission Filtering", "Citations"],
       "status": "planned"
     },
@@ -618,7 +618,7 @@
       "id": "llm-inference-platform",
       "tier": 5,
       "title": "Design a High-Throughput LLM Inference Cluster",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["PagedAttention", "Continuous Batching", "Model Routing"],
       "status": "planned"
     },
@@ -626,7 +626,7 @@
       "id": "collaborative-docs",
       "tier": 5,
       "title": "Design Collaborative Real-Time Editing (Docs / Figma)",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["CRDT", "Multi-Leader", "Consistent Hashing", "Offline Sync"],
       "status": "ready",
       "dataFile": "data/hld/case_studies/12_collaborative_docs_editor.json"
@@ -635,7 +635,7 @@
       "id": "realtime-fraud-pipeline",
       "tier": 5,
       "title": "Design 1M TPS Real-Time Fraud & Activity Pipeline",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["Kafka", "Debezium CDC", "Flink Watermarks", "Actors & Blackboard"],
       "status": "ready",
       "dataFile": "data/hld/case_studies/13_realtime_fraud_pipeline.json"
@@ -644,7 +644,7 @@
       "id": "ai-answer-engine",
       "tier": 5,
       "title": "Design an AI Web Answer Engine (Perplexity-Style)",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["Query Planning", "Parallel Crawl", "TTFT Optimization"],
       "status": "planned"
     },
@@ -652,7 +652,7 @@
       "id": "tool-using-agent-runtime",
       "tier": 5,
       "title": "Design a Stateful Tool-Using AI Agent Runtime (MCP)",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["Execution DAG", "Sandboxed Tools", "Checkpoints"],
       "status": "planned"
     },
@@ -660,7 +660,7 @@
       "id": "ai-guardrail-eval-platform",
       "tier": 5,
       "title": "Design an AI Guardrail & Offline/Online Eval Platform",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["PII/Injection Filter", "Shadow Testing", "Regression Gates"],
       "status": "planned"
     },
@@ -668,7 +668,7 @@
       "id": "content-moderation-pipeline",
       "tier": 5,
       "title": "Design a Multi-Stage Content Moderation Pipeline",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["Heuristic Hash", "ML Triage", "Human-in-the-Loop"],
       "status": "planned"
     },
@@ -676,7 +676,7 @@
       "id": "monolith-to-microservices",
       "tier": 5,
       "title": "Migration Case Study: Monolith to Microservices",
-      "levelTag": "L6-L7",
+      "levelTag": "Staff",
       "tags": ["Strangler Fig", "CDC Dual-Write", "Zero-Downtime Schema"],
       "status": "planned"
     }

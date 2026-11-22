@@ -64,17 +64,26 @@
   ],
   "levelRubrics": [
     {
-      "level": "L3-L4",
-      "roleTitle": "Mid-Level Engineer (SDE-1 / SDE-2)",
+      "level": "Junior",
+      "roleTitle": "Junior / entry-level engineer",
       "bar": [
-        "Drives a coherent end-to-end architecture covering functional requirements.",
+        "Covers the functional requirements with a working end-to-end design, with some guidance.",
         "Applies basic caching, load balancing, and SQL vs NoSQL distinctions accurately.",
-        "Completes basic QPS and storage math cleanly."
+        "Completes basic QPS and storage math."
       ]
     },
     {
-      "level": "L5-L6",
-      "roleTitle": "Senior Engineer",
+      "level": "Mid",
+      "roleTitle": "Mid-level engineer",
+      "bar": [
+        "Drives a coherent end-to-end architecture with little prompting.",
+        "Names the main bottleneck in the design and one realistic mitigation.",
+        "Uses the QPS and storage math to justify at least one design choice."
+      ]
+    },
+    {
+      "level": "Senior",
+      "roleTitle": "Senior engineer",
       "bar": [
         "Proactively identifies NFRs and leads the conversation without interviewer prompting.",
         "Diagnoses scaling bottlenecks (hot keys, stampedes, replication lag, async decoupling).",
@@ -82,23 +91,40 @@
       ]
     },
     {
-      "level": "L6-L7",
-      "roleTitle": "Staff / Principal Engineer",
+      "level": "Staff",
+      "roleTitle": "Staff engineer",
       "bar": [
         "Demonstrates deep storage/consensus intuition (LSM vs B-Tree, Raft/fencing, multi-region consistency).",
         "Designs for operational realism: graceful degradation, blast radius containment, cost-to-serve (including GPU/VRAM & token economics for AI), and incremental migration."
       ]
     }
   ],
+  "levelMapping": {
+    "asOf": "2026",
+    "source": "levels.fyi public level charts; titles and bands vary by company, org and year, so treat this as approximate",
+    "rows": [
+      { "level": "Junior", "google": "L3", "meta": "E3", "amazon": "SDE I (L4)", "microsoft": "59–60" },
+      { "level": "Mid", "google": "L4", "meta": "E4", "amazon": "SDE II (L5)", "microsoft": "61–62" },
+      { "level": "Senior", "google": "L5", "meta": "E5", "amazon": "Senior SDE (L6)", "microsoft": "63–64" },
+      { "level": "Staff", "google": "L6", "meta": "E6", "amazon": "Principal SDE (L7)", "microsoft": "65–67" }
+    ]
+  },
+  "latencyBenchmarksMeta": {
+    "asOf": "2020",
+    "source": "Jeff Dean's 'Numbers Everyone Should Know' (2009), updated by Colin Scott's interactive latency table (~2020). Use them for orders of magnitude; measure your own hardware for anything precise."
+  },
   "latencyBenchmarks": [
-    { "id": "l1-cache", "operation": "L1 Cache Reference", "latency": "~0.5 ns", "latencyMs": 0.0000005, "tier": "CPU" },
-    { "id": "l2-cache", "operation": "Branch Mispredict / L2 Cache Reference", "latency": "5 ns – 7 ns", "latencyMs": 0.000006, "tier": "CPU" },
-    { "id": "mutex-lock", "operation": "Mutex Lock / Unlock", "latency": "~100 ns", "latencyMs": 0.0001, "tier": "Memory" },
+    { "id": "l1-cache", "operation": "L1 Cache Reference", "latency": "~1 ns", "latencyMs": 0.000001, "tier": "CPU" },
+    { "id": "branch-mispredict", "operation": "Branch Mispredict", "latency": "~3–5 ns", "latencyMs": 0.000003, "tier": "CPU" },
+    { "id": "l2-cache", "operation": "L2 Cache Reference", "latency": "~4–7 ns", "latencyMs": 0.000004, "tier": "CPU" },
+    { "id": "mutex-lock", "operation": "Mutex Lock / Unlock (uncontended)", "latency": "~20 ns", "latencyMs": 0.00002, "tier": "Memory" },
     { "id": "ram-read", "operation": "Main Memory (RAM) Reference", "latency": "~100 ns", "latencyMs": 0.0001, "tier": "Memory" },
-    { "id": "nvme-read", "operation": "NVMe / SSD Random Read", "latency": "~100 µs", "latencyMs": 0.1, "tier": "Storage" },
-    { "id": "seq-1mb", "operation": "Compressed Packet / Read 1 MB Sequentially", "latency": "10 µs – 250 µs", "latencyMs": 0.25, "tier": "Storage" },
+    { "id": "compress-1kb", "operation": "Compress 1 KB (Snappy-class codec)", "latency": "~2 µs", "latencyMs": 0.002, "tier": "CPU" },
+    { "id": "seq-1mb-ram", "operation": "Read 1 MB Sequentially from RAM", "latency": "~3 µs", "latencyMs": 0.003, "tier": "Memory" },
+    { "id": "nvme-read", "operation": "NVMe / SSD Random Read (4 KB)", "latency": "~20–100 µs", "latencyMs": 0.05, "tier": "Storage" },
+    { "id": "seq-1mb-ssd", "operation": "Read 1 MB Sequentially from NVMe SSD", "latency": "~50–250 µs", "latencyMs": 0.1, "tier": "Storage" },
     { "id": "same-dc-rtt", "operation": "Same-Datacenter Network Round Trip", "latency": "~500 µs (0.5 ms)", "latencyMs": 0.5, "tier": "Network" },
-    { "id": "hdd-seek", "operation": "Disk Seek (HDD)", "latency": "~10 ms", "latencyMs": 10.0, "tier": "Storage" },
+    { "id": "hdd-seek", "operation": "Disk Seek (HDD)", "latency": "~2–10 ms", "latencyMs": 5.0, "tier": "Storage" },
     { "id": "cross-region-rtt", "operation": "Cross-Region DC Round Trip (US-East ↔ US-West)", "latency": "50 ms – 70 ms", "latencyMs": 60.0, "tier": "Network" },
     { "id": "global-rtt", "operation": "Cross-Continent / Global Round Trip (US ↔ Europe)", "latency": "100 ms – 250 ms", "latencyMs": 150.0, "tier": "Network" }
   ],

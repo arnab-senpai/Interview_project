@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "kafka-event-streaming",
+  "flashcards": [
+    {
+      "id": "fc-kafka-1",
+      "topicId": "kafka-event-streaming",
+      "layer": 6,
+      "difficulty": "Mid",
+      "front": "What is the scope of strict message ordering in Apache Kafka?",
+      "back": "Ordering is guaranteed strictly within a single partition—not across an entire multi-partition topic. Partition by entity key (e.g., `order_id`) when ordering per entity matters.",
+      "tags": ["Kafka", "Ordering", "Partitions"]
+    },
+    {
+      "id": "fc-kafka-2",
+      "topicId": "kafka-event-streaming",
+      "layer": 6,
+      "difficulty": "Mid",
+      "front": "Why does Kafka scale consumer throughput only up to `N consumers = N partitions` per group?",
+      "back": "To preserve per-partition sequential ordering, each partition is assigned to at most one consumer instance inside a given consumer group. Extra idle consumers sit unused until partition count grows.",
+      "tags": ["Kafka", "Consumer Group", "Scaling"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-kafka-1",
+      "topicId": "kafka-event-streaming",
+      "layer": 6,
+      "difficulty": "Mid",
+      "scenario": "Your orders topic has 8 partitions. You run 16 instances in the billing consumer group to double throughput, but throughput does not change.",
+      "question": "Why did doubling the consumers give no speedup?",
+      "options": [
+        "Offset commits lock the partition for other consumers",
+        "Each partition goes to one consumer, so 8 of 16 sit idle",
+        "Consumers share one fetch session, so fetches serialize",
+        "acks=all on the producer slows consumers to the ISR pace"
+      ],
+      "correctIndex": 1,
+      "explanation": "Within one consumer group, each partition is assigned to at most one consumer. With 8 partitions, 8 of the 16 consumers are idle. Add partitions (planning for key redistribution) or parallelize the work inside each consumer.",
+      "optionExplanations": [
+        "Commits do not block reads; the limit is the one-consumer assignment.",
+        "Correct. Partition count caps the useful consumers in a group.",
+        "Each consumer fetches independently; there is no shared fetch session.",
+        "acks affects producers; consumers read committed data independently."
+      ]
+    },
+    {
+      "id": "q-kafka-2",
+      "topicId": "kafka-event-streaming",
+      "layer": 6,
+      "difficulty": "Senior",
+      "scenario": "On an orders topic keyed by order_id, event 500 for order ord_9 is malformed. The consumer crashes on it and restarts every 2 seconds. Later events for ord_9 include its cancellation.",
+      "question": "What should the consumer do?",
+      "options": [
+        "Enable auto-commit so the offset moves past the bad event",
+        "Send it to a DLQ, commit the offset, and keep processing",
+        "Send it to a DLQ and park ord_9 so its later events wait",
+        "Retry it forever with backoff until the payload parses"
+      ],
+      "correctIndex": 2,
+      "explanation": "A dead-letter topic unblocks the partition, but skipping event 500 and then applying a later event for ord_9 breaks that key's order (a cancel before its create). When order matters, park the key: send the bad event to the DLQ and divert later events for the same key behind it until it is fixed and replayed.",
+      "optionExplanations": [
+        "That silently drops the event and still breaks ord_9's ordering.",
+        "Fine for independent events, but here ord_9's cancel could apply before its create.",
+        "Correct. Other keys keep flowing, and ord_9 keeps its order.",
+        "A malformed payload never parses; the whole partition stays blocked."
+      ]
+    }
+  ]
+}

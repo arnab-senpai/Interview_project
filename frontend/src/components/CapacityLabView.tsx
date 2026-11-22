@@ -312,6 +312,12 @@ export const CapacityLabView: React.FC<CapacityLabViewProps> = ({
           {!referenceData ? (
             <div className="mono">Loading benchmarks...</div>
           ) : activeRefTab === "latency" ? (
+            <>
+            {referenceData.latencyBenchmarksMeta && (
+              <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginBottom: 8 }}>
+                As of {referenceData.latencyBenchmarksMeta.asOf}. {referenceData.latencyBenchmarksMeta.source}
+              </div>
+            )}
             <table className="trace-table">
               <thead>
                 <tr>
@@ -330,6 +336,7 @@ export const CapacityLabView: React.FC<CapacityLabViewProps> = ({
                 ))}
               </tbody>
             </table>
+            </>
           ) : activeRefTab === "nines" ? (
             <table className="trace-table">
               <thead>

@@ -3,7 +3,7 @@
   "tier": 2,
   "title": "Design a Social News Feed (Twitter / X Timeline)",
   "subtitle": "Hybrid fan-out (write vs read), celebrity skew mitigation & cursor pagination",
-  "levelTag": "L4-L5",
+  "levelTag": "Mid",
   "estimatedMinutes": 40,
   "tags": ["Hybrid Fan-Out", "Celebrity Skew", "Cursor Pagination", "Redis Sorted Set"],
   "functionalReqs": [
@@ -72,7 +72,7 @@
     "layer": 6,
     "title": "Hybrid Fan-Out News Feed Architecture",
     "subtitle": "Push normal posts to follower Redis ZSETs; merge celebrity posts at read time",
-    "difficulty": "L4-L5",
+    "difficulty": "Mid",
     "estimatedMinutes": 20,
     "overview": "Pure fan-out-on-write collapses when a celebrity with 50M followers posts; pure fan-out-on-read stalls when a user follows 2,000 accounts. Hybrid fan-out combines pre-materialized Redis timelines for normal authors with fast read-time merge of followed celebrities.",
     "keyTakeaways": [

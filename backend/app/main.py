@@ -9,14 +9,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.app.core.config import FRONTEND_DIST_DIR
+from backend.app.core.config import FRONTEND_DIST_DIR, get_cors_origins
 from backend.app.db.database import init_db
-from backend.app.routers import auth, curriculum, notes, practice
+from backend.app.routers import admin, auth, curriculum, feedback, notes, practice
+from backend.app.services.auth import check_jwt_secret_config
 from backend.app.services.curriculum_loader import get_store
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    check_jwt_secret_config()
     init_db()
     get_store()
     yield
@@ -30,21 +32,21 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://localhost:4173",
-            "http://127.0.0.1:4173",
-        ],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    cors_origins = get_cors_origins()
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     app.include_router(auth.router)
+    app.include_router(feedback.router)
+    app.include_router(admin.router)
     app.include_router(notes.router)
+    app.include_router(curriculum.public_router)
     app.include_router(curriculum.router)
     app.include_router(practice.router)
 

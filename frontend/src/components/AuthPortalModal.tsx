@@ -9,7 +9,6 @@ import {
   Layers,
   ShieldCheck,
   Sparkles,
-  UserCheck,
   X,
 } from "lucide-react";
 import { api, authStorage, type AuthSessionResponse } from "../api/client";
@@ -19,7 +18,6 @@ interface AuthPortalModalProps {
   canDismiss: boolean;
   onClose: () => void;
   onAuthenticated: (session: AuthSessionResponse) => void;
-  onContinueAsGuest: () => void;
 }
 
 export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
@@ -27,7 +25,6 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
   canDismiss,
   onClose,
   onAuthenticated,
-  onContinueAsGuest,
 }) => {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [username, setUsername] = useState("");
@@ -54,7 +51,6 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
               dailyGoal,
             });
       authStorage.setToken(res.accessToken);
-      authStorage.setGuestEntered(false);
       onAuthenticated(res);
       setPassword("");
     } catch (err: any) {
@@ -379,18 +375,8 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
                 </form>
               </div>
 
-              <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--border-soft)", display: "flex", flexDirection: "column", gap: 8 }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    authStorage.setGuestEntered(true);
-                    onContinueAsGuest();
-                  }}
-                  className="btn-secondary"
-                  style={{ width: "100%" }}
-                >
-                  <UserCheck size={13} /> Continue as Local Guest (Offline SQLite)
-                </button>
+              <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--border-soft)", fontSize: 12, color: "var(--ink-muted)", lineHeight: 1.5 }}>
+                Sign in to keep your own progress, notes and quiz history. Accounts are private to each colleague; there is no shared guest workspace.
               </div>
             </div>
           </motion.div>

@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "topicId": "realtime-transport-protocols",
+  "flashcards": [
+    {
+      "id": "fc-rt-1",
+      "topicId": "realtime-transport-protocols",
+      "layer": 1,
+      "difficulty": "Mid",
+      "front": "When should you choose Server-Sent Events (SSE) over WebSockets?",
+      "back": "Choose SSE when updates flow one-way from server to browser (notifications, stock tickers, LLM token streams). SSE runs over standard HTTP/2, automatically reconnects with `Last-Event-ID`, and passes corporate proxies cleanly without Upgrade headers.",
+      "tags": ["SSE", "WebSockets", "Transport"]
+    },
+    {
+      "id": "fc-rt-2",
+      "topicId": "realtime-transport-protocols",
+      "layer": 1,
+      "difficulty": "Senior",
+      "front": "How do you broadcast chat or telemetry events across thousands of stateful WebSocket servers?",
+      "back": "Keep each gateway stateless with respect to global room state: attach clients via consistent routing and bridge gateways through a pub/sub backplane (Redis Pub/Sub or Kafka) plus backpressure watermarks to drop or sample slow consumers.",
+      "tags": ["WebSockets", "Backpressure", "Pub/Sub"]
+    }
+  ],
+  "quizzes": [
+    {
+      "id": "q-rt-1",
+      "topicId": "realtime-transport-protocols",
+      "layer": 1,
+      "difficulty": "Mid",
+      "scenario": "You are building an assistant UI that streams tokens from server to browser. Users occasionally send a cancel request.",
+      "question": "Which transport is the simplest reliable fit?",
+      "options": [
+        "Server-sent events for tokens, plus a POST for the cancel",
+        "Long polling, reopening a request after every token",
+        "Short polling every second for new tokens since last poll",
+        "A WebSocket per user for both the tokens and the cancel"
+      ],
+      "correctIndex": 0,
+      "explanation": "Server-sent events stream server-to-client over ordinary HTTP, work through most proxies, multiplex over HTTP/2, and resume with Last-Event-ID. The rare cancel can be a normal POST, so a full duplex WebSocket is not needed.",
+      "optionExplanations": [
+        "Correct. One-way streaming plus a plain request covers both needs.",
+        "One request per token adds overhead and reconnect gaps between tokens.",
+        "Polling adds latency between tokens and wastes many empty requests.",
+        "It works, but adds connection management the one-way stream does not need."
+      ]
+    },
+    {
+      "id": "q-rt-2",
+      "topicId": "realtime-transport-protocols",
+      "layer": 1,
+      "difficulty": "Senior",
+      "scenario": "A live sports chat has 500k WebSockets across 100 gateway pods. About 2% of mobile users on slow networks fall 30 seconds behind.",
+      "question": "How should the gateway keep slow clients from exhausting its memory?",
+      "options": [
+        "Add more gateway pods so each one holds fewer connections",
+        "Pause the room broadcast until the slowest client acknowledges",
+        "Bound each socket's send buffer; drop or resync when it fills",
+        "Buffer every unsent frame in memory until the client catches up"
+      ],
+      "correctIndex": 2,
+      "explanation": "Give every connection a bounded outbound buffer. When it fills, drop the oldest updates (fine for live scores) or disconnect and let the client resync. Either way one slow socket cannot grow without limit and take the pod down.",
+      "optionExplanations": [
+        "More pods spread the load, but each slow socket can still grow unbounded.",
+        "One slow phone would then delay the chat for everyone.",
+        "Correct. Memory per connection stays capped.",
+        "Unbounded buffers are exactly what runs the pod out of memory."
+      ]
+    }
+  ]
+}

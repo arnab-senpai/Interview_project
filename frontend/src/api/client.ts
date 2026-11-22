@@ -4,6 +4,7 @@ import type {
   HldExplorerLesson,
   PatternPlaybook,
   QuizQuestion,
+  QuizReveal,
 } from "../types/hld";
 
 export interface LayerMeta {
@@ -78,7 +79,32 @@ export interface UserProfile {
   dailyGoal: number;
   preferredLens: "intuition" | "mechanics" | "staffTradeoffs";
   isGuest: boolean;
+  isAdmin: boolean;
   createdAt: string;
+}
+
+export type FeedbackCategory = "wrong" | "unclear" | "outdated" | "typo" | "other";
+export type FeedbackStatus = "open" | "resolved" | "wont_fix";
+
+export interface FeedbackItem {
+  id: number;
+  userId: string;
+  topicId: string;
+  blockId: string;
+  contentVersion: string;
+  category: FeedbackCategory;
+  message: string;
+  pageUrl: string;
+  status: FeedbackStatus;
+  adminNote: string;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+export interface AdminFeedbackItem extends FeedbackItem {
+  reporter: string;
+  isCurrentVersion: boolean;
+  issueUrl: string | null;
 }
 
 export interface AuthSessionResponse {
@@ -185,12 +211,19 @@ export interface FlashcardWithSm2 extends FlashcardItem {
   isDue: boolean;
 }
 
+export interface QuizAnswerResult extends QuizReveal {
+  questionId: string;
+  selectedIndex: number;
+  isCorrect: boolean;
+  answeredAt: string;
+}
+
 export interface QuizWithAttempt extends QuizQuestion {
-  lastAttempt?: {
+  lastAttempt?: (QuizReveal & {
     selectedIndex: number;
     isCorrect: boolean;
     answeredAt: string;
-  } | null;
+  }) | null;
 }
 
 export interface CapacityResult {
@@ -209,18 +242,15 @@ export interface SearchHit {
 }
 
 const AUTH_TOKEN_STORAGE_KEY = "systemcraft_auth_token";
-const GUEST_DISMISSED_KEY = "systemcraft_guest_mode";
+
+/** Fired when the API answers 401: the token is missing, expired or revoked. */
+export const SIGNED_OUT_EVENT = "systemcraft:signed-out";
 
 export const authStorage = {
   getToken: () => window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY),
   setToken: (token: string | null) => {
     if (token) window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
     else window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
-  },
-  isGuestEntered: () => window.localStorage.getItem(GUEST_DISMISSED_KEY) === "1",
-  setGuestEntered: (v: boolean) => {
-    if (v) window.localStorage.setItem(GUEST_DISMISSED_KEY, "1");
-    else window.localStorage.removeItem(GUEST_DISMISSED_KEY);
   },
 };
 
@@ -244,12 +274,38 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     } catch {
       // plain error text
     }
+    // Sign-in is required for the alpha. A 401 on anything except the sign-in
+    // calls themselves means the session is gone, so send the person back to sign in.
+    if (res.status === 401 && !url.startsWith("/api/auth/login") && !url.startsWith("/api/auth/register")) {
+      authStorage.setToken(null);
+      window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
+    }
     throw new Error(msg || `API ${res.status}`);
   }
   return res.json() as Promise<T>;
 }
 
 export const api = {
+  reportIssue: (payload: {
+    topicId: string;
+    blockId: string;
+    category: FeedbackCategory;
+    message: string;
+    pageUrl?: string;
+  }) =>
+    fetchJson<{ feedback: FeedbackItem }>("/api/feedback", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  adminListFeedback: (status: FeedbackStatus | "all" = "open") =>
+    fetchJson<{ feedback: AdminFeedbackItem[]; countsByTopic: Record<string, Record<FeedbackStatus, number>> }>(
+      `/api/admin/feedback?status=${status}`
+    ),
+  adminUpdateFeedback: (id: number, status: FeedbackStatus, adminNote = "") =>
+    fetchJson<{ feedback: FeedbackItem }>(`/api/admin/feedback/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status, adminNote }),
+    }),
   getOverview: () => fetchJson<OverviewResponse>("/api/hld/overview"),
   getModules: () => fetchJson<{ version: string; modules: HldModuleItem[] }>("/api/hld/modules"),
   getLesson: (id: string) => fetchJson<HldExplorerLesson>(`/api/hld/lessons/${id}`),
@@ -291,13 +347,7 @@ export const api = {
     return fetchJson<{ quizzes: QuizWithAttempt[] }>(`/api/quizzes${suffix}`);
   },
   answerQuiz: (questionId: string, selectedIndex: number) =>
-    fetchJson<{
-      questionId: string;
-      selectedIndex: number;
-      correctIndex: number;
-      isCorrect: boolean;
-      explanation: string;
-    }>(`/api/quizzes/${questionId}/answer`, {
+    fetchJson<QuizAnswerResult>(`/api/quizzes/${questionId}/answer`, {
       method: "POST",
       body: JSON.stringify({ selectedIndex }),
     }),
