@@ -14,9 +14,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 
-from backend.app.core.config import BACKEND_DIR, get_admin_usernames, is_production
+from backend.app.core.config import BACKEND_DIR, get_admin_usernames, guests_allowed, is_production
 from backend.app.db.database import get_conn, utc_now_iso
 
 JWT_SECRET_FILE = BACKEND_DIR / ".jwt_secret"
@@ -152,7 +152,15 @@ def hash_personal_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
 
+def _row_is_guest(row: Any) -> bool:
+    try:
+        return bool(row["is_guest"])
+    except (KeyError, IndexError):
+        return False
+
+
 def serialize_user(row: Any) -> dict[str, Any]:
+    is_guest = _row_is_guest(row)
     return {
         "id": row["id"],
         "username": row["username"],
@@ -160,8 +168,8 @@ def serialize_user(row: Any) -> dict[str, Any]:
         "email": row["email"] or "",
         "dailyGoal": row["daily_goal"],
         "preferredLens": row["preferred_lens"],
-        "isGuest": False,
-        "isAdmin": row["username"].lower() in get_admin_usernames(),
+        "isGuest": is_guest,
+        "isAdmin": (not is_guest) and row["username"].lower() in get_admin_usernames(),
         "createdAt": row["created_at"],
     }
 
@@ -192,7 +200,7 @@ def _user_for_token(token: str) -> dict[str, Any] | None:
             if exp and exp <= utc_now_iso():
                 return None
             user_row = conn.execute("SELECT * FROM users WHERE id = ?", (tok_row["user_id"],)).fetchone()
-            if not user_row or user_row["id"] == "guest":
+            if not user_row or user_row["id"] == "guest" or _row_is_guest(user_row):
                 return None
             conn.execute("UPDATE personal_tokens SET last_used_at = ? WHERE id = ?", (utc_now_iso(), tok_row["id"]))
             return serialize_user(user_row)
@@ -201,42 +209,66 @@ def _user_for_token(token: str) -> dict[str, Any] | None:
         if not payload or not payload.get("sub"):
             return None
         user_row = conn.execute("SELECT * FROM users WHERE id = ?", (payload["sub"],)).fetchone()
-        if not user_row or user_row["id"] == "guest":
+        if not user_row or user_row["id"] == "guest" or _row_is_guest(user_row):
             return None
         return serialize_user(user_row)
 
 
+def guest_from_request(request: Request | None) -> dict[str, Any] | None:
+    """The guest behind a valid signed cookie, when guests are switched on."""
+    if request is None or not guests_allowed():
+        return None
+    from backend.app.services.guest import GUEST_COOKIE, load_guest, verify_guest_cookie
+
+    guest_id = verify_guest_cookie(request.cookies.get(GUEST_COOKIE))
+    if not guest_id:
+        return None
+    row = load_guest(guest_id)
+    return serialize_user(row) if row else None
+
+
 def require_user(
+    request: Request = None,  # type: ignore[assignment]  # FastAPI injects it; direct callers may omit it
     authorization: str | None = Header(default=None),
     x_study_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    """Every learner-facing route needs a signed-in user. There is no shared guest fallback.
+    """Every learner-facing route needs a signed-in user or, if enabled, a signed guest cookie.
 
-    A missing token and an invalid, expired or revoked token both return 401, so
-    the browser can send the person back to sign in.
+    There is no shared guest row. A missing token and an invalid, expired or revoked
+    token both return 401, so the browser can send the person back to sign in.
     """
     token = _extract_raw_token(authorization, x_study_token)
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Sign in required (Bearer JWT or X-Study-Token)",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    user = _user_for_token(token)
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired authentication token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    if token:
+        user = _user_for_token(token)
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired authentication token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return user
+    guest = guest_from_request(request)
+    if guest is not None:
+        return guest
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Sign in required (Bearer JWT or X-Study-Token)",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def require_member(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Routes that need a real account: study tokens, issue reports, admin."""
+    if user.get("isGuest"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Create an account to use this")
     return user
 
 
-# Kept for routes and callers written against the older name.
-require_authenticated_user = require_user
+# Kept for routes and callers written against the older name; it never admits guests.
+require_authenticated_user = require_member
 
 
-def require_admin(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+def require_admin(user: dict[str, Any] = Depends(require_member)) -> dict[str, Any]:
     if not user.get("isAdmin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return user

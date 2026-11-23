@@ -1,0 +1,212 @@
+schemaVersion: 2
+id: how-to-approach-a-design-question
+track: hld
+kind: concept
+template: chapter
+title: How to approach a design question
+summary: "One way to spend a design round: agree on scope, put numbers on it, draw the simplest design, then let the numbers pick what to improve. Worked on a view counter."
+prerequisites: []
+related: [one-server-to-a-million-users, kafka-event-streaming, caching-and-stampede]
+sources:
+  - title: SystemCraft interview delivery framework (reference_numbers_and_rubric.json)
+    note: The phase timings are our own guidance, refined from mock interviews; adjust them to the format your company uses.
+  - title: PostgreSQL documentation, UPDATE and row-level locking
+    url: https://www.postgresql.org/docs/current/explicit-locking.html
+lastVerified: 2026-11-23
+appliesTo: Any 45 to 60 minute high-level design interview.
+
+numbers:
+  inputs:
+    - { id: daily_views, label: Article views a day, unit: views, default: 300000000, min: 1000000, max: 5000000000, scale: log }
+    - { id: peak, label: Peak over average, unit: "×", default: 3, min: 1, max: 10, step: 0.5 }
+    - { id: distinct_articles, label: Different articles read in one flush window, unit: articles, default: 5000, min: 100, max: 200000, scale: log }
+    - { id: flush_seconds, label: Seconds between batch writes, unit: s, default: 5, min: 1, max: 60, step: 1 }
+    - { id: cache_hit, label: Cache hit rate for counts, unit: "%", default: 0.99, min: 0.5, max: 0.999, step: 0.001 }
+  values:
+    - { id: avg_views, label: Average views a second, formula: "daily_views / 86400", unit: views/s }
+    - { id: peak_views, label: Peak views a second, formula: "avg_views * peak", unit: views/s }
+    - { id: db_direct, label: Database operations with no batching, formula: "peak_views * 2", unit: ops/s, explain: "One increment and one read per view." }
+    - { id: batched_writes, label: Batched writes a second, formula: "min(peak_views, distinct_articles / flush_seconds)", unit: writes/s, explain: "One write per article seen in each flush window." }
+    - { id: db_after_queue, label: Database operations with batching, formula: "batched_writes + peak_views", unit: ops/s }
+    - { id: count_misses, label: Count reads that miss the cache, formula: "peak_views * (1 - cache_hit)", unit: reads/s }
+    - { id: db_after_cache, label: Database operations with batching and a cache, formula: "batched_writes + count_misses", unit: ops/s }
+
+components:
+  - { id: client, label: Article pages, kind: client, pos: [0, 2] }
+  - { id: api, label: Counter API, kind: compute, pos: [2.2, 2], load: peak_views, capacity: 2000, capacitySource: "Planning assumption for one small API server", instances: auto }
+  - { id: db, label: Counts table, kind: db_sql, example: "e.g. PostgreSQL", pos: [5, 2.4], load: db_direct, loadUnit: ops/s, capacity: 3000, capacitySource: "Planning assumption: one database server, simple single-row writes", instances: 1 }
+  - { id: queue, label: View events queue, kind: queue, example: "e.g. Kafka, SQS", pos: [3.4, -0.2], load: peak_views, loadUnit: events/s, capacity: 50000, capacitySource: "Planning assumption for one queue partition or shard", instances: auto }
+  - { id: worker, label: Counter worker, kind: compute, pos: [5.4, -0.6], load: peak_views, loadUnit: events/s, capacity: 20000, capacitySource: "Planning assumption: batching worker, events summed in memory", instances: auto }
+  - { id: cache, label: Count cache, kind: cache, example: "e.g. Redis", pos: [3.6, 4.2], load: peak_views, loadUnit: reads/s, capacity: 100000, capacitySource: "Planning assumption for one in-memory cache node", instances: auto }
+
+arrows:
+  - { id: a-client-api, from: client, to: api, label: "Count +1, show count", mode: sync, rate: peak_views }
+  - { id: a-api-db, from: api, to: db, label: "UPDATE +1, then read", mode: sync, rate: db_direct }
+  - { id: a-api-queue, from: api, to: queue, label: "View event", mode: async, rate: peak_views }
+  - { id: a-queue-worker, from: queue, to: worker, label: "Events in batches", mode: async, rate: peak_views }
+  - { id: a-worker-db, from: worker, to: db, label: "views = views + n", mode: sync, rate: batched_writes }
+  - { id: a-worker-cache, from: worker, to: cache, label: "Fresh counts", mode: async, rate: batched_writes }
+  - { id: a-api-cache, from: api, to: cache, label: "Read count", mode: sync, rate: peak_views }
+
+layers:
+  understand:
+    level: Junior
+    minutes: 15
+    goal: Run the four phases of a design round on a small problem.
+    sections:
+      problem:
+        - { id: problem, type: prose, role: problem, title: The silence after the question, bodyFile: problem.md }
+      clarify:
+        - id: clarify-predict
+          type: predict
+          prompt: "The interviewer has just said \"Design a view counter.\" What should you do first?"
+          options:
+            - { text: "Choose the database, since counts must be stored", explanation: "Picking storage before knowing the load and the consistency needs is the classic early mistake." }
+            - { text: "Ask about scale, accuracy and freshness", explanation: "Those answers decide the design; a few minutes of questions saves the next forty." }
+            - { text: "Draw the full architecture you used at work", explanation: "A design copied from elsewhere may not fit this problem's numbers or needs." }
+            - { text: "Estimate storage for five years of counts", explanation: "Storage is tiny here (one number per article); it is not what drives this design." }
+          answer: 1
+          reveal: "Ask first. Scale tells you whether one database can keep up, accuracy tells you whether you may batch, and freshness tells you how stale a count may be. Spend about five minutes here."
+          gradingVersion: 1
+        - id: clarify-questions
+          type: structuredTable
+          variant: clarify
+          title: What to ask, and what the interviewer said
+          columns: [{ key: q, label: Ask }, { key: a, label: Answer }, { key: why, label: What it changes }]
+          rows:
+            - { q: "How many views a day?", a: "About 300 million, with a morning peak.", why: "Sets the write rate the counter must absorb." }
+            - { q: "Must counts be exact?", a: "Close is fine; it's shown to readers, not billed.", why: "Allows batching and approximate counts." }
+            - { q: "How fresh must a count be?", a: "A few seconds behind is fine.", why: "Allows a queue and periodic writes." }
+            - { q: "Do we count unique readers or every view?", a: "Every view.", why: "No per-user state needed." }
+            - { q: "Is anything out of scope?", a: "Fraud and bot filtering are out of scope today.", why: "Keeps the design to one path; mention it in the wrap-up." }
+      numbers:
+        - { id: numbers-intro, type: prose, role: numbers, title: Only the numbers that decide the design, bodyFile: numbers.md }
+        - id: numbers-worksheet
+          type: estimationWorksheet
+          title: Work it out
+          prompt: "Fill in each line before you look. Within 2× counts."
+          lines:
+            - { value: avg_views, prompt: "Average views a second", hint: "views a day ÷ 86,400" }
+            - { value: peak_views, prompt: "Peak views a second", hint: "average × peak factor" }
+            - { value: db_direct, prompt: "Database operations a second at peak if every view writes and reads", hint: "two operations per view" }
+          gradingVersion: 1
+      design:
+        - { id: step1-text, type: prose, role: steps, title: "Step 1 · The simplest design that works", bodyFile: step1.md, why: "Why simple first: it is correct, easy to check, and gives the numbers something to land on." }
+        - id: fig-simple
+          type: figure
+          title: The simplest counter writes every view straight to one table
+          stage: { add: [client, api, db, a-client-api, a-api-db] }
+          claims: ["Each view causes one increment and one read on the database.", "The API servers are stateless and can be copied."]
+        - { id: step2-text, type: prose, role: steps, title: "Step 2 · Put numbers on it", bodyFile: step2.md, why: "Why numbers now: they turn \"it might not scale\" into \"the database is 7× over its limit\"." }
+        - id: fig-numbers
+          type: figure
+          title: At the peak the database is several times over its limit
+          base: fig-simple
+          stage:
+            change: [db, a-api-db]
+            overrides:
+              db: { note: "Every increment for a popular article locks the same row." }
+          claims: ["The database receives about two operations per view.", "Writes for one article contend for one row."]
+          whatIf: "Halve the views a day. Is the database still red?"
+        - { id: step3-text, type: prose, role: steps, title: "Step 3 · Fix the bottleneck: batch the writes", bodyFile: step3.md, why: "Why a queue: it lets the API return at once and lets a worker turn many +1s into one write per article." }
+        - id: fig-queue
+          type: figure
+          title: A queue and a worker turn many increments into few writes
+          base: fig-numbers
+          stage:
+            add: [queue, worker, a-api-queue, a-queue-worker, a-worker-db]
+            change: [db, a-api-db]
+            overrides:
+              db: { load: db_after_queue, note: "Batched writes, plus every count read." }
+            arrowOverrides:
+              a-api-db: { label: "Read count", rate: peak_views }
+          claims: ["The API no longer writes to the database.", "The worker writes one sum per article per flush window.", "Counts lag by up to one flush window."]
+          whatIf: "Set the flush window to 1 second. How many writes reach the database?"
+        - { id: step4-text, type: prose, role: steps, title: "Step 4 · Check the read path, then wrap up", bodyFile: step4.md, why: "Why check reads: fixing one path often leaves the other as the new bottleneck." }
+        - id: fig-cache
+          type: figure
+          title: Reads come from a cache the worker keeps fresh
+          base: fig-queue
+          stage:
+            add: [cache, a-worker-cache, a-api-cache]
+            remove: [a-api-db]
+            change: [db]
+            overrides:
+              db: { load: db_after_cache, note: "Batched writes and the odd cache miss." }
+          claims: ["The API reads counts from the cache.", "The worker writes each fresh count to the database and the cache.", "The database load is batched writes plus cache misses."]
+  apply:
+    level: Junior
+    minutes: 10
+    goal: Use the framework under time pressure and defend a trade-off.
+    sections:
+      deepDive:
+        - { id: deep-time, type: prose, role: deepDive, title: "Question: how do you spend the 45 minutes?", bodyFile: deep-time.md }
+        - id: deep-time-table
+          type: structuredTable
+          variant: reference
+          rowsFrom: reference.interviewDeliveryFramework
+          columns: [{ key: step, label: "#" }, { key: phase, label: Phase }, { key: targetMinutes, label: Time }, { key: antiPattern, label: Avoid }]
+          caption: "Choice: protect the first ten minutes for questions and numbers; they pay for the rest."
+        - { id: deep-exact, type: prose, role: deepDive, title: "Question: exact counts, or close enough?", bodyFile: deep-exact.md }
+        - id: deep-exact-options
+          type: structuredTable
+          variant: decisionMatrix
+          columns: [{ key: option, label: Option }, { key: good, label: Good }, { key: bad, label: Costs }]
+          rows:
+            - { option: "Write every view to the database", good: "Exact and instant.", bad: "Thousands of writes a second on hot rows; needs sharding early." }
+            - { option: "Batch through a queue (this design)", good: "Few writes; easy to scale workers.", bad: "Counts lag by the flush window; a lost batch undercounts unless events are replayed." }
+            - { option: "Approximate counter in memory, flushed rarely", good: "Cheapest.", bad: "A crash loses unflushed counts." }
+          caption: "Choice: batching, because the interviewer said a few seconds of lag and close-enough counts are fine. For billing you would choose exact."
+      remember:
+        - id: remember
+          type: rememberCard
+          figure: fig-cache
+          facts:
+            - "Ask about scale, accuracy and freshness before drawing."
+            - "Draw the simplest design, then put peak numbers on every arrow."
+            - "Fix the part the numbers say is over its limit, then check the other path."
+          number: { value: "5 + 5", unit: minutes, label: "for questions and numbers before any design" }
+          tradeoff: { choice: "Batching writes through a queue", buys: "far fewer database writes", costs: "counts that lag by a few seconds" }
+          sayIt: "Let me first agree on scale and how exact this must be, then I'll size it, sketch the simplest version, and use the numbers to pick what to improve."
+      check:
+        - id: check-figure-db
+          type: quiz
+          aboutFigure: fig-cache
+          prompt: "In the final figure, what makes up most of the database's load?"
+          options:
+            - { text: "One count read for every single page view", explanation: "Reads now come from the cache; only misses reach the database." }
+            - { text: "One batched write per article per window", explanation: "The worker writes sums, so batched writes are most of what is left." }
+            - { text: "One increment for every page view", explanation: "That was step 1. The worker now sums increments before writing." }
+            - { text: "Queue messages forwarded to it one at a time", explanation: "The queue feeds the worker, not the database." }
+          answer: 1
+          gradingVersion: 1
+        - id: check-first
+          type: quiz
+          prompt: "Which answer most changes whether you may batch the writes?"
+          options:
+            - { text: "How many articles the site has in total", explanation: "That sizes storage, which is tiny here." }
+            - { text: "Whether counts must be exact and instant", explanation: "If close and a few seconds late is fine, batching is allowed." }
+            - { text: "Which database the team already knows well", explanation: "Useful later; it doesn't decide whether batching is allowed." }
+            - { text: "How many engineers will run the system", explanation: "Not a design input for this question." }
+          answer: 1
+          gradingVersion: 1
+        - id: check-peak
+          type: quiz
+          prompt: "300 million views a day, with a 3× peak. Roughly how many views a second at the peak?"
+          options:
+            - { text: "About 1,000", explanation: "That is below even the average of about 3,500 a second." }
+            - { text: "About 3,500", explanation: "That is the average. Multiply by the peak factor." }
+            - { text: "About 10,000", explanation: "300M ÷ 86,400 ≈ 3,500 a second on average, × 3 at the peak." }
+            - { text: "About 100,000", explanation: "That would be a 30× peak or ten times the views." }
+          answer: 2
+          gradingVersion: 1
+        - id: check-order
+          type: quiz
+          prompt: "After fixing the write path, what should you do before wrapping up?"
+          options:
+            - { text: "Add sharding now in case traffic grows later", explanation: "Not before the numbers ask for it." }
+            - { text: "Check the read path for the next bottleneck", explanation: "Here the reads were still hitting the database at full rate." }
+            - { text: "Swap the queue for a second database", explanation: "That undoes the fix." }
+            - { text: "Stop, since the hard part is already done", explanation: "The database was still red from reads." }
+          answer: 1
+          gradingVersion: 1

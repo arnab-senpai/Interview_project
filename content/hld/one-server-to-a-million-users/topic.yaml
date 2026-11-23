@@ -1,0 +1,289 @@
+schemaVersion: 2
+id: one-server-to-a-million-users
+track: hld
+kind: concept
+template: chapter
+title: From one server to a million users
+summary: Grow one overloaded machine into a design that serves a million daily users, one change at a time, with the numbers deciding each change.
+prerequisites: [how-to-approach-a-design-question]
+related: [l7-load-balancer, caching-and-stampede, dns-and-cdn, replication-and-consensus, sharding-and-hot-keys]
+sources:
+  - title: PostgreSQL documentation, High Availability, Load Balancing, and Replication
+    url: https://www.postgresql.org/docs/current/high-availability.html
+  - title: MDN Web Docs, HTTP caching
+    url: https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching
+  - title: Capacity figures per instance are planning assumptions for simple CRUD requests, not benchmarks
+    note: Measure your own service before sizing a real fleet.
+lastVerified: 2026-11-23
+appliesTo: Any web application on general-purpose cloud VMs; no vendor-specific behaviour.
+
+numbers:
+  inputs:
+    - { id: dau, label: Daily active users, unit: users, default: 1000000, min: 10000, max: 100000000, scale: log }
+    - { id: actions, label: Requests per user per day, unit: requests, default: 30, min: 1, max: 500, scale: log }
+    - { id: peak, label: Peak over average, unit: "×", default: 3, min: 1, max: 10, step: 0.5 }
+    - { id: static_share, label: Share of requests for images and scripts, unit: "%", default: 0.5, min: 0, max: 0.9, step: 0.05 }
+    - { id: read_share, label: Read share of the other requests, unit: "%", default: 0.95, min: 0.5, max: 0.99, step: 0.01 }
+    - { id: queries_per_request, label: Database queries per request, unit: queries, default: 4, min: 1, max: 20, step: 1 }
+    - { id: cache_hit, label: Cache hit rate, unit: "%", default: 0.8, min: 0, max: 0.99, step: 0.01 }
+  values:
+    - { id: daily_requests, label: Requests a day, formula: "dau * actions", unit: requests }
+    - { id: avg_rps, label: Average requests a second, formula: "daily_requests / 86400", unit: req/s, explain: "A day has 86,400 seconds." }
+    - { id: peak_rps, label: Peak requests a second, formula: "avg_rps * peak", unit: req/s }
+    - { id: static_rps, label: Static requests at peak, formula: "peak_rps * static_share", unit: req/s }
+    - { id: dynamic_rps, label: Page and API requests at peak, formula: "peak_rps - static_rps", unit: req/s }
+    - { id: cdn_miss_rps, label: Static requests the CDN passes on, formula: "static_rps * (1 - 0.95)", unit: req/s, explain: "Assumes the CDN serves 95% of static requests from its edge." }
+    - { id: app_rps_cdn, label: Requests reaching the app tier with a CDN, formula: "dynamic_rps + cdn_miss_rps", unit: req/s }
+    - { id: read_rps, label: Read requests at peak, formula: "dynamic_rps * read_share", unit: req/s }
+    - { id: write_rps, label: Write requests at peak, formula: "dynamic_rps - read_rps", unit: req/s }
+    - { id: read_queries, label: Read queries a second, formula: "read_rps * queries_per_request", unit: queries/s }
+    - { id: write_queries, label: Write queries a second, formula: "write_rps * queries_per_request", unit: queries/s }
+    - { id: db_queries_nocache, label: Database queries with no cache, formula: "read_queries + write_queries", unit: queries/s }
+    - { id: miss_queries, label: Read queries that miss the cache, formula: "read_queries * (1 - cache_hit)", unit: queries/s }
+    - { id: db_queries_cache, label: Database queries with a cache, formula: "miss_queries + write_queries", unit: queries/s }
+  presets:
+    - { id: today, label: CityBeat today, inputs: { dau: 1000000 } }
+    - { id: launch, label: Before the radio show, inputs: { dau: 20000 } }
+    - { id: next-city, label: Ten cities, inputs: { dau: 10000000 } }
+
+components:
+  - { id: client, label: Visitors, kind: client, pos: [0, 2] }
+  - { id: cdn, label: CDN edge, kind: cdn, example: "e.g. CloudFront, Fastly", pos: [1.6, -0.4], load: static_rps, note: Scales with the provider; no instances to size. }
+  - { id: lb, label: Load balancer, kind: load_balancer, pos: [2, 2], load: peak_rps, capacity: 20000, capacitySource: "Planning assumption for a software L7 balancer instance", instances: auto }
+  - { id: app, label: One server (app + database + files), kind: compute, pos: [4, 2], load: peak_rps, capacity: 1000, capacitySource: "Planning assumption: one general-purpose VM doing app and database work", instances: 1 }
+  - { id: cache, label: Cache, kind: cache, example: "e.g. Redis, Memcached", pos: [5.2, 0.2], load: read_queries, loadUnit: ops/s, capacity: 100000, capacitySource: "Planning assumption for one in-memory cache node", instances: auto }
+  - { id: db, label: Database, kind: db_sql, example: "e.g. PostgreSQL", pos: [6.3, 2.6], load: db_queries_nocache, loadUnit: queries/s, capacity: 3000, capacitySource: "Planning assumption: one database server, simple indexed queries", instances: 1 }
+  - { id: replica, label: Read replica, kind: db_sql, pos: [7.5, 4.4], load: miss_queries, loadUnit: queries/s, capacity: 3000, capacitySource: "Same machine size as the primary", instances: 1 }
+
+arrows:
+  - { id: a-client-app, from: client, to: app, label: "Every request", mode: sync, rate: peak_rps }
+  - { id: a-app-db, from: app, to: db, label: "Reads and writes", mode: sync, rate: db_queries_nocache }
+  - { id: a-client-lb, from: client, to: lb, label: "Pages and API", mode: sync, rate: peak_rps }
+  - { id: a-lb-app, from: lb, to: app, label: "Spread across servers", mode: sync, rate: peak_rps }
+  - { id: a-app-cache, from: app, to: cache, label: "Read: cache first", mode: sync, rate: read_queries }
+  - { id: a-client-cdn, from: client, to: cdn, label: "Images and scripts", mode: sync, rate: static_rps }
+  - { id: a-cdn-lb, from: cdn, to: lb, label: "Edge misses", mode: sync, rate: cdn_miss_rps }
+  - { id: a-app-replica, from: app, to: replica, label: "Reads that missed the cache", mode: sync, rate: miss_queries }
+  - { id: a-db-replica, from: db, to: replica, label: "Stream changes", mode: async, rate: write_queries }
+
+layers:
+  understand:
+    level: Junior
+    minutes: 15
+    goal: Explain why each part of a typical web design exists, and size it from daily users.
+    sections:
+      problem:
+        - { id: problem, type: prose, role: problem, title: "One machine, four jobs", bodyFile: problem.md }
+      clarify:
+        - id: clarify-questions
+          type: structuredTable
+          variant: clarify
+          title: Questions to ask before drawing anything
+          columns: [{ key: q, label: Ask }, { key: a, label: CityBeat's answer }, { key: why, label: What it changes }]
+          rows:
+            - { q: "Who uses it, and how much?", a: "About a million people a day, around 30 requests each including images.", why: "Sets the request rate everything else is sized from." }
+            - { q: "When is the busiest time?", a: "Friday evening, about 3× the daily average.", why: "Design for the peak, not the average." }
+            - { q: "Mostly reading or writing?", a: "Browsing listings is about 95% of page requests; RSVPs and new listings are the rest.", why: "A read-heavy system can use caches and replicas." }
+            - { q: "What must never be lost?", a: "RSVPs and listings. A stale listing count for a few seconds is fine.", why: "Writes need a durable primary; reads can be slightly stale." }
+            - { q: "Where are the users?", a: "One country. A single cloud region is enough for now.", why: "No multi-region design yet; a CDN still shortens image trips." }
+        - id: clarify-predict
+          type: predict
+          prompt: "Before working it out: at a million daily users, roughly how many requests a second reach CityBeat at the Friday peak?"
+          options:
+            - { text: "About 100", explanation: "That is close to the all-day average for a third of the users. The peak is higher than the average." }
+            - { text: "About 1,000", explanation: "30 million requests ÷ 86,400 seconds ≈ 350 a second on average, and Friday runs about 3× that." }
+            - { text: "About 10,000", explanation: "That would need around 300 requests per user per day, or a 30× peak." }
+            - { text: "About 100,000", explanation: "That is the scale of a very large consumer app, about a hundred times CityBeat." }
+          answer: 1
+          reveal: "About 1,000 a second. A million users sounds huge, but spread over 86,400 seconds it is a few hundred requests a second, and the peak is a small multiple of that. Most of the design work is about that peak."
+          gradingVersion: 1
+      numbers:
+        - { id: numbers-intro, type: prose, role: numbers, title: From daily users to requests a second, bodyFile: numbers.md }
+        - id: numbers-worksheet
+          type: estimationWorksheet
+          title: Work it out
+          prompt: "Fill in each line before looking. Within 2× counts: estimates are for picking a design, not for invoices."
+          lines:
+            - { value: avg_rps, prompt: "Average requests a second", hint: "daily users × requests each ÷ 86,400" }
+            - { value: peak_rps, prompt: "Peak requests a second", hint: "average × peak factor" }
+            - { value: db_queries_nocache, prompt: "Database queries a second at peak, with no cache", hint: "only page and API requests query the database, about 4 times each" }
+          gradingVersion: 1
+      design:
+        - { id: step1-text, type: prose, role: steps, title: "Step 1 · One server does everything", bodyFile: step1.md, why: "Why start here: it is where most products begin, and it shows exactly which resource runs out first." }
+        - id: fig-one-server
+          type: figure
+          title: One server carries every request and turns red at the peak
+          caption: Numbers on arrows are requests a second at the Friday peak.
+          stage: { add: [client, app, a-client-app] }
+          claims: ["Every request, static or dynamic, reaches the same machine.", "At 1,000 requests a second one combined server is past its planning limit."]
+          whatIf: "Drag daily users down to 20,000. Is one server fine then?"
+        - { id: step2-text, type: prose, role: steps, title: "Step 2 · Give the database its own machine", bodyFile: step2.md, why: "Why first: it is the cheapest change, and it separates the part that holds state from the part that can be copied." }
+        - id: fig-split-db
+          type: figure
+          title: The database moves to its own machine
+          base: fig-one-server
+          stage:
+            add: [db, a-app-db]
+            change: [app]
+            overrides:
+              app: { label: App server, capacity: 1500, capacitySource: "Planning assumption: one VM running only the app" }
+          claims: ["The app server no longer shares CPU and memory with the database.", "Every page request still runs about four queries against one database."]
+        - { id: step3-text, type: prose, role: steps, title: "Step 3 · Many app servers behind a load balancer", bodyFile: step3.md, why: "Why stateless: a load balancer can only send a request anywhere if every server can answer it." }
+        - id: fig-load-balancer
+          type: figure
+          title: A load balancer spreads requests over identical app servers
+          base: fig-split-db
+          stage:
+            add: [lb, a-client-lb, a-lb-app]
+            remove: [a-client-app]
+            change: [app]
+            overrides:
+              app: { label: App servers (stateless), instances: auto }
+          claims: ["Requests reach app servers only through the load balancer.", "The figure sizes app servers at 60% target utilisation.", "Sessions and files are not stored on app servers."]
+          whatIf: "Double daily users. How many app servers do you need now?"
+        - { id: step4-text, type: prose, role: steps, title: "Step 4 · A cache answers the popular reads", bodyFile: step4.md, why: "Why a cache: most reads ask for the same few listings, and memory answers them far faster than a database query." }
+        - id: fig-cache
+          type: figure
+          title: Most reads stop at the cache
+          base: fig-load-balancer
+          stage:
+            add: [cache, a-app-cache]
+            change: [db, a-app-db]
+            overrides:
+              db: { load: db_queries_cache }
+            arrowOverrides:
+              a-app-db: { label: "Writes and cache misses", rate: db_queries_cache }
+          claims: ["The app checks the cache before the database.", "Only cache misses and writes reach the database.", "The database stays the source of truth."]
+          whatIf: "Set the cache hit rate to 50%. What happens to the database?"
+        - { id: step5-text, type: prose, role: steps, title: "Step 5 · A CDN serves the static files", bodyFile: step5.md, why: "Why a CDN: static files are identical for everyone, so serving them near the user saves both server work and travel time." }
+        - id: fig-cdn
+          type: figure
+          title: A CDN takes the static half of the traffic off the servers
+          base: fig-cache
+          stage:
+            add: [cdn, a-client-cdn, a-cdn-lb]
+            change: [lb, app, a-client-lb, a-lb-app]
+            overrides:
+              lb: { load: app_rps_cdn }
+              app: { load: app_rps_cdn }
+            arrowOverrides:
+              a-client-lb: { rate: dynamic_rps }
+              a-lb-app: { rate: app_rps_cdn }
+          claims: ["Images and scripts are served by the CDN edge.", "Only edge misses reach CityBeat's servers for static files."]
+        - { id: step6-text, type: prose, role: steps, title: "Step 6 · A read replica takes the reads", bodyFile: step6.md, why: "Why a replica: reads dominate the queries, and a replica also gives the database a standby if the primary fails." }
+        - id: fig-replica
+          type: figure
+          title: The primary takes writes and a replica takes the reads
+          base: fig-cdn
+          stage:
+            add: [replica, a-app-replica, a-db-replica]
+            change: [db, a-app-db]
+            overrides:
+              db: { label: Database primary, load: write_queries }
+            arrowOverrides:
+              a-app-db: { label: Writes only, rate: write_queries }
+          claims: ["All writes go to the primary.", "Cache-miss reads go to the replica.", "The replica receives changes asynchronously, so it can lag behind."]
+          whatIf: "Set the read share to 50%. Which part grows the most?"
+  apply:
+    level: Mid
+    minutes: 10
+    goal: Defend the order of the changes and say what comes after a million.
+    sections:
+      deepDive:
+        - { id: deep-sessions, type: prose, role: deepDive, title: "Question: where do sessions live once there are many servers?", bodyFile: deep-sessions.md }
+        - id: deep-sessions-options
+          type: structuredTable
+          variant: decisionMatrix
+          columns: [{ key: option, label: Option }, { key: good, label: Good }, { key: bad, label: Costs }, { key: verdict, label: Verdict }]
+          rows:
+            - { option: "Sticky sessions (balancer pins a user to one server)", good: "No code change.", bad: "Losing a server logs its users out; load spreads unevenly.", verdict: "Avoid as the main answer." }
+            - { option: "Shared session store (e.g. Redis)", good: "Any server can serve any user; easy to revoke a session.", bad: "One more system to run, a network hop per request.", verdict: "Choice for CityBeat." }
+            - { option: "Signed token in a cookie", good: "No server-side lookup at all.", bad: "Hard to revoke before it expires; the cookie grows with the data in it.", verdict: "Good when revocation can wait for expiry." }
+          caption: "Choice: a shared session store, because CityBeat needs to log people out at once when they change their password."
+        - { id: deep-next, type: prose, role: deepDive, title: "Question: what comes after a million users?", bodyFile: deep-next.md }
+        - id: deep-next-options
+          type: structuredTable
+          variant: decisionMatrix
+          columns: [{ key: option, label: Move }, { key: helps, label: Helps when }, { key: cost, label: Costs }]
+          rows:
+            - { option: "A bigger primary database", helps: "Writes are growing but still fit one machine.", cost: "Cheapest to do; there is a ceiling, and it is still one machine." }
+            - { option: "More read replicas", helps: "Reads keep growing.", cost: "More replication lag to manage; writes don't get faster." }
+            - { option: "A queue for slow work (emails, image resizing)", helps: "Requests wait on work the user doesn't need to see finish.", cost: "Work becomes eventually done; you need retries and monitoring." }
+            - { option: "Sharding (split data across primaries)", helps: "Writes or data size no longer fit one primary.", cost: "Cross-shard queries and re-sharding are hard; do it last." }
+          caption: "Choice: grow the primary and add replicas first; plan sharding only when the write numbers say one primary can't keep up."
+      remember:
+        - id: remember
+          type: rememberCard
+          figure: fig-replica
+          facts:
+            - "Size from daily users: requests a day ÷ 86,400 × peak factor."
+            - "Stateless app servers behind a load balancer scale by copying."
+            - "Caches, a CDN and read replicas each take load off the one part that holds state."
+          number: { value: "86,400", unit: seconds, label: "in a day; a million requests a day is about 12 a second" }
+          tradeoff: { choice: "A read replica", buys: "read capacity and a standby", costs: "replication lag on reads" }
+          sayIt: "I'd keep app servers stateless behind a load balancer, put a cache and CDN in front of the database and the servers, and send reads to replicas, so the primary only takes writes."
+      check:
+        - id: check-figure-writes
+          type: quiz
+          aboutFigure: fig-replica
+          prompt: "In the final figure, which part receives every write?"
+          options:
+            - { text: "The read replica that serves cache misses", explanation: "The replica only receives changes streamed from the primary; the app never writes to it." }
+            - { text: "The database primary", explanation: "All writes go to the primary, which then streams them to the replica." }
+            - { text: "The cache, which then updates the database", explanation: "The cache holds copies for reads. Writes go to the database, the source of truth." }
+            - { text: "The CDN edge closest to the visitor", explanation: "The CDN serves static files and never sees an RSVP." }
+          answer: 1
+          gradingVersion: 1
+        - id: check-stateless
+          type: quiz
+          prompt: "Why must app servers be stateless before you add a load balancer?"
+          options:
+            - { text: "So the balancer can send any request to any healthy server", explanation: "Right. If a session lives on one server, a request routed elsewhere loses it." }
+            - { text: "Because stateless servers use far less memory per request", explanation: "Memory use is not the point; where the session lives is." }
+            - { text: "Because load balancers can't read or forward session cookies", explanation: "They can. The issue is state on the servers behind them." }
+            - { text: "So the database can be dropped from the request path", explanation: "Stateless app servers still need the database for durable data." }
+          answer: 0
+          gradingVersion: 1
+        - id: check-cache-hit
+          type: quiz
+          prompt: "The cache hit rate drops from 80% to 40%. What happens to read queries on the database?"
+          options:
+            - { text: "They fall by half, since the cache works less", explanation: "A lower hit rate sends more reads to the database, not fewer." }
+            - { text: "They stay the same; only latency changes", explanation: "Misses go to the database, so its load follows the miss rate." }
+            - { text: "They triple", explanation: "Database reads follow the miss rate, and 60% is three times 20%." }
+            - { text: "They roughly double", explanation: "Close, but the miss rate goes from 20% to 60%, which is three times." }
+          answer: 2
+          gradingVersion: 1
+        - id: check-cdn
+          type: quiz
+          prompt: "Which requests does the CDN take off CityBeat's servers?"
+          options:
+            - { text: "RSVPs sent during the Friday peak", explanation: "An RSVP is a write that must reach the database." }
+            - { text: "Images, scripts and stylesheets", explanation: "Static files are the same for everyone, so edges can keep copies." }
+            - { text: "Login and logout requests", explanation: "Logins need the session store and the database." }
+            - { text: "Replication traffic between databases", explanation: "Replication runs between the primary and the replica." }
+          answer: 1
+          gradingVersion: 1
+  defend:
+    level: Mid
+    minutes: 10
+    goal: Hold the design together when the interviewer changes the constraints.
+    blocks:
+      - id: ladder-growth
+        type: ladder
+        title: The interviewer pushes back
+        prompt: "Commit to an answer at each step before the next constraint appears."
+        rungs:
+          - constraint: "Friday traffic now spikes 10× for ten minutes when the radio show airs."
+            options: ["Keep a warm pool of extra app servers and let the balancer add them", "Buy a ten times bigger database", "Turn off the cache during spikes"]
+            answer: 0
+            strongAnswer: "App servers are stateless, so add capacity there ahead of the known spike, and keep the cache warm so the database sees little of it."
+          - constraint: "A popular listing's RSVP count must update within a second for everyone."
+            options: ["Read the count from the replica", "Read the count from the primary, or update the cached count on write", "Raise the cache TTL"]
+            answer: 1
+            strongAnswer: "Replica lag can exceed a second under load. For this one value, read from the primary or write the new count into the cache when the RSVP commits."
+          - constraint: "The primary is at 80% CPU from writes alone."
+            options: ["Add another read replica", "Move slow writes (emails, analytics) to a queue, then plan sharding by city", "Add a second CDN"]
+            answer: 1
+            strongAnswer: "Replicas don't help writes. First move work that needn't be synchronous onto a queue; if writes still grow, shard by city, since most queries stay within one city."
+        gradingVersion: 1

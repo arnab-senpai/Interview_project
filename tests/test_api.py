@@ -318,7 +318,11 @@ def test_user_auth_tokens_isolation_streak_and_notes(isolated_db) -> None:
 
 
 def test_legacy_db_migration_preserves_guest_progress(tmp_path: Path) -> None:
+    """A pre-Alembic, single-user SQLite file is upgraded and then adopted by Alembic."""
     import sqlite3
+
+    if os.environ.get("SYSTEMCRAFT_DATABASE_URL"):
+        pytest.skip("SQLite legacy-file upgrade only")
     from backend.app.db.database import init_db, list_lesson_progress
 
     legacy_db = tmp_path / "legacy.db"

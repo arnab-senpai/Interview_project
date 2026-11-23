@@ -1,0 +1,263 @@
+schemaVersion: 2
+id: numbers-that-matter
+track: hld
+kind: concept
+template: chapter
+title: Numbers that matter
+summary: The few estimates that decide most designs, worked with one constant for time and decimal units, and shown on the figure part by part.
+prerequisites: [one-server-to-a-million-users]
+related: [url-shortener, news-feed, whatsapp-chat, uber-rideshare]
+sources:
+  - title: "Jeff Dean, Numbers Everyone Should Know (2009), updated by Colin Scott's interactive latency table (about 2020)"
+    url: https://colin-scott.github.io/personal_website/research/interactive_latency.html
+  - title: NIST, Prefixes for binary multiples (KiB, MiB, GiB)
+    url: https://physics.nist.gov/cuu/Units/binary.html
+  - title: Capacity figures per instance are planning assumptions, not benchmarks
+    note: Measure your own service before sizing a real fleet.
+lastVerified: 2026-11-23
+appliesTo: Back-of-the-envelope sizing for any request-serving system.
+
+numbers:
+  inputs:
+    - { id: dau, label: Daily active users, unit: users, default: 20000000, min: 10000, max: 1000000000, scale: log }
+    - { id: actions, label: Requests per user per day, unit: requests, default: 20, min: 1, max: 5000, scale: log }
+    - { id: peak, label: Peak over average, unit: "×", default: 3, min: 1, max: 10, step: 0.5 }
+    - { id: read_share, label: Read share, unit: "%", default: 0.99, min: 0.05, max: 0.999, step: 0.01 }
+    - { id: payload_bytes, label: Bytes per item, unit: B, default: 500, min: 50, max: 1000000, scale: log }
+    - { id: retention_years, label: Years kept, unit: years, default: 5, min: 1, max: 20, step: 1 }
+    - { id: replicas, label: Copies of the data, unit: copies, default: 3, min: 1, max: 6, step: 1 }
+    - { id: cache_hit, label: Cache hit rate, unit: "%", default: 0.9, min: 0, max: 0.99, step: 0.01 }
+    - { id: distinct_items_read, label: Distinct items read in a day, unit: items, default: 10000000, min: 1000, max: 10000000000, scale: log }
+    - { id: hot_fraction, label: Hot share of those items, unit: "%", default: 0.2, min: 0.01, max: 1, step: 0.01 }
+  values:
+    - { id: daily_requests, label: Requests a day, formula: "dau * actions", unit: requests }
+    - { id: avg_rps, label: Average requests a second, formula: "daily_requests / 86400", unit: req/s, explain: "One constant for time: 86,400 seconds in a day." }
+    - { id: peak_rps, label: Peak requests a second, formula: "avg_rps * peak", unit: req/s }
+    - { id: read_rps, label: Peak reads a second, formula: "peak_rps * read_share", unit: req/s }
+    - { id: write_rps, label: Peak writes a second, formula: "peak_rps * (1 - read_share)", unit: req/s }
+    - { id: db_reads, label: Reads that reach the database, formula: "read_rps * (1 - cache_hit)", unit: req/s }
+    - { id: db_ops, label: Database operations a second, formula: "db_reads + write_rps", unit: ops/s }
+    - { id: writes_per_day, label: Writes a day, formula: "daily_requests * (1 - read_share)", unit: writes }
+    - { id: bytes_per_day, label: New data a day, formula: "writes_per_day * payload_bytes", unit: B }
+    - { id: storage_bytes, label: "Storage for the whole retention, all copies", formula: "bytes_per_day * 365 * retention_years * replicas", unit: B }
+    - { id: peak_bandwidth, label: Peak bandwidth out, formula: "peak_rps * payload_bytes", unit: B/s }
+    - { id: cache_bytes, label: Cache memory for hot items, formula: "distinct_items_read * hot_fraction * payload_bytes", unit: B, explain: "Distinct hot items × their size, not reads × size." }
+  presets:
+    - { id: url-shortener, label: URL shortener, inputs: { dau: 20000000, actions: 20, peak: 3, read_share: 0.99, payload_bytes: 500, retention_years: 5, distinct_items_read: 10000000 } }
+    - { id: news-feed, label: News feed, inputs: { dau: 200000000, actions: 5, peak: 3, read_share: 0.98, payload_bytes: 1000, retention_years: 5, distinct_items_read: 50000000 } }
+    - { id: chat, label: Chat, inputs: { dau: 500000000, actions: 40, peak: 3, read_share: 0.5, payload_bytes: 250, retention_years: 5, distinct_items_read: 200000000 } }
+    - id: gps
+      label: Ride-share GPS (drivers)
+      inputs: { dau: 2000000, actions: 1800, peak: 2, read_share: 0.05, payload_bytes: 128, retention_years: 3, distinct_items_read: 2000000, hot_fraction: 1 }
+      note: "Drivers online about 2 hours a day, one ping every 4 seconds. Riders' map reads are a separate estimate."
+
+components:
+  - { id: client, label: Users, kind: client, pos: [0, 2] }
+  - id: app
+    label: App tier
+    kind: compute
+    pos: [2.4, 2]
+    load: peak_rps
+    capacity: 2000
+    capacitySource: "Planning assumption for one app server, simple requests"
+    instances: auto
+    metrics: [{ label: Bandwidth out, value: peak_bandwidth, unit: B/s }]
+  - { id: cache, label: Cache, kind: cache, example: "e.g. Redis", pos: [4, 0], load: read_rps, loadUnit: ops/s, capacity: 100000, capacitySource: "Planning assumption for one cache node", instances: auto, metrics: [{ label: Memory, value: cache_bytes, unit: B }] }
+  - { id: db, label: Database primary, kind: db_sql, pos: [5.2, 2.6], load: write_rps, loadUnit: ops/s, capacity: 3000, capacitySource: "Planning assumption: one database server", instances: 1 }
+  - { id: copies, label: Replicas and backups, kind: object_store, pos: [6.8, 4.2] }
+
+arrows:
+  - { id: a-client-app, from: client, to: app, label: "All requests", mode: sync, rate: peak_rps }
+  - { id: a-app-db-writes, from: app, to: db, label: "Writes", mode: sync, rate: write_rps }
+  - { id: a-app-db-reads, from: app, to: db, label: "Reads", mode: sync, rate: read_rps }
+  - { id: a-app-cache, from: app, to: cache, label: "Reads, cache first", mode: sync, rate: read_rps }
+  - { id: a-db-copies, from: db, to: copies, label: "Copy every write", mode: async, rate: "write_rps * (replicas - 1)" }
+
+layers:
+  understand:
+    level: Junior
+    minutes: 15
+    goal: Turn daily users into requests a second, storage and cache memory, and know which part each number moves.
+    sections:
+      problem:
+        - { id: problem, type: prose, role: problem, title: The estimate that came out 14% low, bodyFile: problem.md }
+      clarify:
+        - id: clarify-predict
+          type: predict
+          prompt: "A million requests a day is roughly how many requests a second?"
+          options:
+            - { text: "About 1", explanation: "That would be about 86,000 a day." }
+            - { text: "About 12", explanation: "1,000,000 ÷ 86,400 ≈ 11.6. Remember it as about 12." }
+            - { text: "About 100", explanation: "That is about 8.6 million a day." }
+            - { text: "About 1,000", explanation: "That is about 86 million a day." }
+          answer: 1
+          reveal: "About 12 a second. Keep this one in your head: every million requests a day adds about a dozen a second, before the peak factor."
+          gradingVersion: 1
+        - id: clarify-questions
+          type: structuredTable
+          variant: clarify
+          title: The inputs to ask for
+          columns: [{ key: q, label: Ask }, { key: why, label: It sizes }]
+          rows:
+            - { q: "How many daily users, and how many requests each?", why: "Every request rate on the figure." }
+            - { q: "How much higher is the busiest hour?", why: "The peak you design for (2× to 5× is common)." }
+            - { q: "What share are reads?", why: "The split between the cacheable read path and the write path." }
+            - { q: "How big is one stored item?", why: "Bandwidth, storage and cache memory." }
+            - { q: "How long is data kept, and in how many copies?", why: "Storage only." }
+            - { q: "How many distinct items are popular?", why: "Cache memory." }
+      numbers:
+        - { id: numbers-intro, type: prose, role: numbers, title: One constant for time and decimal units, bodyFile: numbers.md }
+        - id: numbers-worksheet
+          type: estimationWorksheet
+          title: Work the URL shortener
+          prompt: "Use the URL shortener preset. Within 2× counts."
+          preset: url-shortener
+          lines:
+            - { value: peak_rps, prompt: "Peak requests a second", hint: "20M × 20 ÷ 86,400 × 3" }
+            - { value: write_rps, prompt: "Peak writes a second", hint: "1% of the peak" }
+            - { value: storage_bytes, prompt: "Storage for 5 years, 3 copies, in bytes", hint: "writes a day × 500 B × 365 × 5 × 3" }
+            - { value: cache_bytes, prompt: "Cache memory for the hot 20% of 10M links, in bytes", hint: "10M × 0.2 × 500 B" }
+          gradingVersion: 1
+      design:
+        - { id: step1-text, type: prose, role: steps, title: "Step 1 · Peak traffic sizes the front door", bodyFile: step1.md, why: "Why the peak: servers that cope with the average still fall over every busy hour." }
+        - id: fig-front
+          type: figure
+          title: Peak requests a second set how many app servers you need
+          stage: { add: [client, app, a-client-app] }
+          claims: ["App servers are sized from peak requests a second at 60% utilisation.", "Bandwidth out is peak requests × bytes per response."]
+          whatIf: "Switch to the news feed preset. How many app servers now?"
+        - { id: step2-text, type: prose, role: steps, title: "Step 2 · Read share splits the paths", bodyFile: step2.md, why: "Why split: reads and writes are scaled with different tools." }
+        - id: fig-split
+          type: figure
+          title: Read share decides how much traffic takes the write path
+          base: fig-front
+          stage: { add: [db, a-app-db-writes, a-app-db-reads], overrides: { db: { load: "read_rps + write_rps" } } }
+          claims: ["Writes go to the primary.", "Without a cache, every read also reaches the database."]
+          whatIf: "Move read share from 99% to 90%. Which numbers change, and which don't?"
+        - { id: step3-text, type: prose, role: steps, title: "Step 3 · Cache hit rate decides what the database sees", bodyFile: step3.md, why: "Why distinct items: a cache stores each item once, however often it is read." }
+        - id: fig-cache
+          type: figure
+          title: The cache hit rate decides how many reads reach the database
+          base: fig-split
+          stage:
+            add: [cache, a-app-cache]
+            change: [db, a-app-db-reads]
+            overrides: { db: { load: db_ops } }
+            arrowOverrides: { a-app-db-reads: { label: "Cache misses", rate: db_reads } }
+          claims: ["Database reads equal peak reads × (1 − hit rate).", "Cache memory comes from distinct hot items × item size."]
+        - { id: step4-text, type: prose, role: steps, title: "Step 4 · Retention and copies size the disks", bodyFile: step4.md, why: "Why separate: storage grows with writes and time, not with request rate." }
+        - id: fig-storage
+          type: figure
+          title: Retention and copies change storage and nothing else
+          base: fig-cache
+          stage:
+            add: [copies, a-db-copies]
+            change: [db]
+            overrides:
+              db: { metrics: [{ label: "New data a day", value: bytes_per_day, unit: B }] }
+              copies: { metrics: [{ label: "Storage, all copies", value: storage_bytes, unit: B }] }
+          claims: ["Storage = writes a day × bytes × 365 × years × copies.", "No request rate depends on retention or copies."]
+          whatIf: "Keep data for 10 years instead of 5. Which parts change?"
+  apply:
+    level: Junior
+    minutes: 10
+    goal: Avoid the two classic estimation slips and size a cache from distinct items.
+    sections:
+      deepDive:
+        - { id: deep-units, type: prose, role: deepDive, title: "Question: GB or GiB?", bodyFile: deep-units.md }
+        - id: deep-units-table
+          type: structuredTable
+          variant: comparison
+          columns: [{ key: unit, label: Unit }, { key: bytes, label: Bytes }, { key: binary, label: "1,024-based" }, { key: gap, label: Gap }]
+          rows:
+            - { unit: "KB / KiB", bytes: "1,000", binary: "1,024", gap: "2.4%" }
+            - { unit: "MB / MiB", bytes: "1,000,000", binary: "1,048,576", gap: "4.9%" }
+            - { unit: "GB / GiB", bytes: "10⁹", binary: "2³⁰ ≈ 1.074 × 10⁹", gap: "7.4%" }
+            - { unit: "TB / TiB", bytes: "10¹²", binary: "2⁴⁰ ≈ 1.100 × 10¹²", gap: "10%" }
+          caption: "Choice: decimal units everywhere in estimates, written as KB, GB, TB. Write GiB only when you mean it."
+        - { id: deep-cache, type: prose, role: deepDive, title: "Question: how big should the cache be?", bodyFile: deep-cache.md }
+        - id: deep-cache-options
+          type: structuredTable
+          variant: decisionMatrix
+          columns: [{ key: option, label: Method }, { key: result, label: "URL shortener result" }, { key: verdict, label: Verdict }]
+          rows:
+            - { option: "20% of daily reads × item size", result: "About 40 GB: counts a hot link once per read.", verdict: "Wrong: oversizes by however often hot items repeat." }
+            - { option: "20% of distinct items read in a day × item size", result: "About 1 GB.", verdict: "Choice: each cached item is stored once." }
+            - { option: "Measure the hit rate curve on real traffic", result: "Best, when you have traffic.", verdict: "Use after launch." }
+      remember:
+        - id: remember
+          type: rememberCard
+          figure: fig-storage
+          facts:
+            - "Peak requests a second = requests a day ÷ 86,400 × peak factor."
+            - "Read share moves the write path and storage, not the front door."
+            - "Cache memory = distinct hot items × item size."
+          number: { value: "≈12", unit: "requests/s", label: "for every million requests a day" }
+          tradeoff: { choice: "Rounding a day to 100,000 seconds", buys: "faster mental math", costs: "a 14% error if you mix it with 86,400" }
+          sayIt: "Twenty million users times twenty requests is 400 million a day, about 4,600 a second, so around 14,000 at a 3× peak; 1% writes is about 140 a second."
+      check:
+        - id: check-figure-retention
+          type: quiz
+          aboutFigure: fig-storage
+          prompt: "In the final figure, which numbers change if you keep data for 10 years instead of 5?"
+          options:
+            - { text: "App server count and bandwidth", explanation: "Those follow the peak request rate, which retention doesn't touch." }
+            - { text: "Storage on replicas and backups", explanation: "Retention multiplies storage; no request rate depends on it." }
+            - { text: "Cache memory and cache hit rate", explanation: "Cache size follows distinct hot items, not how long data is kept." }
+            - { text: "Database writes a second at peak", explanation: "Writes a second follow the request rate and read share." }
+          answer: 1
+          gradingVersion: 1
+        - id: check-mixed-constants
+          type: quiz
+          prompt: "Dividing by 100,000 to get requests a second, then multiplying by 86,400 to get bytes a day, makes storage:"
+          options:
+            - { text: "About 14% too high", explanation: "Dividing by the larger number gives a smaller rate, so storage comes out low." }
+            - { text: "About 14% too low", explanation: "86,400 ÷ 100,000 = 0.864, so the answer is 13.6% low." }
+            - { text: "Exactly right", explanation: "The two constants differ by 13.6%." }
+            - { text: "About 2.4% too low", explanation: "2.4% is the gap between KB and KiB, a different slip." }
+          answer: 1
+          gradingVersion: 1
+        - id: check-cache-size
+          type: quiz
+          prompt: "Ten million distinct links are read each day, 20% of them are hot, and each is 500 bytes. About how much cache memory?"
+          options:
+            - { text: "About 10 MB", explanation: "That is a thousand times too small: 2 million items × 500 B." }
+            - { text: "About 1 GB", explanation: "10M × 0.2 × 500 B = 10⁹ bytes." }
+            - { text: "About 40 GB", explanation: "That counts every read of a hot link, not each link once." }
+            - { text: "About 1 TB", explanation: "That would be a thousand times more items or bigger ones." }
+          answer: 1
+          gradingVersion: 1
+        - id: check-read-share
+          type: quiz
+          prompt: "Read share drops from 99% to 90%. What happens to peak writes a second?"
+          options:
+            - { text: "About 10× more", explanation: "Writes go from 1% to 10% of the same peak." }
+            - { text: "About 10% more", explanation: "The write share itself grows from 1% to 10%, which is ten times." }
+            - { text: "No change", explanation: "The peak is unchanged, but a bigger share of it is writes." }
+            - { text: "Half as many", explanation: "Fewer reads means more writes, not fewer." }
+          answer: 0
+          gradingVersion: 1
+  cheatSheet:
+    level: Junior
+    minutes: 5
+    goal: Reference tables that used to live in the Capacity Lab.
+    blocks:
+      - id: ref-latency
+        type: structuredTable
+        variant: reference
+        title: Latency numbers, orders of magnitude
+        rowsFrom: reference.latencyBenchmarks
+        columns: [{ key: operation, label: Operation }, { key: latency, label: Latency }, { key: tier, label: Tier }]
+        caption: "As of about 2020. Use them for orders of magnitude; measure your own hardware for anything precise."
+      - id: ref-nines
+        type: structuredTable
+        variant: reference
+        title: Availability and allowed downtime
+        rowsFrom: reference.availabilityNines
+        columns: [{ key: nines, label: Target }, { key: downtimePerYear, label: Down per year }, { key: downtimePerMonth, label: Down per month }, { key: typicalUse, label: Typical use }]
+      - id: ref-genai
+        type: structuredTable
+        variant: reference
+        title: Sizing numbers for LLM serving
+        rowsFrom: reference.genaiSizingMetrics
+        columns: [{ key: metric, label: Metric }, { key: target, label: Target }, { key: levers, label: Levers }]

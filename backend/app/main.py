@@ -11,16 +11,20 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.app.core.config import FRONTEND_DIST_DIR, get_cors_origins
 from backend.app.db.database import init_db
-from backend.app.routers import admin, auth, curriculum, feedback, notes, practice
+from backend.app.routers import admin, auth, curriculum, feedback, notes, practice, session, topics
 from backend.app.services.auth import check_jwt_secret_config
+from backend.app.services.content_store import get_content
 from backend.app.services.curriculum_loader import get_store
+from backend.app.services.guest import purge_idle_guests
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     check_jwt_secret_config()
     init_db()
+    purge_idle_guests()
     get_store()
+    get_content()
     yield
 
 
@@ -43,6 +47,8 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(auth.router)
+    app.include_router(session.router)
+    app.include_router(topics.router)
     app.include_router(feedback.router)
     app.include_router(admin.router)
     app.include_router(notes.router)

@@ -1,0 +1,289 @@
+schemaVersion: 2
+id: caching-and-stampede
+track: hld
+kind: concept
+template: chapter
+title: Caching and the stampede
+summary: Put a cache in front of a database with cache-aside, then close the three classic holes it opens - a stampede on a hot key, lookups for keys that don't exist, and mass expiry.
+prerequisites: [one-server-to-a-million-users]
+related: [sharding-and-hot-keys, dns-and-cdn, url-shortener, ticketmaster-flash-sale]
+sandboxLessonId: caching-and-stampede
+sources:
+  - title: Redis documentation, SET with NX and PX options
+    url: https://redis.io/docs/latest/commands/set/
+  - title: Redis documentation, Bloom filter (Redis Stack)
+    url: https://redis.io/docs/latest/develop/data-types/probabilistic/bloom-filter/
+  - title: "Vattani, Chierichetti, Lowenstein, Optimal Probabilistic Cache Stampede Prevention (VLDB 2015)"
+    url: https://www.vldb.org/pvldb/vol8/p886-vattani.pdf
+  - title: Capacity figures per instance are planning assumptions, not benchmarks
+lastVerified: 2026-11-23
+appliesTo: Read-heavy services with a shared cache in front of a relational database. Commands shown are Redis 7.
+
+numbers:
+  inputs:
+    - { id: peak_reads, label: Peak reads a second, unit: req/s, default: 20000, min: 500, max: 1000000, scale: log }
+    - { id: peak_writes, label: Peak writes a second, unit: req/s, default: 500, min: 10, max: 50000, scale: log }
+    - { id: cache_hit, label: Cache hit rate, unit: "%", default: 0.9, min: 0, max: 0.99, step: 0.01 }
+    - { id: hot_key_share, label: Share of reads for the hottest key, unit: "%", default: 0.1, min: 0.001, max: 0.5, step: 0.001 }
+    - { id: refill_ms, label: Time to rebuild one entry, unit: ms, default: 200, min: 5, max: 5000, scale: log }
+    - { id: pods, label: App pods, unit: pods, default: 40, min: 2, max: 500, scale: log }
+    - { id: bogus_rps, label: Lookups for keys that don't exist, unit: req/s, default: 3000, min: 0, max: 100000, step: 100 }
+  values:
+    - { id: db_no_cache, label: Database queries with no cache, formula: "peak_reads + peak_writes", unit: queries/s }
+    - { id: miss_reads, label: Reads that miss the cache, formula: "peak_reads * (1 - cache_hit)", unit: queries/s }
+    - { id: db_cache, label: Database queries with cache-aside, formula: "miss_reads + peak_writes", unit: queries/s }
+    - { id: hot_key_rps, label: Reads a second for the hottest key, formula: "peak_reads * hot_key_share", unit: req/s }
+    - { id: herd_size, label: Identical queries while the hot key rebuilds, formula: "hot_key_rps * refill_ms / 1000", unit: queries, explain: "Every read that arrives during the rebuild also misses." }
+    - { id: db_stampede, label: Database queries during a stampede, formula: "db_cache + hot_key_rps", unit: queries/s }
+    - { id: per_pod_rebuilds, label: Rebuild queries with per-pod singleflight, formula: "min(pods, herd_size)", unit: queries }
+    - { id: db_lease, label: Database queries with a refresh lease, formula: "db_cache + 1000 / refill_ms", unit: queries/s, explain: "One rebuild per refill window for the hot key." }
+    - { id: bogus_to_db, label: Bogus lookups that get past the filter, formula: "bogus_rps * 0.01", unit: queries/s, explain: "A Bloom filter sized for a 1% false-positive rate." }
+    - { id: db_bloom, label: Database queries with lease and Bloom filter, formula: "db_lease + bogus_to_db", unit: queries/s }
+    - { id: pod_load, label: Requests a second per pod, formula: "(peak_reads + peak_writes) / pods", unit: req/s }
+
+components:
+  - { id: client, label: Shoppers, kind: client, pos: [0, 2] }
+  - { id: app, label: App pods, kind: compute, pos: [2.2, 2], load: "peak_reads + peak_writes", capacity: 1000, capacitySource: "Planning assumption for one app pod", instances: pods }
+  - { id: cache, label: Redis, kind: cache, pos: [4, 0], load: peak_reads, loadUnit: ops/s, capacity: 100000, capacitySource: "Planning assumption for one Redis node, simple GET and SET", instances: auto }
+  - { id: db, label: Postgres, kind: db_sql, pos: [5, 2.8], load: db_no_cache, loadUnit: queries/s, capacity: 6000, capacitySource: "Planning assumption: one database server, indexed reads", instances: 1 }
+  - { id: bloom, label: Bloom filter, kind: cache, example: "RedisBloom, shared by all pods", pos: [2.8, -1.4], load: "peak_reads + bogus_rps", loadUnit: checks/s, capacity: 200000, capacitySource: "Planning assumption for one Redis node, BF.EXISTS", instances: auto }
+
+arrows:
+  - { id: a-client-app, from: client, to: app, label: "Product pages", mode: sync, rate: "peak_reads + peak_writes" }
+  - { id: a-app-db, from: app, to: db, label: "Every read and write", mode: sync, rate: db_no_cache }
+  - { id: a-app-cache, from: app, to: cache, label: "GET, then SET on miss", mode: sync, rate: peak_reads }
+  - { id: a-app-bloom, from: app, to: bloom, label: "Does this id exist?", mode: sync, rate: "peak_reads + bogus_rps" }
+
+layers:
+  understand:
+    level: Mid
+    minutes: 15
+    goal: Add a cache with cache-aside and explain the stampede, penetration and avalanche failures.
+    sections:
+      problem:
+        - { id: problem, type: prose, role: problem, title: "Fast all week, down at 8 pm on Friday", bodyFile: problem.md }
+      clarify:
+        - id: clarify-questions
+          type: structuredTable
+          variant: clarify
+          title: Questions to ask before adding a cache
+          columns: [{ key: q, label: Ask }, { key: a, label: Answer }, { key: why, label: What it changes }]
+          rows:
+            - { q: "How stale may a product page be?", a: "A few seconds for descriptions; prices must update within a minute.", why: "Sets the TTL and whether writes must invalidate." }
+            - { q: "How skewed is traffic?", a: "The top product gets about 10% of reads during a sale.", why: "Hot keys are where stampedes start." }
+            - { q: "What happens if the cache is down?", a: "Pages may be slow, not broken.", why: "Cache-aside degrades to the database." }
+            - { q: "Can callers ask for ids that don't exist?", a: "Yes, scrapers walk the id space.", why: "Missing keys bypass the cache: penetration." }
+        - id: clarify-predict
+          type: predict
+          prompt: "The cache answers 90% of reads, and the hottest product's entry expires. For the next 200 ms, what reaches the database?"
+          options:
+            - { text: "One query: the first miss rebuilds it", explanation: "Only with a lease or lock. Plain cache-aside lets every miss query the database." }
+            - { text: "Every read of that product during the rebuild", explanation: "All of them miss until the first rebuild writes the value back." }
+            - { text: "Nothing: Redis serves the stale copy", explanation: "An expired key is gone. Serving stale needs a separate soft TTL." }
+            - { text: "Only writes, since reads go to Redis", explanation: "Misses are reads, and they all go to the database." }
+          answer: 1
+          reveal: "Every read of that key during the rebuild misses and queries the database: about 2,000 a second × 0.2 s = 400 identical queries. That is the stampede this chapter fixes."
+          gradingVersion: 1
+      numbers:
+        - { id: numbers-intro, type: prose, role: numbers, title: "How big is the herd?", bodyFile: numbers.md }
+        - id: numbers-worksheet
+          type: estimationWorksheet
+          title: Work it out
+          prompt: "Within 2× counts."
+          lines:
+            - { value: db_cache, prompt: "Database queries a second with a 90% hit rate", hint: "misses + writes" }
+            - { value: hot_key_rps, prompt: "Reads a second for the hottest product", hint: "10% of peak reads" }
+            - { value: herd_size, prompt: "Identical queries while it rebuilds", hint: "reads a second × rebuild time in seconds" }
+          gradingVersion: 1
+      design:
+        - { id: step1-text, type: prose, role: steps, title: "Step 1 · Every read hits the database", bodyFile: step1.md, why: "Why start here: the numbers show the database, not the app tier, is the part to protect." }
+        - id: fig-no-cache
+          type: figure
+          title: With no cache the database takes every read and turns red
+          stage: { add: [client, app, db, a-client-app, a-app-db] }
+          claims: ["Every read and write reaches the database.", "App pods are stateless."]
+        - { id: step2-text, type: prose, role: steps, title: "Step 2 · Cache-aside", bodyFile: step2.md, why: "Why cache-aside: the database stays the source of truth, and a cache outage slows pages instead of breaking them." }
+        - id: fig-cache-aside
+          type: figure
+          title: With cache-aside most reads stop at Redis
+          base: fig-no-cache
+          stage:
+            add: [cache, a-app-cache]
+            change: [db, a-app-db]
+            overrides: { db: { load: db_cache } }
+            arrowOverrides: { a-app-db: { label: "Misses and writes", rate: db_cache } }
+          claims: ["The app reads Redis first and Postgres only on a miss.", "Writes go to Postgres, then delete the cached entry."]
+          whatIf: "Lower the hit rate to 60%. Does the database stay green?"
+        - { id: step3-text, type: prose, role: steps, title: "Step 3 · A hot key expires", bodyFile: step3.md, why: "Why it matters: the load arrives all at once, so average numbers hide it." }
+        - id: fig-stampede
+          type: figure
+          title: When a hot key expires, its misses pile onto the database
+          base: fig-cache-aside
+          stage:
+            change: [db, a-app-db]
+            overrides:
+              db: { load: db_stampede, metrics: [{ label: "Identical queries waiting", value: herd_size, unit: queries }], note: "Pool of 200 connections." }
+            arrowOverrides: { a-app-db: { label: "Misses, writes and the herd", rate: db_stampede } }
+          claims: ["During a rebuild every read of the hot key misses.", "The herd size is reads a second × rebuild time."]
+          whatIf: "Make the rebuild take 1,000 ms. How big is the herd now?"
+        - { id: step4-text, type: prose, role: steps, title: "Step 4 · One rebuild at a time", bodyFile: step4.md, why: "Why a shared lease: it limits rebuilds across the whole fleet, not just inside one pod." }
+        - id: fig-lease
+          type: figure
+          title: A refresh lease lets one request rebuild the key
+          base: fig-stampede
+          stage:
+            change: [cache, db, a-app-db]
+            overrides:
+              cache: { label: "Redis (with refresh lease)" }
+              db: { load: db_lease, metrics: [{ label: "Rebuild queries per expiry", value: "1", unit: queries }], note: "Per-pod singleflight alone would send one per pod." }
+            arrowOverrides: { a-app-db: { label: "Misses, writes, one rebuild", rate: db_lease } }
+          claims: ["Only the lease holder queries Postgres for an expired key.", "Other pods serve the old value or retry the cache."]
+        - { id: step5-text, type: prose, role: steps, title: "Step 5 · Turn away keys that don't exist", bodyFile: step5.md, why: "Why a Bloom filter: it answers \"definitely not\" in a few bits per key, before the cache or database is asked." }
+        - id: fig-bloom
+          type: figure
+          title: A shared Bloom filter stops lookups for ids that don't exist
+          base: fig-lease
+          stage:
+            add: [bloom, a-app-bloom]
+            change: [db, a-app-db]
+            overrides: { db: { load: db_bloom } }
+            arrowOverrides: { a-app-db: { rate: db_bloom } }
+          claims: ["Every lookup checks the shared Bloom filter first.", "About 1% of bogus lookups get past it.", "Every product create adds its id to the filter."]
+          whatIf: "Raise bogus lookups to 50,000 a second. Which part notices?"
+  apply:
+    level: Mid
+    minutes: 12
+    goal: Choose a write strategy and a stampede defence, and justify both.
+    sections:
+      deepDive:
+        - { id: deep-write, type: prose, role: deepDive, title: "Question: cache-aside, write-through or write-behind?", bodyFile: deep-write.md }
+        - id: deep-write-options
+          type: structuredTable
+          variant: decisionMatrix
+          columns: [{ key: option, label: Strategy }, { key: good, label: Good }, { key: bad, label: Costs }, { key: fit, label: Fits }]
+          rows:
+            - { option: "Cache-aside (lazy load)", good: "Caches only what is read; a cache outage degrades to the database.", bad: "A cold miss per key; a short stale window unless writes invalidate.", fit: "Most read-heavy services" }
+            - { option: "Write-through", good: "Cache is warm and current after every write.", bad: "Every write pays for two systems; caches data nobody reads.", fit: "Small, hot records such as user profiles" }
+            - { option: "Write-behind", good: "Batches writes; very high write throughput.", bad: "Writes in the cache are lost if it crashes before flushing.", fit: "Counters and telemetry that tolerate loss" }
+          caption: "Choice: cache-aside with invalidate-on-write, because product data must survive a cache restart and most products are rarely read."
+        - { id: deep-herd, type: prose, role: deepDive, title: "Question: singleflight, a shared lease, or early refresh?", bodyFile: deep-herd.md }
+        - id: deep-herd-options
+          type: structuredTable
+          variant: decisionMatrix
+          columns: [{ key: option, label: Defence }, { key: scope, label: Scope }, { key: queries, label: "Rebuild queries at 40 pods" }, { key: cost, label: Costs }]
+          rows:
+            - { option: "Singleflight in each pod", scope: "One process", queries: "Up to 40", cost: "Free to add; doesn't coordinate across pods." }
+            - { option: "Shared refresh lease (SET NX PX)", scope: "Whole fleet", queries: "1", cost: "Losers must wait or serve stale; pick a lease time longer than a rebuild." }
+            - { option: "Probabilistic early refresh", scope: "Whole fleet", queries: "About 1, before expiry", cost: "Slightly more refreshes; needs the rebuild time stored with the value." }
+            - { option: "Jittered TTLs (base + random)", scope: "Many keys", queries: "Spreads expiries out", cost: "Doesn't help a single hot key; use it with one of the above." }
+          caption: "Choice: a shared lease for hot keys plus jittered TTLs everywhere, with singleflight in each pod as a cheap extra layer."
+      remember:
+        - id: remember
+          type: rememberCard
+          figure: fig-bloom
+          facts:
+            - "Cache-aside: read the cache, on a miss read the database and fill the cache; on a write, update the database then delete the entry."
+            - "A stampede is reads a second × rebuild time identical queries; a shared lease cuts it to one."
+            - "A shared Bloom filter stops lookups for keys that don't exist; jittered TTLs stop mass expiry."
+          number: { value: "400", unit: queries, label: "pile up when a 2,000 reads/s key takes 200 ms to rebuild" }
+          tradeoff: { choice: "A refresh lease", buys: "one rebuild per expiry", costs: "other requests wait or see a slightly old value" }
+          sayIt: "I'd use cache-aside, delete on write, jitter TTLs, and take a short lease in Redis so only one request rebuilds a hot key; a shared Bloom filter handles ids that don't exist."
+      check:
+        - id: check-figure-db
+          type: quiz
+          aboutFigure: fig-stampede
+          prompt: "In the stampede figure, why does the database load jump while Redis is healthy?"
+          options:
+            - { text: "Redis is evicting many other keys to make room", explanation: "Eviction isn't involved; one key expired." }
+            - { text: "Reads of the expired hot key all miss until rebuilt", explanation: "They all query Postgres for the same row during the rebuild." }
+            - { text: "Writes are being retried against Postgres in a loop", explanation: "Writes didn't change; the extra load is reads." }
+            - { text: "The Bloom filter is rejecting real ids", explanation: "There is no Bloom filter yet in that figure." }
+          answer: 1
+          gradingVersion: 1
+        - id: check-singleflight
+          type: quiz
+          prompt: "With 40 pods and singleflight in each pod only, how many rebuild queries can one expiry send?"
+          options:
+            - { text: "One", explanation: "Singleflight coordinates inside one process, not across pods." }
+            - { text: "Up to 40", explanation: "Each pod collapses its own misses to one query." }
+            - { text: "Zero", explanation: "Someone has to rebuild the value." }
+            - { text: "One per request", explanation: "That is without singleflight." }
+          answer: 1
+          gradingVersion: 1
+        - id: check-bloom
+          type: quiz
+          prompt: "What must happen for a shared Bloom filter to stay correct?"
+          options:
+            - { text: "Every create adds its id to the filter", explanation: "Otherwise a new product looks like it doesn't exist." }
+            - { text: "Every read adds its id to the filter", explanation: "Reads of bogus ids would then pass the filter." }
+            - { text: "The filter is rebuilt on every write", explanation: "Far too expensive; creates add ids incrementally." }
+            - { text: "Each pod keeps its own private copy", explanation: "Private copies miss ids created on other pods." }
+          answer: 0
+          gradingVersion: 1
+        - id: check-avalanche
+          type: quiz
+          prompt: "A deploy warms 100,000 keys with the same 10-minute TTL. What should you add?"
+          options:
+            - { text: "A longer TTL for all keys", explanation: "They would still expire together, just later." }
+            - { text: "A random jitter on each TTL", explanation: "Spreading expiries stops them all missing at once." }
+            - { text: "A second Redis node", explanation: "More capacity doesn't stop simultaneous misses." }
+            - { text: "Write-behind for the warm-up", explanation: "Write strategy doesn't change expiry timing." }
+          answer: 1
+          gradingVersion: 1
+  defend:
+    level: Senior
+    minutes: 15
+    goal: Find the race in real cache code and defend a design for a flash sale.
+    blocks:
+      - id: bug-invalidate
+        type: spotTheBug
+        title: Spot the bug
+        prompt: "This update handler sometimes leaves an old price in the cache for a full TTL. Find it in three steps."
+        language: python
+        code: |
+          1  def update_price(product_id, new_price):
+          2      cache.delete(f"product:{product_id}")
+          3      db.execute(
+          4          "UPDATE products SET price = %s WHERE id = %s",
+          5          (new_price, product_id),
+          6      )
+          7
+          8  def get_product(product_id):
+          9      cached = cache.get(f"product:{product_id}")
+          10     if cached:
+          11         return cached
+          12     row = db.query_one("SELECT * FROM products WHERE id = %s", product_id)
+          13     cache.set(f"product:{product_id}", row, ex=600)
+          14     return row
+        steps:
+          - prompt: "Which lines hold the problem?"
+            options: ["Lines 2-6: delete before the update", "Lines 9-11: the cache check", "Line 13: the TTL value", "Line 12: the SELECT"]
+            answer: 0
+            explanation: "The cache entry is deleted before the database changes."
+          - prompt: "What goes wrong?"
+            options: ["The UPDATE can fail silently", "A read between lines 2 and 3 caches the old price for 600 s", "Deleting a key is slower than setting it", "The SELECT reads a replica"]
+            answer: 1
+            explanation: "A concurrent get_product misses, reads the old row and writes it back before the UPDATE commits."
+          - prompt: "Which change fixes it best?"
+            options: ["Raise the TTL", "Update the database first, then delete the key (and keep a short TTL as a safety net)", "Remove the cache for prices", "Add a retry around the UPDATE"]
+            answer: 1
+            explanation: "Delete after commit closes most of the window; a short TTL bounds what is left. For strict freshness use versioned values or change data capture."
+        gradingVersion: 1
+      - id: design-flash-sale
+        type: designPrompt
+        title: Defend a design
+        prompt: "A flash sale puts 30% of all reads on one product for 10 minutes. Describe how your cache design keeps the database healthy, and what you'd monitor."
+        rubric:
+          - "Names the hot key and sizes its read rate."
+          - "Prevents a stampede across the fleet (lease or early refresh), not only per pod."
+          - "Keeps price updates correct (invalidate after commit, short TTL)."
+          - "Considers splitting or replicating the hot key, or a local in-process copy."
+          - "Names metrics: hit rate, database queries a second, lock wait, p99 latency."
+        modelAnswers:
+          - level: Mid
+            answer: "Cache-aside with a jittered TTL, and a Redis lease so one request rebuilds the product when it expires. Watch the hit rate and database queries a second."
+          - level: Senior
+            answer: "Pre-warm the product before the sale and refresh it early instead of letting it expire. Keep a short in-process copy in each pod (one to two seconds) so 30% of reads don't all hit one Redis shard. Use a fleet-wide lease for rebuilds, invalidate after commit, and alert on lock waits and the database's connection pool."
+          - level: Staff
+            answer: "Treat the sale as a planned event: replicate the hot key to several Redis keys and read one at random, keep a local copy per pod with versioned invalidation from change data capture, and shed load with a waiting room if the database's pool passes 70%. Rehearse the expiry and a Redis failover before the sale, and define the stale-price tolerance with the business."
+        gradingVersion: 1
