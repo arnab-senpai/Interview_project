@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowRight,
@@ -35,6 +35,30 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [guestsAllowed, setGuestsAllowed] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    api
+      .getSessionConfig()
+      .then((c) => setGuestsAllowed(c.guestsAllowed))
+      .catch(() => setGuestsAllowed(false));
+  }, [open]);
+
+  const continueAsGuest = async () => {
+    setError(null);
+    setSubmitting(true);
+    try {
+      const res = await api.startGuest();
+      authStorage.setToken(null);
+      authStorage.setGuest(true);
+      onAuthenticated({ ...res, accessToken: "", tokenType: "cookie", expiresAt: "" });
+    } catch (err: any) {
+      setError(err?.message || "Could not start a guest session");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -51,6 +75,7 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
               dailyGoal,
             });
       authStorage.setToken(res.accessToken);
+      authStorage.setGuest(false);
       onAuthenticated(res);
       setPassword("");
     } catch (err: any) {
@@ -373,10 +398,21 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
                     <ArrowRight size={13} />
                   </button>
                 </form>
+                {guestsAllowed && (
+                  <button
+                    type="button"
+                    disabled={submitting}
+                    className="btn-secondary"
+                    style={{ padding: "9px 14px", marginTop: 10, width: "100%" }}
+                    onClick={continueAsGuest}
+                  >
+                    Continue as guest
+                  </button>
+                )}
               </div>
 
               <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--border-soft)", fontSize: 12, color: "var(--ink-muted)", lineHeight: 1.5 }}>
-                Sign in to keep your own progress, notes and quiz history. Accounts are private to each colleague; there is no shared guest workspace.
+                {guestsAllowed ? "A guest session keeps your progress on this browser until it sits unused for 30 days. Sign in or register later and it moves into your account." : "Sign in to keep your own progress, notes and quiz history. Accounts are private to each colleague."}
               </div>
             </div>
           </motion.div>

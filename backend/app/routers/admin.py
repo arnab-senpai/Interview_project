@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from backend.app.db.database import get_conn, utc_now_iso
 from backend.app.routers.feedback import serialize_feedback
 from backend.app.services.auth import require_admin
-from backend.app.services.curriculum_loader import get_store
+from backend.app.services.content_store import content_version_for
 
 router = APIRouter(prefix="/api/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
@@ -68,13 +68,12 @@ def list_feedback(
             "SELECT topic_id, status, COUNT(*) AS n FROM content_feedback GROUP BY topic_id, status"
         ).fetchall()
 
-    store = get_store()
     items = []
     for r in rows:
         item = serialize_feedback(r)
         reporter = r["display_name"] or r["username"] or r["user_id"]
         item["reporter"] = reporter
-        item["isCurrentVersion"] = store.content_versions.get(item["topicId"]) == item["contentVersion"]
+        item["isCurrentVersion"] = content_version_for(item["topicId"], item["blockId"]) == item["contentVersion"]
         item["issueUrl"] = _issue_url(item, reporter)
         items.append(item)
 

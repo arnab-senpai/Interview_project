@@ -4,8 +4,8 @@ import {
   BookMarked,
   BookOpen,
   Box,
-  Calculator,
   Compass,
+  Flag,
   Flame,
   Keyboard,
   Layers,
@@ -34,31 +34,35 @@ import {
 import { AccountModal } from "./components/AccountModal";
 import { AdminFeedbackView } from "./components/AdminFeedbackView";
 import { AuthPortalModal } from "./components/AuthPortalModal";
-import { CapacityLabView, type CapacityPresetInput } from "./components/CapacityLabView";
 import { CaseStudiesView } from "./components/CaseStudiesView";
+import { ChapterView } from "./components/chapter/ChapterView";
 import { ExplorerWorkspace } from "./components/ExplorerWorkspace";
 import { ModulesView } from "./components/ModulesView";
 import { NotesVaultView } from "./components/NotesVaultView";
 import { PracticeAndDdiaView } from "./components/PracticeAndDdiaView";
 import { RoadmapView } from "./components/RoadmapView";
 import { SearchModal } from "./components/SearchModal";
+import { StartHereView } from "./components/StartHereView";
 import type { HldCaseStudy, HldExplorerLesson, PatternPlaybook } from "./types/hld";
 
-type MainView = "roadmap" | "modules" | "explorer" | "cases" | "notes" | "capacity" | "practice" | "feedback";
+type MainView = "start" | "chapter" | "roadmap" | "modules" | "explorer" | "cases" | "notes" | "practice" | "feedback";
+
+/** Chapter 3 holds what the Capacity Lab used to: the estimator inputs and the reference tables. */
+const NUMBERS_CHAPTER = "numbers-that-matter";
 
 const NAV_ITEMS: Array<{ key: MainView; label: string; icon: typeof Map }> = [
+  { key: "start", label: "Start here", icon: Flag },
   { key: "roadmap", label: "Roadmap", icon: Map },
   { key: "modules", label: "Modules", icon: BookMarked },
-  { key: "explorer", label: "Explorer", icon: Compass },
+  { key: "explorer", label: "Sandbox", icon: Compass },
   { key: "cases", label: "Case Studies", icon: Layers },
   { key: "notes", label: "Notes", icon: NotebookPen },
-  { key: "capacity", label: "Capacity Lab", icon: Calculator },
   { key: "practice", label: "Practice", icon: BookOpen },
 ];
 
 export function App() {
   const [theme, setTheme] = useState<"light" | "dark">("dark");
-  const [view, setView] = useState<MainView>("roadmap");
+  const [view, setView] = useState<MainView>("start");
   const [selectedLayer, setSelectedLayer] = useState<number | null>(null);
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [modules, setModules] = useState<HldModuleItem[]>([]);
@@ -66,19 +70,20 @@ export function App() {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [streak, setStreak] = useState<StreakSummary | null>(null);
   // The alpha requires sign-in: nothing loads until there is a token, and any 401 signs the person out.
-  const [signedIn, setSignedIn] = useState<boolean>(() => Boolean(authStorage.getToken()));
-  const [authModalOpen, setAuthModalOpen] = useState<boolean>(() => !authStorage.getToken());
+  const [signedIn, setSignedIn] = useState<boolean>(() => authStorage.hasSession());
+  const [authModalOpen, setAuthModalOpen] = useState<boolean>(() => !authStorage.hasSession());
   const [accountModalOpen, setAccountModalOpen] = useState<boolean>(false);
   const [patterns, setPatterns] = useState<PatternPlaybook[]>([]);
   const [foundations, setFoundations] = useState<any>(null);
-  const [referenceData, setReferenceData] = useState<any>(null);
 
   const [activeLessonId, setActiveLessonId] = useState<string>("dns-and-cdn");
   const [activeLesson, setActiveLesson] = useState<HldExplorerLesson | null>(null);
   const [loadingLesson, setLoadingLesson] = useState<boolean>(false);
 
   const [activeCaseId, setActiveCaseId] = useState<string>("url-shortener");
-  const [estimatorPreset, setEstimatorPreset] = useState<CapacityPresetInput | null>(null);
+  const [chapterTopicId, setChapterTopicId] = useState<string>("how-to-approach-a-design-question");
+  const [chapterInputs, setChapterInputs] = useState<{ inputs: Record<string, number>; label: string } | null>(null);
+  const [pathRefresh, setPathRefresh] = useState(0);
   const [practiceTopicFilter, setPracticeTopicFilter] = useState<string | null>(null);
 
   const [showLeftPane, setShowLeftPane] = useState<boolean>(false);
@@ -144,9 +149,8 @@ export function App() {
       api.getMe(),
       api.getPatterns(),
       api.getFoundations(),
-      api.getReference(),
     ])
-      .then(([ov, mods, sum, me, pats, fnd, ref]) => {
+      .then(([ov, mods, sum, me, pats, fnd]) => {
         setOverview(ov);
         setModules(mods.modules);
         setSummary(sum);
@@ -154,7 +158,6 @@ export function App() {
         setStreak(me.streak);
         setPatterns(pats.patterns);
         setFoundations(fnd);
-        setReferenceData(ref);
       })
       .catch((err) => setErrorMsg(err.message));
   }, [signedIn]);
@@ -172,6 +175,7 @@ export function App() {
 
   const handleLogoutSession = async () => {
     authStorage.setToken(null);
+    authStorage.setGuest(false);
     window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
   };
 
@@ -230,21 +234,39 @@ export function App() {
     }
   };
 
+  const openChapter = (topicId: string, inputs: { inputs: Record<string, number>; label: string } | null = null) => {
+    setChapterTopicId(topicId);
+    setChapterInputs(inputs);
+    setView("chapter");
+  };
+
+  /** A case study's estimation preset opens chapter 3 with those inputs (it replaced the Capacity Lab). */
   const handleLoadCasePreset = (preset: HldCaseStudy["estimationPreset"], title: string) => {
     const rwParts = preset.readWriteRatio.split(":");
     const r = Number(rwParts[0]) || 90;
     const w = Number(rwParts[1]) || 10;
-    const readShare = Math.round((r / Math.max(1, r + w)) * 100);
-    setEstimatorPreset({
-      title,
-      dau: preset.dau,
-      actionsPerUserPerDay: preset.actionsPerUserPerDay,
-      peakMultiplier: preset.peakMultiplier,
-      avgPayloadBytes: preset.avgPayloadBytes,
-      retentionYears: preset.retentionYears,
-      readSharePercent: readShare,
+    openChapter(NUMBERS_CHAPTER, {
+      label: title,
+      inputs: {
+        dau: preset.dau,
+        actions: preset.actionsPerUserPerDay,
+        peak: preset.peakMultiplier,
+        payload_bytes: preset.avgPayloadBytes,
+        retention_years: preset.retentionYears,
+        read_share: r / Math.max(1, r + w),
+      },
     });
-    setView("capacity");
+  };
+
+  const openV1Topic = (id: string) => {
+    const cs = overview?.caseStudies.find((c) => c.id === id);
+    if (cs) {
+      setActiveCaseId(id);
+      setView("cases");
+    } else {
+      setActiveLessonId(id);
+      setView("explorer");
+    }
   };
 
   const activeLayerNum = activeLesson?.layer ?? selectedLayer ?? 1;
@@ -256,7 +278,7 @@ export function App() {
         {/* Studio 1 Frosted Glass Command Top Bar */}
         <header className="top-bar">
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div className="brand-block" onClick={() => setView("roadmap")} title="Back to Learning Path Roadmap">
+            <div className="brand-block" onClick={() => setView("start")} title="Back to Start here">
               <div className="brand-reticle">
                 <Box size={18} strokeWidth={1.9} />
               </div>
@@ -379,7 +401,24 @@ export function App() {
               transition={{ duration: 0.16, ease: "easeOut" }}
               style={{ display: "flex", flex: 1, minHeight: 0, overflow: "hidden" }}
             >
-              {view === "roadmap" ? (
+              {view === "start" ? (
+                <StartHereView refreshKey={pathRefresh} onOpenChapter={(id) => openChapter(id)} onOpenSandboxLesson={openV1Topic} />
+              ) : view === "chapter" ? (
+                <ChapterView
+                  key={chapterTopicId}
+                  topicId={chapterTopicId}
+                  initialInputs={chapterInputs?.inputs ?? null}
+                  initialLabel={chapterInputs?.label ?? null}
+                  onBack={() => {
+                    setPathRefresh((n) => n + 1);
+                    setView("start");
+                  }}
+                  onOpenSandbox={(lessonId) => {
+                    setActiveLessonId(lessonId);
+                    setView("explorer");
+                  }}
+                />
+              ) : view === "roadmap" ? (
                 <RoadmapView
                   layers={overview.layers}
                   lessons={overview.lessons}
@@ -398,7 +437,7 @@ export function App() {
                     setActiveCaseId(cid);
                     setView("cases");
                   }}
-                  onOpenCapacityLab={() => setView("capacity")}
+                  onOpenCapacityLab={() => openChapter(NUMBERS_CHAPTER)}
                   onOpenModules={() => setView("modules")}
                   onOpenPractice={() => {
                     setPracticeTopicFilter(null);
@@ -496,8 +535,6 @@ export function App() {
                     ...modules.map((m) => [m.id, m.title]),
                   ])}
                 />
-              ) : view === "capacity" ? (
-                <CapacityLabView referenceData={referenceData} initialPreset={estimatorPreset} />
               ) : (
                 <PracticeAndDdiaView
                   key={currentUser?.id ?? "guest"}

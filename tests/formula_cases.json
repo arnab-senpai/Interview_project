@@ -1,0 +1,19 @@
+{
+  "env": { "dau": 20000000, "actions": 20, "peak": 3, "hit": 0.9, "x": 7 },
+  "cases": [
+    { "expr": "dau * actions / 86400", "value": 4629.62962962963 },
+    { "expr": "dau * actions / 86_400 * peak", "value": 13888.888888888889 },
+    { "expr": "1 - hit", "value": 0.09999999999999998 },
+    { "expr": "-x + 2 * 3", "value": -1 },
+    { "expr": "2 ^ 3 ^ 2", "value": 512 },
+    { "expr": "-2 ^ 2", "value": -4 },
+    { "expr": "(1 + 2) * (3 + 4)", "value": 21 },
+    { "expr": "min(x, 3) + max(x, 3)", "value": 10 },
+    { "expr": "ceil(x / 2) + floor(x / 2)", "value": 7 },
+    { "expr": "round(2.5) + round(-2.5)", "value": 1 },
+    { "expr": "clamp(x, 0, 5)", "value": 5 },
+    { "expr": "log10(1e6)", "value": 6 },
+    { "expr": "abs(-x) * 1.5e2", "value": 1050 },
+    { "expr": "dau * (1 - hit) / 1000 / 1000", "value": 2.0000000000000004 }
+  ]
+}
