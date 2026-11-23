@@ -60,7 +60,8 @@ def test_new_account_has_one_plan_card_and_nothing_due(client: TestClient) -> No
     first = today["chapters"][0]
     assert first["state"] == "current" and first["stageId"] == "stage-0" and first["stageTitle"].startswith("Stage 0")
     states = {c["number"]: c["state"] for c in today["chapters"]}
-    assert states[4] == "preview" and states[8] == "soon" and states[5] == "open"
+    old = next(c["number"] for c in today["chapters"] if c["legacy"])
+    assert states[old] == "preview" and states[8] == "soon" and states[4] == "open" and states[5] == "open"
     assert client.get("/api/review/queue", headers=h).json() == {"due": 0, "items": []}
 
 

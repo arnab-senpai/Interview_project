@@ -1,0 +1,277 @@
+schemaVersion: 2
+id: l7-load-balancer
+track: hld
+kind: concept
+template: chapter
+title: Load balancing
+summary: Spread requests across a fleet of stateless servers, size it with a spare, take dead servers out with health checks, pick servers by work in progress, and remove the balancer as a single point of failure.
+prerequisites: [one-server-to-a-million-users, numbers-that-matter]
+related: [caching-and-stampede, dns-and-cdn, idempotency-and-circuit-breakers]
+sandboxLessonId: l7-load-balancer
+sources:
+  - title: Envoy documentation, supported load balancers
+    url: https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers
+  - title: NGINX documentation, ngx_http_upstream_module
+    url: https://nginx.org/en/docs/http/ngx_http_upstream_module.html
+  - title: "Mitzenmacher, The Power of Two Choices in Randomized Load Balancing (IEEE TPDS 2001)"
+    url: https://www.eecs.harvard.edu/~michaelm/postscripts/tpds2001.pdf
+  - title: Capacity figures per instance are planning assumptions, not benchmarks
+    note: Load-test one server before sizing a real fleet.
+lastVerified: 2026-11-23
+appliesTo: HTTP services on cloud VMs or containers behind a managed or self-run L7 balancer (NGINX, HAProxy, Envoy).
+
+numbers:
+  inputs:
+    - { id: peak_rps, label: Peak requests a second reaching the app tier, unit: req/s, default: 5500, min: 100, max: 200000, scale: log }
+    - { id: server_cap, label: Requests a second one server can handle, unit: req/s, default: 1500, min: 100, max: 20000, scale: log }
+    - { id: target_util, label: Planned utilisation per server, unit: "%", default: 0.6, min: 0.3, max: 0.9, step: 0.05 }
+    - { id: check_every, label: Seconds between health checks, unit: s, default: 5, min: 1, max: 30, step: 1 }
+    - { id: fails_to_eject, label: Failed checks before removal, unit: checks, default: 2, min: 1, max: 5, step: 1 }
+  values:
+    - { id: per_server_safe, label: Planned requests a second per server, formula: "server_cap * target_util", unit: req/s }
+    - { id: servers_needed, label: Servers needed at peak, formula: "ceil(peak_rps / per_server_safe)", unit: servers }
+    - { id: servers_n1, label: Servers with one spare, formula: "servers_needed + 1", unit: servers }
+    - { id: per_server_all_up, label: Requests a second per server with all up, formula: "peak_rps / servers_n1", unit: req/s }
+    - { id: per_server_one_down, label: Requests a second per server with one down, formula: "peak_rps / servers_needed", unit: req/s }
+    - { id: eject_seconds, label: Worst-case seconds before a dead server is removed, formula: "check_every * fails_to_eject", unit: s }
+    - { id: failed_while_ejecting, label: Requests sent to a dead server before removal, formula: "per_server_all_up * eject_seconds", unit: requests, explain: "Active checks only; passive checks on real errors cut this." }
+  presets:
+    - { id: ten-cities, label: CityBeat in ten cities, inputs: { peak_rps: 5500 } }
+    - { id: one-city, label: CityBeat in one city, inputs: { peak_rps: 520 } }
+    - { id: national, label: National launch, inputs: { peak_rps: 50000 } }
+
+components:
+  - { id: client, label: Visitors, kind: client, pos: [0, 2] }
+  - { id: lb, label: Load balancer, kind: load_balancer, example: "e.g. NGINX, HAProxy, Envoy, a cloud ALB", pos: [2, 2], load: peak_rps, capacity: 20000, capacitySource: "Planning assumption for one software L7 balancer instance", instances: 1 }
+  - { id: app, label: App servers, kind: compute, pos: [4.4, 2], load: peak_rps, capacity: 1500, capacitySource: "Planning assumption for one app server doing simple page and API work", instances: 1 }
+  - { id: sessions, label: Session store, kind: cache, example: "e.g. Redis", pos: [6.4, 0.6], load: peak_rps, loadUnit: ops/s, capacity: 100000, capacitySource: "Planning assumption for one Redis node", instances: auto }
+
+arrows:
+  - { id: a-client-app, from: client, to: app, label: "Every request", mode: sync, rate: peak_rps }
+  - { id: a-client-lb, from: client, to: lb, label: "One public address", mode: sync, rate: peak_rps }
+  - { id: a-lb-app, from: lb, to: app, label: "Round robin", mode: sync, rate: peak_rps }
+  - { id: a-app-sessions, from: app, to: sessions, label: "Look up the session", mode: sync, rate: peak_rps }
+
+layers:
+  understand:
+    level: Junior
+    minutes: 15
+    goal: Size a server fleet with a spare, and explain how a load balancer spreads requests and drops dead servers.
+    sections:
+      problem:
+        - { id: problem, type: prose, role: problem, title: "More servers, same outages", bodyFile: problem.md }
+      clarify:
+        - id: clarify-questions
+          type: structuredTable
+          variant: clarify
+          title: Questions to ask before placing a load balancer
+          columns: [{ key: q, label: Ask }, { key: a, label: Answer }, { key: why, label: What it changes }]
+          rows:
+            - { q: "How many requests a second at the busiest hour?", a: "About 5,500 after the CDN.", why: "Sets how many servers sit behind the balancer." }
+            - { q: "Does a user have to return to the same server?", a: "No, sessions are in Redis.", why: "Stateless servers allow any spreading rule." }
+            - { q: "Are some requests much slower than others?", a: "Exports take 400 ms; pages take 20 ms.", why: "Uneven work rules out plain round robin." }
+            - { q: "Do clients keep connections open?", a: "The mobile app uses HTTP/2.", why: "Long-lived connections need per-request balancing (layer 7)." }
+        - id: clarify-predict
+          type: predict
+          prompt: "Seven servers share 5,500 requests a second by round robin. One crashes, and the balancer keeps sending it requests for 10 seconds. What do users see?"
+          options:
+            - { text: "Nothing: the other six absorb it at once", explanation: "Only after the balancer removes it. Until then it still gets its share." }
+            - { text: "About one request in seven fails for 10 s", explanation: "Round robin keeps giving the dead server its one-in-seven share." }
+            - { text: "Every request fails until it restarts", explanation: "Six servers are fine; only the dead one's share fails." }
+            - { text: "Pages slow down but none fail", explanation: "Requests sent to a dead server get errors, not slow answers." }
+          answer: 1
+          reveal: "Round robin still sends the dead server one request in seven, about 790 a second, so around 7,900 requests fail before it is removed. Health checks and a spare server fix this."
+          gradingVersion: 1
+      numbers:
+        - { id: numbers-intro, type: prose, role: numbers, title: "How many servers, and why one more?", bodyFile: numbers.md }
+        - id: numbers-worksheet
+          type: estimationWorksheet
+          title: Work it out
+          prompt: "Within 2× counts."
+          lines:
+            - { value: per_server_safe, prompt: "Requests a second you plan per server", hint: "capacity × 60%" }
+            - { value: servers_needed, prompt: "Servers needed at peak", hint: "peak ÷ planned per server, rounded up" }
+            - { value: servers_n1, prompt: "Servers to run, with one spare", hint: "needed + 1" }
+          gradingVersion: 1
+      design:
+        - { id: step1-text, type: prose, role: steps, title: "Step 1 · One server takes everything", bodyFile: step1.md, why: "Why start here: the numbers show one server is several times over, so the fix is more servers, not a faster one." }
+        - id: fig-one-server
+          type: figure
+          title: One server gets every request and turns red
+          stage: { add: [client, app, a-client-app] }
+          claims: ["Every request reaches the one server.", "It can handle about 1,500 requests a second."]
+        - { id: step2-text, type: prose, role: steps, title: "Step 2 · A balancer and stateless servers", bodyFile: step2.md, why: "Why stateless: any server can answer any request, so the balancer is free to spread them." }
+        - id: fig-round-robin
+          type: figure
+          title: A balancer spreads requests across seven stateless servers
+          base: fig-one-server
+          stage:
+            add: [lb, sessions, a-client-lb, a-lb-app, a-app-sessions]
+            remove: [a-client-app]
+            change: [app]
+            overrides: { app: { instances: servers_needed } }
+          claims: ["Clients only know the balancer's address.", "Sessions live in Redis, so any server can answer.", "Round robin sends each new request to the next server."]
+          whatIf: "Raise peak traffic to 20,000 requests a second. How many servers now?"
+        - { id: step3-text, type: prose, role: steps, title: "Step 3 · Health checks and a spare", bodyFile: step3.md, why: "Why a spare: when a server is removed, the rest must still be under the 60% line." }
+        - id: fig-health
+          type: figure
+          title: Health checks remove a dead server and the spare keeps the rest green
+          base: fig-round-robin
+          stage:
+            change: [app, a-lb-app]
+            overrides:
+              app:
+                instances: servers_n1
+                metrics: [{ label: "Per server with one down", value: per_server_one_down, unit: req/s }]
+                note: "Checked every 5 s; out after 2 failures."
+            arrowOverrides: { a-lb-app: { label: "Healthy servers only" } }
+          claims: ["The balancer calls /healthz on each server every few seconds.", "With one of eight down, the other seven stay under 60%."]
+          whatIf: "Check every 15 seconds instead of 5. How long can a dead server get traffic?"
+        - { id: step4-text, type: prose, role: steps, title: "Step 4 · Pick by work in progress", bodyFile: step4.md, why: "Why least outstanding requests: it counts work still running, so slow requests don't pile up on one server." }
+        - id: fig-least-requests
+          type: figure
+          title: Least outstanding requests steers new work away from a busy server
+          base: fig-health
+          stage:
+            change: [lb, a-lb-app]
+            overrides: { lb: { label: "Load balancer (least requests)" } }
+            arrowOverrides: { a-lb-app: { label: "Least busy of two random picks" } }
+          claims: ["The balancer tracks requests in progress per server.", "Power of two choices compares two random servers instead of all of them."]
+        - { id: step5-text, type: prose, role: steps, title: "Step 5 · No single balancer", bodyFile: step5.md, why: "Why two: a balancer that fails takes down every healthy server behind it." }
+        - id: fig-two-lbs
+          type: figure
+          title: Two balancer instances share the public address
+          base: fig-least-requests
+          stage:
+            change: [lb]
+            overrides: { lb: { instances: 2, note: "Each can carry the whole peak alone." } }
+          claims: ["Two balancer instances serve one public address.", "Either one alone can carry the peak."]
+  apply:
+    level: Mid
+    minutes: 12
+    goal: Choose the balancer layer and the picking rule for a service, and justify both.
+    sections:
+      deepDive:
+        - { id: deep-layer, type: prose, role: deepDive, title: "Question: layer 4 or layer 7?", bodyFile: deep-layer.md }
+        - id: deep-layer-options
+          type: structuredTable
+          variant: decisionMatrix
+          columns: [{ key: option, label: Layer }, { key: good, label: Good }, { key: bad, label: Costs }, { key: fit, label: Fits }]
+          rows:
+            - { option: "Layer 4 (TCP)", good: "Very fast and cheap; works for any protocol; never decrypts traffic.", bad: "Spreads connections, not requests; can't route by path or header.", fit: "Databases, raw TCP, or the first tier in front of L7 proxies" }
+            - { option: "Layer 7 (HTTP)", good: "Balances each request; routes by path or header; ends TLS in one place.", bad: "More CPU per request; must hold TLS certificates.", fit: "Web and API traffic, HTTP/2 and gRPC" }
+          caption: "Choice: layer 7 for CityBeat, because the mobile app's HTTP/2 connections carry many requests each and need per-request balancing."
+        - { id: deep-algo, type: prose, role: deepDive, title: "Question: round robin, least requests or hashing?", bodyFile: deep-algo.md }
+        - id: deep-algo-options
+          type: structuredTable
+          variant: decisionMatrix
+          columns: [{ key: option, label: Rule }, { key: good, label: Good }, { key: bad, label: Costs }, { key: fit, label: Fits }]
+          rows:
+            - { option: "Round robin", good: "Simple and even when requests cost the same.", bad: "Ignores slow requests and slow servers.", fit: "Uniform, short requests" }
+            - { option: "Least outstanding requests", good: "Adapts to slow requests and a slow server.", bad: "Needs per-server counts; each balancer sees only its own.", fit: "Mixed request costs, like CityBeat" }
+            - { option: "Hash of a key (user id, cache key)", good: "The same key always reaches the same server.", bad: "Hot keys overload one server; adding servers moves keys.", fit: "Per-server caches or connections that must stick" }
+          caption: "Choice: least outstanding requests with power of two choices; use hashing only when a server keeps state for a key (see chapter 9)."
+      remember:
+        - id: remember
+          type: rememberCard
+          figure: fig-two-lbs
+          facts:
+            - "Servers behind a balancer must be stateless, so any server can answer any request."
+            - "Size for 60% per server, then add one spare: needed = peak ÷ (capacity × 0.6), rounded up, plus one."
+            - "Health checks remove a dead server; least outstanding requests steers work away from a slow one."
+          number: { value: "8", unit: servers, label: "for 5,500 req/s at 1,500 each: 7 planned at 60%, plus one spare" }
+          tradeoff: { choice: "A layer 7 balancer", buys: "per-request spreading and routing by path", costs: "more CPU per request and TLS certificates to manage" }
+          sayIt: "I'd put two layer 7 balancer instances in front of stateless servers, size them for 60% with one spare, health-check every few seconds, and pick servers by least outstanding requests."
+      check:
+        - id: check-figure-health
+          type: quiz
+          aboutFigure: fig-health
+          prompt: "In the health-check figure, why does the plan run eight servers when seven are enough at peak?"
+          options:
+            - { text: "Round robin needs an even number of servers", explanation: "Round robin works with any number of servers." }
+            - { text: "So losing one still leaves seven under 60%", explanation: "The spare absorbs a crash or a deploy restart." }
+            - { text: "The balancer counts as one of the eight", explanation: "The balancer is a separate component." }
+            - { text: "Health checks use up one server's capacity", explanation: "A health check is one cheap request every few seconds." }
+          answer: 1
+          gradingVersion: 1
+        - id: check-stateless
+          type: quiz
+          prompt: "Sessions are kept in each server's memory. What happens when round robin sends a user's next request elsewhere?"
+          options:
+            - { text: "The new server copies the session over", explanation: "Servers don't share memory; nothing copies it." }
+            - { text: "The user appears logged out", explanation: "The new server has no session for them." }
+            - { text: "The balancer forwards the session data", explanation: "A balancer routes requests; it doesn't carry sessions." }
+            - { text: "Nothing, cookies hold the whole session", explanation: "The cookie holds an id; the data was on the old server." }
+          answer: 1
+          gradingVersion: 1
+        - id: check-http2
+          type: quiz
+          prompt: "After the app moves to HTTP/2, a layer 4 balancer leaves new servers idle. Why?"
+          options:
+            - { text: "It spreads connections, not requests", explanation: "Old long-lived connections stay on old servers." }
+            - { text: "HTTP/2 traffic can't pass through layer 4", explanation: "It passes fine; it just isn't spread per request." }
+            - { text: "New servers fail their health checks", explanation: "Nothing says they are unhealthy; they get no connections." }
+            - { text: "Layer 4 only uses round robin", explanation: "It can use other rules; the unit is still the connection." }
+          answer: 0
+          gradingVersion: 1
+        - id: check-slow-requests
+          type: quiz
+          prompt: "Most requests take 20 ms, a few take 400 ms. Which rule keeps one server from falling behind?"
+          options:
+            - { text: "Round robin over all servers", explanation: "It counts requests, not how long they run." }
+            - { text: "Hash of the user id", explanation: "Ties users to servers; ignores how busy each is." }
+            - { text: "Least outstanding requests", explanation: "A server busy with slow work has more in flight and gets less." }
+            - { text: "Random choice of one server", explanation: "One random pick ignores load; two picks would help." }
+          answer: 2
+          gradingVersion: 1
+  defend:
+    level: Senior
+    minutes: 15
+    goal: Find the outage in a real health check and defend a balancer design for a launch night.
+    blocks:
+      - id: bug-health
+        type: spotTheBug
+        title: Spot the bug
+        prompt: "When the database slowed down for one minute, every server was removed from the balancer and the whole site went down. Find why in three steps."
+        language: python
+        code: |
+          1  @app.get("/healthz")
+          2  def healthz():
+          3      db.execute("SELECT 1", timeout=0.5)
+          4      redis.ping()
+          5      return {"ok": True}
+          6
+          7  # balancer: check /healthz every 5 s,
+          8  # remove a server after 2 failures
+        steps:
+          - prompt: "Which lines hold the problem?"
+            options: ["Line 3: the health check calls the database", "Line 5: the response body", "Lines 7-8: the check interval", "Line 1: the path name"]
+            answer: 0
+            explanation: "The health check depends on a system that every server shares."
+          - prompt: "What goes wrong?"
+            options: ["The check is too slow to run every 5 s", "A slow database fails every server's check at once, so all are removed", "Redis is not checked", "The balancer can't parse the JSON"]
+            answer: 1
+            explanation: "A shared dependency turns one slow database into a full outage, even though the servers themselves were fine."
+          - prompt: "Which change fixes it best?"
+            options: ["Raise the database timeout to 5 s", "Check only the server's own health; report dependencies on a separate readiness or metrics endpoint", "Remove health checks", "Check every 60 s instead"]
+            answer: 1
+            explanation: "Liveness should mean \"this process can serve\". Shared dependencies belong in alerts and in fail-open logic, not in the signal that removes servers."
+        gradingVersion: 1
+      - id: design-launch
+        type: designPrompt
+        title: Defend a design
+        prompt: "CityBeat expects 50,000 requests a second for one hour on a national launch night. Describe the balancer tier and fleet you'd run, and what you'd watch."
+        rubric:
+          - "Sizes the fleet from the peak with headroom and a spare (about 56 servers at 1,500 each)."
+          - "Keeps servers stateless and the balancer redundant across zones."
+          - "Uses health checks that test only the server, plus passive ejection on errors."
+          - "Chooses a picking rule for uneven requests (least outstanding requests)."
+          - "Names metrics: requests a second per server, p99 latency, 5xx rate, healthy server count."
+        modelAnswers:
+          - level: Mid
+            answer: "50,000 ÷ 900 = 56 servers, plus a spare, behind a cloud L7 balancer. Health-check /healthz every 5 s, use least outstanding requests, and watch p99 latency and error rate."
+          - level: Senior
+            answer: "Pre-scale to about 60 servers across three zones before the launch, because autoscaling lags a sudden spike. Health checks test only the process; passive ejection removes a server that returns errors. Least outstanding requests with two random picks. Slow start new servers so a cold cache isn't flooded. Alert on healthy-server count and per-server load."
+          - level: Staff
+            answer: "Treat it as a planned event: load-test one server to confirm the 1,500 figure, pre-scale with a zone's worth of spare, and cap retries so a slow tier can't double its own load. Put an L4 tier in front of L7 proxies if TLS handshakes dominate. Keep a fallback page served from the CDN if the app tier saturates, and rehearse a zone loss before launch."
+        gradingVersion: 1

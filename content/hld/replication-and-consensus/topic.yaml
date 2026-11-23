@@ -1,0 +1,285 @@
+schemaVersion: 2
+id: replication-and-consensus
+track: hld
+kind: concept
+template: chapter
+title: Databases and replication
+summary: Copy a database to read replicas to share the reads, keep users seeing their own writes despite lag, fail over safely with a majority-based manager, and add a synchronous standby so a dead primary loses nothing.
+prerequisites: [one-server-to-a-million-users, caching-and-stampede]
+related: [sharding-and-hot-keys, dns-and-cdn, idempotency-and-circuit-breakers]
+sandboxLessonId: replication-and-consensus
+sources:
+  - title: PostgreSQL documentation, High Availability, Load Balancing, and Replication
+    url: https://www.postgresql.org/docs/current/high-availability.html
+  - title: PostgreSQL documentation, synchronous_commit and synchronous_standby_names
+    url: https://www.postgresql.org/docs/current/runtime-config-replication.html
+  - title: "Ongaro and Ousterhout, In Search of an Understandable Consensus Algorithm (Raft), USENIX ATC 2014"
+    url: https://raft.github.io/raft.pdf
+  - title: Patroni documentation
+    url: https://patroni.readthedocs.io/en/latest/
+  - title: "Kleppmann, Designing Data-Intensive Applications, chapter 5: Replication"
+  - title: Query capacity and lag figures are planning assumptions, not benchmarks
+lastVerified: 2026-11-23
+appliesTo: A relational database (PostgreSQL or MySQL) with single-leader replication, self-run or managed.
+
+numbers:
+  inputs:
+    - { id: read_qps, label: Read queries a second after the cache, unit: queries/s, default: 4000, min: 100, max: 200000, scale: log }
+    - { id: write_qps, label: Write queries a second, unit: queries/s, default: 1000, min: 10, max: 20000, scale: log }
+    - { id: db_cap, label: Queries a second one database server can handle, unit: queries/s, default: 3000, min: 500, max: 50000, scale: log }
+    - { id: target_util, label: Planned utilisation per server, unit: "%", default: 0.6, min: 0.3, max: 0.9, step: 0.05 }
+    - { id: lag_ms, label: How far an async replica trails, unit: ms, default: 100, min: 1, max: 10000, scale: log }
+    - { id: own_read_share, label: Reads that come from users who just wrote, unit: "%", default: 0.05, min: 0, max: 0.5, step: 0.01 }
+    - { id: members, label: Failover manager members, unit: members, default: 3, min: 1, max: 7, step: 2 }
+  values:
+    - { id: one_server_load, label: Queries a second on one server, formula: "read_qps + write_qps", unit: queries/s }
+    - { id: per_server_safe, label: Planned queries a second per server, formula: "db_cap * target_util", unit: queries/s }
+    - { id: replicas_needed, label: Read replicas needed, formula: "ceil(read_qps / per_server_safe)", unit: replicas }
+    - { id: per_replica, label: Reads a second per replica, formula: "read_qps / replicas_needed", unit: queries/s }
+    - { id: own_reads, label: Reads sent to the primary for recent writers, formula: "read_qps * own_read_share", unit: queries/s }
+    - { id: primary_load, label: Queries a second on the primary, formula: "write_qps + own_reads", unit: queries/s }
+    - { id: at_risk, label: Writes at risk if the primary dies with async copies, formula: "write_qps * lag_ms / 1000", unit: writes }
+    - { id: majority, label: Members that must agree, formula: "floor(members / 2) + 1", unit: members }
+    - { id: can_lose, label: Members that can fail and still decide, formula: "members - majority", unit: members }
+  presets:
+    - { id: ten-cities, label: CityBeat in ten cities, inputs: { read_qps: 4000, write_qps: 1000 } }
+    - { id: busy-night, label: Replicas under heavy load, inputs: { lag_ms: 2000 } }
+    - { id: national, label: National launch, inputs: { read_qps: 30000, write_qps: 6000 } }
+
+components:
+  - { id: app, label: App servers, kind: compute, pos: [0, 2], note: "8 servers, from chapter 4." }
+  - { id: primary, label: Primary, kind: db_sql, example: "e.g. PostgreSQL", pos: [2.6, 2], load: one_server_load, loadUnit: queries/s, capacity: 3000, capacitySource: "Planning assumption: one database server, simple indexed queries", instances: 1 }
+  - { id: replica, label: Read replicas, kind: db_sql, pos: [1.4, 4.6], load: read_qps, loadUnit: queries/s, capacity: 3000, capacitySource: "Same machine size as the primary", instances: replicas_needed }
+  - { id: manager, label: Failover manager, kind: external, example: "e.g. Patroni with etcd, or a managed database", pos: [2.6, -0.2], note: "3 members; a majority decides." }
+  - { id: standby, label: Synchronous standby, kind: db_sql, pos: [5, 0.6], load: write_qps, loadUnit: queries/s, capacity: 3000, capacitySource: "Same machine size as the primary", instances: 1 }
+
+arrows:
+  - { id: a-app-primary, from: app, to: primary, label: "Every read and write", mode: sync, rate: one_server_load }
+  - { id: a-app-replica, from: app, to: replica, label: "Reads", mode: sync, rate: read_qps }
+  - { id: a-primary-replica, from: primary, to: replica, label: "Stream the change log", mode: async, rate: write_qps }
+  - { id: a-manager-primary, from: manager, to: primary, label: "Leader lock, renewed every few seconds", mode: sync }
+  - { id: a-primary-standby, from: primary, to: standby, label: "Confirm before commit", mode: sync, rate: write_qps }
+
+layers:
+  understand:
+    level: Junior
+    minutes: 15
+    goal: Size read replicas from the read load, and explain replication lag and what failover needs.
+    sections:
+      problem:
+        - { id: problem, type: prose, role: problem, title: "One database, one copy", bodyFile: problem.md }
+      clarify:
+        - id: clarify-questions
+          type: structuredTable
+          variant: clarify
+          title: Questions to ask before replicating a database
+          columns: [{ key: q, label: Ask }, { key: a, label: Answer }, { key: why, label: What it changes }]
+          rows:
+            - { q: "How many reads and writes a second reach the database?", a: "About 4,000 reads and 1,000 writes at peak.", why: "Reads can spread across replicas; writes all go to the primary." }
+            - { q: "Must a user see their own change at once?", a: "Yes for RSVPs; listings may be a second old.", why: "Decides where a user's reads go just after a write." }
+            - { q: "How much data may we lose if a machine dies?", a: "No confirmed RSVP or payment.", why: "Rules out async-only copies for the failover target." }
+            - { q: "How long may the database be down?", a: "Under a minute.", why: "Needs automatic failover, not a restore from backup." }
+        - id: clarify-predict
+          type: predict
+          prompt: "A visitor taps RSVP. The app writes it to the primary, then loads the event page from a replica that trails by 100 ms. What does the visitor see?"
+          options:
+            - { text: "Their RSVP, because the write succeeded", explanation: "The write is on the primary; the replica may not have it yet." }
+            - { text: "An error, because the replica is behind", explanation: "A replica that trails still answers; it just answers with older data." }
+            - { text: "The page without their RSVP, at first", explanation: "The replica hasn't applied the write yet when the page loads." }
+            - { text: "A page that waits until the replica catches up", explanation: "Replicas don't wait for anything; they answer with what they have." }
+          answer: 2
+          reveal: "The replica answers with what it has, which doesn't include a write from 50 ms ago. The visitor thinks the RSVP failed and taps again. Step 3 fixes this by sending a recent writer's reads to the primary."
+          gradingVersion: 1
+      numbers:
+        - { id: numbers-intro, type: prose, role: numbers, title: "How many copies, and what can be lost?", bodyFile: numbers.md }
+        - id: numbers-worksheet
+          type: estimationWorksheet
+          title: Work it out
+          prompt: "Within 2× counts."
+          lines:
+            - { value: per_server_safe, prompt: "Queries a second you plan per database server", hint: "3,000 × 60%" }
+            - { value: replicas_needed, prompt: "Read replicas for 4,000 reads a second", hint: "reads ÷ planned per server, rounded up" }
+            - { value: at_risk, prompt: "Writes at risk if the primary dies with 100 ms of lag", hint: "writes a second × 0.1 s" }
+          gradingVersion: 1
+      design:
+        - { id: step1-text, type: prose, role: steps, title: "Step 1 · One server, one copy", bodyFile: step1.md, why: "Why start here: the numbers show the database is overloaded and is also the only copy of the data." }
+        - id: fig-one-db
+          type: figure
+          title: One database server takes every query and turns red
+          stage: { add: [app, primary, a-app-primary] }
+          claims: ["Every read and write reaches one server.", "Its disk holds the only live copy of the data."]
+        - { id: step2-text, type: prose, role: steps, title: "Step 2 · Read replicas", bodyFile: step2.md, why: "Why replicas: reads outnumber writes four to one here, and only writes need the primary." }
+        - id: fig-replicas
+          type: figure
+          title: Read replicas take the reads while the primary takes the writes
+          base: fig-one-db
+          stage:
+            add: [replica, a-app-replica, a-primary-replica]
+            change: [primary, a-app-primary]
+            overrides: { primary: { load: write_qps } }
+            arrowOverrides: { a-app-primary: { label: "Writes", rate: write_qps } }
+          claims: ["The primary streams its change log to each replica.", "Replicas apply the changes a moment later (asynchronous)."]
+          whatIf: "Raise reads to 20,000 a second. How many replicas now, and does the primary change?"
+        - { id: step3-text, type: prose, role: steps, title: "Step 3 · Read your own writes", bodyFile: step3.md, why: "Why route by user: only the person who just wrote can notice the lag, so only their reads need the primary." }
+        - id: fig-own-writes
+          type: figure
+          title: A recent writer's reads go to the primary; everyone else reads replicas
+          base: fig-replicas
+          stage:
+            change: [primary, replica, a-app-primary, a-app-replica]
+            overrides:
+              primary: { load: primary_load, metrics: [{ label: "Reads for recent writers", value: own_reads, unit: queries/s }] }
+              replica: { load: "read_qps - own_reads" }
+            arrowOverrides:
+              a-app-primary: { label: "Writes, and reads for 5 s after a write", rate: primary_load }
+              a-app-replica: { label: "Everyone else's reads", rate: "read_qps - own_reads" }
+          claims: ["Replicas trail the primary, usually by milliseconds.", "For a few seconds after a write, that user's reads go to the primary."]
+          whatIf: "Raise the replica lag to 2,000 ms. Is a 5-second window still enough?"
+        - { id: step4-text, type: prose, role: steps, title: "Step 4 · Automatic failover", bodyFile: step4.md, why: "Why a majority: a slow network looks like a dead primary, and a majority can't be split into two groups that both decide." }
+        - id: fig-failover
+          type: figure
+          title: A failover manager with a majority decides when to promote a replica
+          base: fig-own-writes
+          stage:
+            add: [manager, a-manager-primary]
+            change: [replica]
+            overrides: { replica: { note: "One can be promoted if the primary dies." } }
+          claims: ["The primary holds a leader lock it must keep renewing.", "A majority of the manager's members must agree before a promotion.", "The old primary stops taking writes before a new one starts."]
+        - { id: step5-text, type: prose, role: steps, title: "Step 5 · A synchronous standby", bodyFile: step5.md, why: "Why one synchronous copy: every confirmed write exists on two machines, while reads keep the fast async replicas." }
+        - id: fig-sync
+          type: figure
+          title: A synchronous standby holds every confirmed write
+          base: fig-failover
+          stage:
+            add: [standby, a-primary-standby]
+            change: [manager]
+            overrides: { manager: { note: "Promotes the standby first: it has every confirmed write." } }
+          claims: ["A write is confirmed only after the standby has it on disk.", "Read replicas stay asynchronous."]
+  apply:
+    level: Mid
+    minutes: 12
+    goal: Choose how writes are confirmed and how failover is decided, and justify both.
+    sections:
+      deepDive:
+        - { id: deep-sync, type: prose, role: deepDive, title: "Question: asynchronous, synchronous, or one synchronous standby?", bodyFile: deep-sync.md }
+        - id: deep-sync-options
+          type: structuredTable
+          variant: decisionMatrix
+          columns: [{ key: option, label: Confirm a write when }, { key: good, label: Good }, { key: bad, label: Costs }, { key: fit, label: Fits }]
+          rows:
+            - { option: "The primary has it (async)", good: "Fastest writes; a slow replica can't slow the primary.", bad: "A failover can lose the last moments of writes.", fit: "Data you can rebuild or afford to lose briefly" }
+            - { option: "Every replica has it (fully sync)", good: "No confirmed write is ever lost.", bad: "Writes wait for the slowest copy; one dead replica stops all writes.", fit: "Rarely the right choice" }
+            - { option: "One standby has it (semi-sync)", good: "No confirmed write lost if one machine dies; one extra round trip.", bad: "If the standby is down, writes wait or fall back to async.", fit: "RSVPs, payments, orders" }
+          caption: "Choice: one synchronous standby in the same region, with the read replicas asynchronous."
+        - { id: deep-splitbrain, type: prose, role: deepDive, title: "Question: who decides the primary is dead?", bodyFile: deep-splitbrain.md }
+        - id: deep-splitbrain-options
+          type: structuredTable
+          variant: decisionMatrix
+          columns: [{ key: option, label: Decided by }, { key: good, label: Good }, { key: bad, label: Costs }, { key: fit, label: Fits }]
+          rows:
+            - { option: "A person, by hand", good: "No false failovers; someone checks first.", bad: "Minutes to hours of downtime, often at night.", fit: "Small systems with a relaxed downtime budget" }
+            - { option: "One watchdog with a timeout", good: "Fast and simple.", bad: "A network blip between it and the primary creates two primaries.", fit: "Not safe on its own" }
+            - { option: "A majority of 3 or 5 members (Raft or similar) plus fencing", good: "A minority can't promote; the old primary is cut off first.", bad: "More parts to run, or a managed service to pay for.", fit: "Anything with a downtime budget under a minute" }
+          caption: "Choice: a managed database or Patroni with a 3-member etcd cluster, which agree by majority using the Raft algorithm."
+      remember:
+        - id: remember
+          type: rememberCard
+          figure: fig-sync
+          facts:
+            - "Writes go to one primary; read replicas copy its change log and share the reads, a little behind."
+            - "Send a user's reads to the primary for a few seconds after they write, so they see their own change."
+            - "Fail over by majority with fencing, and keep one synchronous standby so a dead primary loses no confirmed write."
+          number: { value: "100", unit: writes, label: "at risk when 1,000 writes a second meet 100 ms of async lag" }
+          tradeoff: { choice: "A synchronous standby", buys: "no confirmed write lost when the primary dies", costs: "one extra round trip on every write" }
+          sayIt: "I'd keep one primary for writes with a synchronous standby, add async read replicas sized at 60%, read a user's own writes from the primary briefly, and fail over with a majority-based manager that fences the old primary."
+      check:
+        - id: check-figure-replicas
+          type: quiz
+          aboutFigure: fig-replicas
+          prompt: "In the replicas figure, why does the primary turn green without getting a bigger machine?"
+          options:
+            - { text: "Its reads moved to the replicas", explanation: "1,000 writes a second fit well under its plan." }
+            - { text: "Replicas take half of its writes", explanation: "Every write still goes to the primary." }
+            - { text: "The change log makes each query run faster", explanation: "The log copies changes; it doesn't speed up queries." }
+            - { text: "The cache now answers every read", explanation: "The cache was already there; these reads missed it." }
+          answer: 0
+          gradingVersion: 1
+        - id: check-lag
+          type: quiz
+          prompt: "Why do RSVPs seem to vanish right after a visitor makes one?"
+          options:
+            - { text: "The primary drops writes under load", explanation: "The write was confirmed and stored." }
+            - { text: "Their next read hits a replica that is behind", explanation: "The replica hasn't applied the write yet." }
+            - { text: "The cache stored the RSVP for an hour", explanation: "Nothing here says the cache kept an old page." }
+            - { text: "The replica refuses reads while it copies", explanation: "Replicas keep answering while they apply changes." }
+          answer: 1
+          gradingVersion: 1
+        - id: check-majority
+          type: quiz
+          prompt: "A failover manager has 5 members. How many can fail while it can still decide?"
+          options:
+            - { text: "One", explanation: "With 5 members a majority is 3, so 2 can fail." }
+            - { text: "Four", explanation: "One member alone is not a majority of 5." }
+            - { text: "Two", explanation: "A majority of 5 is 3; the other 2 can be down." }
+            - { text: "None", explanation: "Majorities exist so that some members can fail." }
+          answer: 2
+          gradingVersion: 1
+        - id: check-async-loss
+          type: quiz
+          prompt: "With only async replicas, the primary dies. What can be lost?"
+          options:
+            - { text: "Nothing, replicas have every write", explanation: "Async replicas trail the primary by the lag." }
+            - { text: "The last writes before it died", explanation: "Confirmed writes that hadn't reached a replica yet." }
+            - { text: "Every write since the last backup", explanation: "Replicas hold nearly everything; only the lag is at risk." }
+            - { text: "Only reads that were in progress", explanation: "Reads can be retried; the risk is to writes." }
+          answer: 1
+          gradingVersion: 1
+  defend:
+    level: Senior
+    minutes: 15
+    goal: Find the split brain in a failover script and defend a database design that loses no RSVP.
+    blocks:
+      - id: bug-watchdog
+        type: spotTheBug
+        title: Spot the bug
+        prompt: "After a 20-second network blip, CityBeat had two primaries and some RSVPs existed on only one of them. Find why in three steps."
+        language: python
+        code: |
+          1  def watchdog():
+          2      while True:
+          3          if not ping(PRIMARY, timeout=2):
+          4              promote(REPLICA)
+          5              dns.update("db.citybeat.internal", REPLICA)
+          6          sleep(5)
+        steps:
+          - prompt: "Which lines hold the problem?"
+            options: ["Lines 3-4: one failed ping from one machine promotes a replica", "Line 6: the sleep interval", "Line 1: running in a loop", "Line 5: the DNS name"]
+            answer: 0
+            explanation: "A single observer decides alone, and nothing stops the old primary."
+          - prompt: "What goes wrong?"
+            options: ["The ping timeout is too long", "The old primary was alive; it and the new one both took writes, and apps kept the old DNS answer until its TTL ran out", "The replica refuses promotion", "DNS updates are instant, so nothing goes wrong"]
+            answer: 1
+            explanation: "A network blip is not a dead machine. Two primaries means split brain, and cached DNS answers keep traffic flowing to the old one."
+          - prompt: "Which change fixes it best?"
+            options: ["Ping three times before promoting", "Decide by a majority of 3 members holding a leader lock, and fence the old primary (it stops writing when it loses the lock) before promoting", "Promote both replicas", "Lower the DNS TTL to 1 s"]
+            answer: 1
+            explanation: "A majority can't split into two deciding groups, and fencing guarantees the old primary stops. More pings or shorter TTLs only narrow the window."
+        gradingVersion: 1
+      - id: design-tickets
+        type: designPrompt
+        title: Defend a design
+        prompt: "CityBeat starts selling tickets. No confirmed ticket may be lost if any one database machine dies, downtime must stay under a minute, and reads grow to 20,000 a second. Describe the database tier and what you'd watch."
+        rubric:
+          - "Keeps one primary for writes and sizes read replicas from the read load (about 12 at 1,800 each)."
+          - "Confirms ticket writes on a synchronous standby so a single failure loses nothing."
+          - "Uses majority-based failover with fencing, not a single watchdog."
+          - "Handles read-your-writes for the buyer (primary or wait for the replica to catch up)."
+          - "Names metrics: replication lag, primary write latency, standby health, failover count."
+        modelAnswers:
+          - level: Mid
+            answer: "One primary with a synchronous standby, and about 12 async read replicas for 20,000 reads. A managed database handles failover. Read the buyer's ticket from the primary right after purchase. Watch lag and write latency."
+          - level: Senior
+            answer: "Primary plus one synchronous standby in another zone, so a zone loss still loses nothing. Async replicas behind a pooler, sized at 60%, and taken out of rotation if lag passes a few seconds. Patroni with a 3-member etcd cluster across zones, fencing on lock loss. After a purchase, route that buyer's reads to the primary for 5 seconds. Alert on lag, sync standby missing, and failover events."
+          - level: Staff
+            answer: "Decide the write budget first: if tickets outgrow one primary, the next step is sharding by event (chapter 9), not more replicas. Run two synchronous candidates with ANY 1 so one standby outage doesn't stall writes. Make purchases idempotent so a retry after failover can't sell twice. Rehearse failover monthly and track how long writes stall."
+        gradingVersion: 1

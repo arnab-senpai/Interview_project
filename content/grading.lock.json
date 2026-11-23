@@ -31,6 +31,38 @@
     "gradingVersion": 1,
     "hash": "1ee9b9cceae0dba5"
   },
+  "dns-and-cdn/bug-public": {
+    "gradingVersion": 1,
+    "hash": "b7e86a3ba15c71f9"
+  },
+  "dns-and-cdn/check-figure-shield": {
+    "gradingVersion": 1,
+    "hash": "cd6f901d0e055404"
+  },
+  "dns-and-cdn/check-fingerprint": {
+    "gradingVersion": 1,
+    "hash": "839d94f38a95c645"
+  },
+  "dns-and-cdn/check-private": {
+    "gradingVersion": 1,
+    "hash": "304fd31dbd4d8a54"
+  },
+  "dns-and-cdn/check-ttl": {
+    "gradingVersion": 1,
+    "hash": "c08628941836e71c"
+  },
+  "dns-and-cdn/clarify-predict": {
+    "gradingVersion": 1,
+    "hash": "bd38ef80bcf2188e"
+  },
+  "dns-and-cdn/design-lineup": {
+    "gradingVersion": 1,
+    "hash": "79032a055cd20d7a"
+  },
+  "dns-and-cdn/numbers-worksheet": {
+    "gradingVersion": 1,
+    "hash": "01b95f497fb254c8"
+  },
   "how-to-approach-a-design-question/check-figure-db": {
     "gradingVersion": 1,
     "hash": "7939c2baec4d648d"
@@ -54,6 +86,38 @@
   "how-to-approach-a-design-question/numbers-worksheet": {
     "gradingVersion": 1,
     "hash": "ca53f71b050bc68a"
+  },
+  "l7-load-balancer/bug-health": {
+    "gradingVersion": 1,
+    "hash": "123574b285dbbc73"
+  },
+  "l7-load-balancer/check-figure-health": {
+    "gradingVersion": 1,
+    "hash": "99a1516f844ab001"
+  },
+  "l7-load-balancer/check-http2": {
+    "gradingVersion": 1,
+    "hash": "fbc4fa0a6bf60c7e"
+  },
+  "l7-load-balancer/check-slow-requests": {
+    "gradingVersion": 1,
+    "hash": "7e4789c5147217f8"
+  },
+  "l7-load-balancer/check-stateless": {
+    "gradingVersion": 1,
+    "hash": "144560d101dc7525"
+  },
+  "l7-load-balancer/clarify-predict": {
+    "gradingVersion": 1,
+    "hash": "528d868b73100f12"
+  },
+  "l7-load-balancer/design-launch": {
+    "gradingVersion": 1,
+    "hash": "2f921eb2ffa90a0e"
+  },
+  "l7-load-balancer/numbers-worksheet": {
+    "gradingVersion": 1,
+    "hash": "d03f30a6dd783885"
   },
   "numbers-that-matter/check-cache-size": {
     "gradingVersion": 1,
@@ -106,5 +170,37 @@
   "one-server-to-a-million-users/numbers-worksheet": {
     "gradingVersion": 1,
     "hash": "96dc43acb7b8b3a6"
+  },
+  "replication-and-consensus/bug-watchdog": {
+    "gradingVersion": 1,
+    "hash": "2acccd640c971d9b"
+  },
+  "replication-and-consensus/check-async-loss": {
+    "gradingVersion": 1,
+    "hash": "663bf7788ae61adf"
+  },
+  "replication-and-consensus/check-figure-replicas": {
+    "gradingVersion": 1,
+    "hash": "6aa05ef40b76cc60"
+  },
+  "replication-and-consensus/check-lag": {
+    "gradingVersion": 1,
+    "hash": "acc6af66b7bb7f98"
+  },
+  "replication-and-consensus/check-majority": {
+    "gradingVersion": 1,
+    "hash": "c34ac5758ede1cbd"
+  },
+  "replication-and-consensus/clarify-predict": {
+    "gradingVersion": 1,
+    "hash": "1396536cd7f6357a"
+  },
+  "replication-and-consensus/design-tickets": {
+    "gradingVersion": 1,
+    "hash": "9e5b645571118afc"
+  },
+  "replication-and-consensus/numbers-worksheet": {
+    "gradingVersion": 1,
+    "hash": "17cb7685346f89ff"
   }
 }
