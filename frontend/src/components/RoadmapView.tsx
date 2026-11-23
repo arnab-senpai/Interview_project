@@ -623,7 +623,7 @@ export const RoadmapView: React.FC<RoadmapViewProps> = ({
 
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn-secondary" style={{ flex: 1, fontSize: 10.5 }} onClick={onOpenCapacityLab}>
-              <Calculator size={12} /> Capacity Lab
+              <Calculator size={12} /> Numbers chapter
             </button>
             <button className="btn-secondary" style={{ flex: 1, fontSize: 10.5 }} onClick={() => setFullIndexOpen(true)}>
               <LayoutGrid size={12} /> All 30+ Topics
