@@ -339,7 +339,7 @@ export const CaseStudiesView: React.FC<CaseStudiesViewProps> = ({
                         style={{ fontSize: 10.5 }}
                         onClick={() => onLoadPresetInEstimator(caseStudy.estimationPreset, caseStudy.title)}
                       >
-                        <Calculator size={12} /> Open in Capacity Lab
+                        <Calculator size={12} /> Work the numbers in chapter 3
                       </button>
                     </div>
                     {Object.entries(caseStudy.estimationPreset.workedSummary).map(([k, v]) => (

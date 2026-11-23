@@ -14,13 +14,28 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # Zero-dependency validator: structural and quiz-quality checks fail the build;
-      # prose heuristics (absolutes, exclamation marks, missing lastVerified) are printed as warnings only.
+      # Structural, quiz-quality, chapter-template, link and grading-version checks fail the build;
+      # prose heuristics (absolutes, exclamation marks) are printed as warnings only.
+      # The v1 checks need nothing; the v2 compiler needs PyYAML and Pydantic.
+      - run: pip install "pyyaml>=6" "pydantic>=2.9"
       - run: python backend/scripts/validate_content.py
 
   tests:
-    name: Backend tests and frontend build
+    name: Backend tests (Postgres) and frontend build
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: systemcraft
+          POSTGRES_PASSWORD: systemcraft
+          POSTGRES_DB: systemcraft_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U systemcraft"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      SYSTEMCRAFT_TEST_DATABASE_URL: postgresql://systemcraft:systemcraft@localhost:5432/systemcraft_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,4 +51,9 @@ jobs:
       - run: npm --prefix frontend ci
       - run: npm --prefix frontend run build
       - run: pip install -r backend/requirements.txt
+      # The browser and the server must compute the same chapter numbers.
+      - run: python backend/scripts/build_content.py --out data/build
+      - run: npm --prefix frontend run check:numbers
       - run: python -m pytest -q
+      # The SQLite fallback for local development keeps working too.
+      - run: SYSTEMCRAFT_TEST_DATABASE_URL= python -m pytest -q

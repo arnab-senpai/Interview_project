@@ -444,8 +444,22 @@ def validate_all() -> dict[str, Any]:
     return summary
 
 
+def validate_v2() -> dict:
+    """Content model v2 (content/<track>/<topic>/topic.yaml). Needs PyYAML, so it is imported lazily."""
+    root = Path(__file__).resolve().parents[2]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from backend.scripts.build_content import run
+
+    return run()
+
+
 def main() -> int:
     summary = validate_all()
+    v2 = validate_v2()
+    summary["v2_topics"] = v2["topics"]
+    summary["errors"] = [*summary["errors"], *(f"v2 {e}" for e in v2["errors"])]
+    summary["warnings"] = [*summary["warnings"], *(f"v2 {w}" for w in v2["warnings"])]
     errors = summary["errors"]
     warnings = summary["warnings"]
     printable = {k: v for k, v in summary.items() if k not in ("errors", "warnings")}

@@ -1,0 +1,110 @@
+{
+  "caching-and-stampede/bug-invalidate": {
+    "gradingVersion": 1,
+    "hash": "0aa7b9b7ec37ebe1"
+  },
+  "caching-and-stampede/check-avalanche": {
+    "gradingVersion": 1,
+    "hash": "77376f4a88baeaad"
+  },
+  "caching-and-stampede/check-bloom": {
+    "gradingVersion": 1,
+    "hash": "fa3fe1546db14a6a"
+  },
+  "caching-and-stampede/check-figure-db": {
+    "gradingVersion": 1,
+    "hash": "71d17165bfa1103b"
+  },
+  "caching-and-stampede/check-singleflight": {
+    "gradingVersion": 1,
+    "hash": "5036137da04fa574"
+  },
+  "caching-and-stampede/clarify-predict": {
+    "gradingVersion": 1,
+    "hash": "014d9fa6f4e190d8"
+  },
+  "caching-and-stampede/design-flash-sale": {
+    "gradingVersion": 1,
+    "hash": "0f741746653a4b87"
+  },
+  "caching-and-stampede/numbers-worksheet": {
+    "gradingVersion": 1,
+    "hash": "1ee9b9cceae0dba5"
+  },
+  "how-to-approach-a-design-question/check-figure-db": {
+    "gradingVersion": 1,
+    "hash": "7939c2baec4d648d"
+  },
+  "how-to-approach-a-design-question/check-first": {
+    "gradingVersion": 1,
+    "hash": "1c14334584187d27"
+  },
+  "how-to-approach-a-design-question/check-order": {
+    "gradingVersion": 1,
+    "hash": "acde2f593ecca710"
+  },
+  "how-to-approach-a-design-question/check-peak": {
+    "gradingVersion": 1,
+    "hash": "9661da3597ab00bb"
+  },
+  "how-to-approach-a-design-question/clarify-predict": {
+    "gradingVersion": 1,
+    "hash": "7e3df9f1aea917a5"
+  },
+  "how-to-approach-a-design-question/numbers-worksheet": {
+    "gradingVersion": 1,
+    "hash": "ca53f71b050bc68a"
+  },
+  "numbers-that-matter/check-cache-size": {
+    "gradingVersion": 1,
+    "hash": "bdf28b877a150522"
+  },
+  "numbers-that-matter/check-figure-retention": {
+    "gradingVersion": 1,
+    "hash": "22cd11384a827cbe"
+  },
+  "numbers-that-matter/check-mixed-constants": {
+    "gradingVersion": 1,
+    "hash": "52c589e0744af9b6"
+  },
+  "numbers-that-matter/check-read-share": {
+    "gradingVersion": 1,
+    "hash": "4a5568873ec21f09"
+  },
+  "numbers-that-matter/clarify-predict": {
+    "gradingVersion": 1,
+    "hash": "8376ce34a992abe8"
+  },
+  "numbers-that-matter/numbers-worksheet": {
+    "gradingVersion": 1,
+    "hash": "b4fc201d1e3ab3f9"
+  },
+  "one-server-to-a-million-users/check-cache-hit": {
+    "gradingVersion": 1,
+    "hash": "0f2267f92e031f2f"
+  },
+  "one-server-to-a-million-users/check-cdn": {
+    "gradingVersion": 1,
+    "hash": "fcd0b7755743a682"
+  },
+  "one-server-to-a-million-users/check-figure-writes": {
+    "gradingVersion": 1,
+    "hash": "2c167b75b3749745"
+  },
+  "one-server-to-a-million-users/check-stateless": {
+    "gradingVersion": 1,
+    "hash": "6647df2e399be1b2"
+  },
+  "one-server-to-a-million-users/clarify-predict": {
+    "gradingVersion": 1,
+    "hash": "43af0aeadc9fb97e"
+  },
+  "one-server-to-a-million-users/ladder-growth": {
+    "gradingVersion": 1,
+    "hash": "b8f6ac70e4556850"
+  },
+  "one-server-to-a-million-users/numbers-worksheet": {
+    "gradingVersion": 1,
+    "hash": "96dc43acb7b8b3a6"
+  }
+}

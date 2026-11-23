@@ -48,3 +48,15 @@ def get_admin_usernames() -> set[str]:
     """Usernames (comma-separated in SYSTEMCRAFT_ADMIN_USERNAMES) that can open the feedback admin view."""
     raw = os.environ.get("SYSTEMCRAFT_ADMIN_USERNAMES", "")
     return {u.strip().lower() for u in raw.split(",") if u.strip()}
+
+
+def guests_allowed() -> bool:
+    """SYSTEMCRAFT_ALLOW_GUESTS=1 lets visitors study without an account, via a signed guest cookie.
+
+    Off by default: the alpha on the office VM requires sign-in, as decided for the review round.
+    """
+    return os.environ.get("SYSTEMCRAFT_ALLOW_GUESTS", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+GUEST_IDLE_DAYS = 30
+GUESTS_PER_IP_PER_HOUR = 10

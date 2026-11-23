@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
 from backend.app.db.database import get_conn, get_streak_summary, utc_now_iso
@@ -55,7 +55,29 @@ class CreateTokenIn(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+def _adopt_guest(request: Request, response: Response, result: dict) -> dict:
+    """If this browser studied as a guest, move that history into the account and drop the cookie."""
+    from backend.app.services.guest import GUEST_COOKIE, merge_guest_into, verify_guest_cookie
+
+    guest_id = verify_guest_cookie(request.cookies.get(GUEST_COOKIE))
+    if guest_id:
+        result["mergedGuest"] = merge_guest_into(guest_id, result["user"]["id"])
+        result["streak"] = get_streak_summary(result["user"]["id"], daily_goal=result["user"]["dailyGoal"])
+    if GUEST_COOKIE in request.cookies:
+        response.delete_cookie(GUEST_COOKIE, path="/")
+    return result
+
+
 @router.post("/register", status_code=status.HTTP_201_CREATED)
+def register_route(payload: RegisterIn, request: Request, response: Response) -> dict:
+    return _adopt_guest(request, response, register_user(payload))
+
+
+@router.post("/login")
+def login_route(payload: LoginIn, request: Request, response: Response) -> dict:
+    return _adopt_guest(request, response, login_user(payload))
+
+
 def register_user(payload: RegisterIn) -> dict:
     uname = payload.username.strip().lower()
     if uname == "guest" or not USERNAME_RE.match(uname):
@@ -96,13 +118,12 @@ def register_user(payload: RegisterIn) -> dict:
     }
 
 
-@router.post("/login")
 def login_user(payload: LoginIn) -> dict:
     uname = payload.username.strip().lower()
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM users WHERE lower(username) = ?", (uname,)).fetchone()
 
-    if not row or row["id"] == "guest" or not verify_password(payload.password, row["password_hash"]):
+    if not row or row["id"] == "guest" or row["is_guest"] or not verify_password(payload.password, row["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     user_obj = serialize_user(row)
@@ -190,10 +211,11 @@ def create_personal_token(payload: CreateTokenIn, user: dict = Depends(require_a
             """
             INSERT INTO personal_tokens (user_id, label, token_prefix, token_hash, expires_at, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
+            RETURNING id
             """,
             (user["id"], payload.label.strip(), prefix, thash, exp_iso, now),
         )
-        tok_id = cur.lastrowid
+        tok_id = cur.scalar()
     return {
         "rawToken": raw,
         "token": {

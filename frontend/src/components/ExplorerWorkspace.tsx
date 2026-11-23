@@ -27,7 +27,7 @@ import { ReportIssueButton } from "./ReportIssueButton";
 import type { HldModuleItem, LessonIndexItem, TopicProgress } from "../api/client";
 import type { HldExplorerLesson, TraceStep } from "../types/hld";
 import { renderInlineCode, truncateText } from "../utils/format";
-import { computeTopologyTelemetry, formatCompactRps } from "../utils/telemetry";
+import { TARGET_UTILIZATION, computeTopologyTelemetry, formatCompactRps } from "../utils/telemetry";
 import { DeepDiveDrawer } from "./DeepDiveDrawer";
 import { IsometricCanvas, type PlaybackState } from "./IsometricCanvas";
 import { NotesDrawer } from "./NotesDrawer";
@@ -108,7 +108,11 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
   const [singleShotTarget, setSingleShotTarget] = useState<boolean>(false);
   const [speed, setSpeed] = useState<number>(1);
   const [chaosId, setChaosId] = useState<string | null>(null);
-  const [qpsLoad, setQpsLoad] = useState<number>(1.0);
+  // Illustrative inputs for the Sandbox: the learner sets ingress and cache hit rate.
+  // (Before the Phase 1 audit fix, ingress was derived from node capacities and
+  // every lesson showed 48% utilisation.)
+  const [ingressRps, setIngressRps] = useState<number>(5_000);
+  const [cacheHitRate, setCacheHitRate] = useState<number>(0.9);
 
   const [internalLeftOpen, setInternalLeftOpen] = useState<boolean>(false);
   const [rightCardCollapsed, setRightCardCollapsed] = useState<boolean>(false);
@@ -427,11 +431,13 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
     () =>
       computeTopologyTelemetry(
         activeLesson?.nodes ?? [],
+        activeLesson?.edges ?? [],
         steps,
-        qpsLoad,
+        ingressRps,
+        cacheHitRate,
         activeChaos?.targetNodeId ?? null
       ),
-    [activeLesson?.nodes, steps, qpsLoad, activeChaos?.targetNodeId]
+    [activeLesson?.nodes, activeLesson?.edges, steps, ingressRps, cacheHitRate, activeChaos?.targetNodeId]
   );
 
   const handleLensChange = (nextLens: "intuition" | "mechanics" | "staffTradeoffs") => {
@@ -464,9 +470,8 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
       ? `Layer ${activeLesson.layer}`
       : "Topology";
 
-  const activeNodeUtilPct = selectedNode
-    ? Math.round((telemetry.nodeUtilization[selectedNode.id] ?? 0) * 100)
-    : 0;
+  const activeNodeUtil = selectedNode ? telemetry.nodeUtilization[selectedNode.id] : undefined;
+  const activeNodeUtilPct = activeNodeUtil === undefined ? null : Math.round(activeNodeUtil * 100);
 
   return (
     <div className="spatial-lab-shell">
@@ -734,7 +739,7 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
             >
               <span className="telemetry-bars" aria-hidden="true">
                 {[0.38, 0.56, 0.72, 0.88, 1].map((lvl, idx) => {
-                  const activeBar = qpsLoad / 2.4 >= idx * 0.2;
+                  const activeBar = telemetry.bottleneckUtilization >= idx * 0.25;
                   const h = 4 + idx * 2;
                   return (
                     <span
@@ -750,11 +755,11 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
                 })}
               </span>
               <span>
-                Ingress: <strong>{formatCompactRps(telemetry.effectiveRps)} RPS</strong>
+                Ingress: <strong>{formatCompactRps(telemetry.ingressRps)} req/s</strong>
               </span>
               <span style={{ opacity: 0.4 }}>|</span>
               <span style={{ color: tierColor }}>
-                p99: <strong>{telemetry.simulatedP99Ms}ms</strong>
+                Busiest: <strong>{Math.round(telemetry.bottleneckUtilization * 100)}%</strong>
               </span>
             </button>
 
@@ -777,22 +782,43 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
                   onClick={(e) => e.stopPropagation()}
                 >
                   <div className="mono" style={{ fontSize: 10, fontWeight: 700, color: tierColor, marginBottom: 6 }}>
-                    LIVE TOPOLOGY TELEMETRY ({telemetry.healthTier.toUpperCase()})
+                    SANDBOX LOAD ({telemetry.healthTier.toUpperCase()})
                   </div>
+                  <div style={{ fontSize: 11, color: "var(--ink-muted)", marginBottom: 8, lineHeight: 1.45 }}>
+                    Illustrative: you set the ingress and the cache hit rate. Caches and CDNs pass on only their misses.
+                  </div>
+                  <label className="mono" style={{ fontSize: 9.5, color: "var(--ink-muted)", display: "block" }}>
+                    CACHE / CDN HIT RATE · {Math.round(cacheHitRate * 100)}%
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={0.99}
+                    step={0.01}
+                    value={cacheHitRate}
+                    onChange={(e) => setCacheHitRate(Number(e.target.value))}
+                    aria-label="Cache and CDN hit rate"
+                    style={{ width: "100%", marginBottom: 10 }}
+                  />
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 11.5, marginBottom: 10 }}>
                     <div style={{ padding: "6px 8px", borderRadius: 8, background: "var(--bg-subtle)" }}>
-                      <div className="mono" style={{ fontSize: 9.5, color: "var(--ink-muted)" }}>QPS MULTIPLIER</div>
-                      <div className="mono" style={{ fontWeight: 700 }}>{qpsLoad.toFixed(2)}×</div>
+                      <div className="mono" style={{ fontSize: 9.5, color: "var(--ink-muted)" }}>TRACE LATENCY</div>
+                      <div className="mono" style={{ fontWeight: 700 }}>{telemetry.traceLatencyMs} ms</div>
+                      <div style={{ fontSize: 9.5, color: "var(--ink-muted)" }}>one request, this trace</div>
                     </div>
                     <div style={{ padding: "6px 8px", borderRadius: 8, background: "var(--bg-subtle)" }}>
-                      <div className="mono" style={{ fontSize: 9.5, color: "var(--ink-muted)" }}>PEAK UTILIZATION</div>
+                      <div className="mono" style={{ fontSize: 9.5, color: "var(--ink-muted)" }}>BUSIEST PART</div>
                       <div className="mono" style={{ fontWeight: 700, color: tierColor }}>
                         {Math.round(telemetry.bottleneckUtilization * 100)}%
                       </div>
+                      <div style={{ fontSize: 9.5, color: "var(--ink-muted)" }}>of one instance; target {Math.round(TARGET_UTILIZATION * 100)}%</div>
                     </div>
                   </div>
                   <div style={{ fontSize: 11.5, color: "var(--ink-secondary)", marginBottom: 8 }}>
-                    Hottest Node: <strong className="mono">{telemetry.bottleneckLabel}</strong>
+                    Busiest part: <strong className="mono">{telemetry.bottleneckLabel}</strong>
+                    {telemetry.bottleneckNodeId && (
+                      <> at {formatCompactRps(telemetry.nodeRps[telemetry.bottleneckNodeId] ?? 0)} req/s</>
+                    )}
                   </div>
                   {telemetry.bottleneckNodeId && (
                     <button
@@ -805,7 +831,7 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
                         setTelemetryOpen(false);
                       }}
                     >
-                      Inspect Bottleneck Crystal <ArrowRight size={11} />
+                      Inspect the busiest part <ArrowRight size={11} />
                     </button>
                   )}
                 </motion.div>
@@ -1211,10 +1237,19 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
                         style={{
                           fontSize: 11,
                           fontWeight: 700,
-                          color: activeNodeUtilPct >= 95 ? "var(--danger)" : activeNodeUtilPct >= 72 ? "var(--warn)" : "var(--success)",
+                          color:
+                            activeNodeUtilPct === null
+                              ? "var(--ink-muted)"
+                              : activeNodeUtilPct >= 100
+                                ? "var(--danger)"
+                                : activeNodeUtilPct >= TARGET_UTILIZATION * 100
+                                  ? "var(--warn)"
+                                  : "var(--success)",
                         }}
                       >
-                        {activeNodeUtilPct}%
+                        {activeNodeUtilPct === null
+                          ? `${formatCompactRps(telemetry.nodeRps[selectedNode.id] ?? 0)} req/s`
+                          : `${activeNodeUtilPct}%`}
                       </div>
                     </div>
                   </div>
@@ -1564,7 +1599,7 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
             </button>
           )}
 
-          {/* Live QPS Load Slider driving node utilization */}
+          {/* Ingress slider (log scale, 100 to 1M requests a second) driving node load */}
           <div
             style={{
               display: "flex",
@@ -1573,24 +1608,24 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
               paddingLeft: 8,
               borderLeft: "1px solid var(--border-soft)",
             }}
-            title="Scale QPS load to stress topology bottlenecks in real time"
+            title="Requests a second entering at the client. Caches and CDNs pass on only their misses."
           >
             <label htmlFor="hud-qps-range" className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: "var(--ink-muted)" }}>
-              QPS
+              Ingress
             </label>
             <input
               id="hud-qps-range"
               type="range"
-              min={0.4}
-              max={2.4}
+              min={2}
+              max={6}
               step={0.05}
-              value={qpsLoad}
-              onChange={(e) => setQpsLoad(Number(e.target.value))}
+              value={Math.log10(ingressRps)}
+              onChange={(e) => setIngressRps(Math.round(Math.pow(10, Number(e.target.value))))}
               className="hud-qps-slider"
-              aria-label="QPS load multiplier"
+              aria-label="Ingress requests per second"
             />
-            <span className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: tierColor, minWidth: 34 }}>
-              {qpsLoad.toFixed(1)}×
+            <span className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: tierColor, minWidth: 54 }}>
+              {formatCompactRps(ingressRps)}/s
             </span>
           </div>
         </div>

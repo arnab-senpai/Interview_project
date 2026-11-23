@@ -1,4 +1,9 @@
-"""SQLite persistence for multi-user auth, tokens, daily streaks, notes, and HLD practice."""
+"""Persistence for auth, tokens, streaks, notes, practice and Phase 1 block progress.
+
+Postgres in production and CI, SQLite as the zero-setup local fallback (see
+backend/app/db/engine.py). Alembic owns the schema: init_db() runs
+"upgrade head" on startup, so every deploy migrates itself.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +14,11 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from backend.app.core.config import get_db_path
+from alembic import command
+from alembic.config import Config
+
+from backend.app.core.config import BACKEND_DIR
+from backend.app.db.engine import DbConn, connect, get_engine, is_sqlite
 
 
 def utc_now_iso() -> str:
@@ -23,7 +32,6 @@ def today_date_iso() -> str:
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return {r[1] for r in rows}
-
 
 def _migrate_single_user_tables(conn: sqlite3.Connection) -> None:
     """Safely upgrade legacy single-user tables to user_id-scoped schemas without losing data."""
@@ -94,169 +102,41 @@ def _migrate_single_user_tables(conn: sqlite3.Connection) -> None:
         )
 
 
-# Several colleagues share one SQLite file during the alpha. WAL lets readers run
-# while one writer commits, and busy_timeout makes a second writer wait for the
-# lock instead of failing at once with "database is locked".
-SQLITE_BUSY_TIMEOUT_MS = 5000
 
-
-def _connect(target: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(target, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
-    conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
-    conn.execute("PRAGMA synchronous = NORMAL")  # safe with WAL: a crash can lose the last commit, never corrupt the file
-    return conn
-
-
-def init_db(db_path: Path | None = None) -> None:
-    target = db_path or get_db_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with _connect(target) as conn:
-        conn.execute("PRAGMA journal_mode = WAL")  # persistent: stored in the database file
-        _migrate_single_user_tables(conn)
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                username TEXT UNIQUE NOT NULL,
-                display_name TEXT NOT NULL,
-                email TEXT NOT NULL DEFAULT '',
-                password_hash TEXT NOT NULL,
-                daily_goal INTEGER NOT NULL DEFAULT 3,
-                preferred_lens TEXT NOT NULL DEFAULT 'intuition',
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS personal_tokens (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
-                label TEXT NOT NULL,
-                token_prefix TEXT NOT NULL,
-                token_hash TEXT UNIQUE NOT NULL,
-                last_used_at TEXT,
-                expires_at TEXT,
-                revoked INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS daily_activity (
-                user_id TEXT NOT NULL,
-                activity_date TEXT NOT NULL,
-                lessons_touched INTEGER NOT NULL DEFAULT 0,
-                flashcards_reviewed INTEGER NOT NULL DEFAULT 0,
-                quizzes_answered INTEGER NOT NULL DEFAULT 0,
-                notes_saved INTEGER NOT NULL DEFAULT 0,
-                total_actions INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (user_id, activity_date)
-            );
-
-            CREATE TABLE IF NOT EXISTS user_notes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
-                topic_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                content_md TEXT NOT NULL DEFAULT '',
-                tags_json TEXT NOT NULL DEFAULT '[]',
-                pinned INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE (user_id, topic_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS lesson_progress (
-                user_id TEXT NOT NULL DEFAULT 'guest',
-                topic_id TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'not_started',
-                completed_steps_json TEXT NOT NULL DEFAULT '[]',
-                active_lens TEXT NOT NULL DEFAULT 'intuition',
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (user_id, topic_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS flashcard_reviews (
-                user_id TEXT NOT NULL DEFAULT 'guest',
-                card_id TEXT NOT NULL,
-                repetitions INTEGER NOT NULL DEFAULT 0,
-                interval_days INTEGER NOT NULL DEFAULT 0,
-                easiness_factor REAL NOT NULL DEFAULT 2.5,
-                next_review_date TEXT NOT NULL,
-                last_rating TEXT NOT NULL DEFAULT 'new',
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (user_id, card_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS quiz_attempts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL DEFAULT 'guest',
-                question_id TEXT NOT NULL,
-                topic_id TEXT NOT NULL,
-                selected_index INTEGER NOT NULL,
-                is_correct INTEGER NOT NULL,
-                answered_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS estimation_runs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL DEFAULT 'guest',
-                title TEXT NOT NULL,
-                dau INTEGER NOT NULL,
-                actions_per_day REAL NOT NULL,
-                peak_multiplier REAL NOT NULL,
-                avg_payload_bytes INTEGER NOT NULL,
-                retention_years INTEGER NOT NULL,
-                read_ratio REAL NOT NULL,
-                results_json TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS content_feedback (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
-                topic_id TEXT NOT NULL,
-                block_id TEXT NOT NULL,
-                content_version TEXT NOT NULL,
-                category TEXT NOT NULL DEFAULT 'other',
-                message TEXT NOT NULL,
-                page_url TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL DEFAULT 'open',
-                admin_note TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL,
-                resolved_at TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_content_feedback_topic ON content_feedback (topic_id, status);
-
-            CREATE TABLE IF NOT EXISTS case_study_rubrics (
-                user_id TEXT NOT NULL DEFAULT 'guest',
-                case_study_id TEXT NOT NULL,
-                checked_criteria_json TEXT NOT NULL DEFAULT '[]',
-                notes TEXT NOT NULL DEFAULT '',
-                score INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (user_id, case_study_id)
-            );
-            """
-        )
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO users (id, username, display_name, email, password_hash, daily_goal, preferred_lens, created_at)
-            VALUES ('guest', 'guest', 'Local Guest', '', '', 3, 'intuition', ?)
-            """,
-            (utc_now_iso(),),
-        )
-        conn.commit()
-
-
-@contextmanager
-def get_conn(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
-    target = db_path or get_db_path()
-    conn = _connect(target)
-    conn.row_factory = sqlite3.Row
+def _upgrade_pre_alembic_sqlite(db_file: Path) -> None:
+    """Very old single-user SQLite files predate user_id columns; fix them before Alembic adopts the file."""
+    if not db_file.exists():
+        return
+    conn = sqlite3.connect(db_file)
     try:
-        yield conn
+        _migrate_single_user_tables(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+def alembic_config() -> Config:
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
+    return cfg
+
+
+def init_db(db_path: Path | None = None) -> None:
+    """Bring the database to the latest Alembic revision."""
+    engine = get_engine(db_path)
+    if is_sqlite(str(engine.url)) and engine.url.database:
+        _upgrade_pre_alembic_sqlite(Path(engine.url.database))
+    cfg = alembic_config()
+    with engine.begin() as conn:
+        cfg.attributes["connection"] = conn
+        command.upgrade(cfg, "head")
+
+
+@contextmanager
+def get_conn(db_path: Path | None = None) -> Iterator[DbConn]:
+    """One transaction; commits when the block exits without an exception."""
+    with connect(db_path) as conn:
+        yield conn
 
 
 def record_daily_activity(user_id: str, category: str, activity_date: str | None = None) -> None:
@@ -435,7 +315,7 @@ def list_lesson_progress(user_id: str = "guest") -> dict[str, dict[str, Any]]:
     }
 
 
-def _serialize_note(r: sqlite3.Row) -> dict[str, Any]:
+def _serialize_note(r: Any) -> dict[str, Any]:
     return {
         "id": r["id"],
         "topicId": r["topic_id"],
@@ -522,3 +402,78 @@ def delete_user_note(user_id: str, topic_id: str) -> bool:
             (user_id, topic_id),
         )
     return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------- Phase 1: blocks and attempts
+
+
+def record_block_views(user_id: str, topic_id: str, content_version: str, block_ids: list[str]) -> int:
+    """Mark blocks as seen. Returns how many were new for this learner."""
+    now = utc_now_iso()
+    new = 0
+    with get_conn() as conn:
+        for bid in dict.fromkeys(block_ids):
+            cur = conn.execute(
+                "UPDATE block_progress SET last_viewed_at = ?, content_version = ?"
+                " WHERE user_id = ? AND topic_id = ? AND block_id = ?",
+                (now, content_version, user_id, topic_id, bid),
+            )
+            if cur.rowcount == 0:
+                conn.execute(
+                    "INSERT INTO block_progress (user_id, topic_id, block_id, content_version, first_viewed_at, last_viewed_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    (user_id, topic_id, bid, content_version, now, now),
+                )
+                new += 1
+    if new:
+        record_daily_activity(user_id, "lesson")
+    return new
+
+
+def insert_attempt(
+    user_id: str,
+    topic_id: str,
+    block_id: str,
+    grading_version: int,
+    content_version: str,
+    response: Any,
+    passed: bool,
+    score: float,
+) -> dict[str, Any]:
+    now = utc_now_iso()
+    with get_conn() as conn:
+        attempt_id = conn.execute(
+            "INSERT INTO attempts (user_id, topic_id, block_id, grading_version, content_version, response_json, passed, score, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            (user_id, topic_id, block_id, grading_version, content_version, json.dumps(response), int(passed), score, now),
+        ).scalar()
+    record_daily_activity(user_id, "quiz")
+    return {"id": attempt_id, "createdAt": now}
+
+
+def block_states(user_id: str, topic_id: str | None = None) -> dict[tuple[str, str], dict[str, Any]]:
+    """Per (topic, block): seen?, attempts, and the grading versions that were passed."""
+    params: list[Any] = [user_id]
+    where = "WHERE user_id = ?"
+    if topic_id:
+        where += " AND topic_id = ?"
+        params.append(topic_id)
+    with get_conn() as conn:
+        views = conn.execute(f"SELECT topic_id, block_id, last_viewed_at FROM block_progress {where}", params).fetchall()
+        tries = conn.execute(
+            f"SELECT topic_id, block_id, grading_version, passed, response_json, created_at FROM attempts {where} ORDER BY id",
+            params,
+        ).fetchall()
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for v in views:
+        out.setdefault((v["topic_id"], v["block_id"]), {"viewed": False, "attempts": 0, "passedVersions": set(), "last": None})[
+            "viewed"
+        ] = True
+    for t in tries:
+        st = out.setdefault((t["topic_id"], t["block_id"]), {"viewed": False, "attempts": 0, "passedVersions": set(), "last": None})
+        st["attempts"] += 1
+        if t["passed"]:
+            st["passedVersions"].add(int(t["grading_version"]))
+        st["last"] = {"gradingVersion": int(t["grading_version"]), "passed": bool(t["passed"]),
+                      "response": json.loads(t["response_json"]), "at": t["created_at"]}
+    return out

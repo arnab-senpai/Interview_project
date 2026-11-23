@@ -1,0 +1,36 @@
+id: start-here
+title: Start here
+summary: One fixed path through the fundamentals. Every new learner starts at chapter 1; the app always shows the next chapter to continue.
+stages:
+  - id: stage-0
+    title: "Stage 0 · On-ramp"
+    summary: How to approach a design round, how a web system grows, and the numbers that decide it.
+    chapters:
+      - { number: 1, topic: how-to-approach-a-design-question, title: How to approach a design question }
+      - { number: 2, topic: one-server-to-a-million-users, title: From one server to a million users }
+      - { number: 3, topic: numbers-that-matter, title: Numbers that matter }
+  - id: stage-1
+    title: "Stage 1 · Building blocks"
+    summary: The parts every design reuses, in the order a learner needs them.
+    chapters:
+      - { number: 4, topic: l7-load-balancer, title: Load balancing, note: "Older lesson format until it is rewritten to the chapter template." }
+      - { number: 5, topic: caching-and-stampede, title: Caching and the stampede }
+      - { number: 6, topic: dns-and-cdn, title: DNS and CDN, note: "Older lesson format until it is rewritten." }
+      - { number: 7, topic: replication-and-consensus, title: Databases and replication, note: "Older lesson format until it is rewritten." }
+      - { number: 8, topic: cap-and-pacelc, title: Consistency and CAP }
+      - { number: 9, topic: sharding-and-hot-keys, title: Sharding and consistent hashing, note: "Older lesson format until it is rewritten." }
+      - { number: 10, topic: kafka-event-streaming, title: Queues and streams, note: "Older lesson format until it is rewritten." }
+      - { number: 11, topic: distributed-rate-limiter, title: Rate limiting, note: "Older lesson format until it is rewritten." }
+      - { number: 12, topic: idempotency-and-circuit-breakers, title: "Retries, idempotency and circuit breakers", note: "Older lesson format until it is rewritten." }
+  - id: stage-2
+    title: "Stage 2 · Guided designs"
+    summary: Classic interview designs, built step by step with the same template.
+    chapters:
+      - { number: 13, topic: url-shortener, title: URL shortener, note: "Older case-study format until it is rewritten." }
+      - { number: 14, topic: rate-limiter-system, title: Rate limiter }
+      - { number: 15, topic: unique-id-generator, title: Unique ID generator }
+      - { number: 16, topic: distributed-kv-store, title: Key-value store }
+      - { number: 17, topic: news-feed, title: News feed, note: "Older case-study format until it is rewritten." }
+      - { number: 18, topic: whatsapp-chat, title: Chat, note: "Older case-study format until it is rewritten." }
+      - { number: 19, topic: notification-system, title: Notification system }
+      - { number: 20, topic: video-streaming, title: Video streaming, note: "Older case-study format until it is rewritten." }

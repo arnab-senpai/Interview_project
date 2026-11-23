@@ -99,8 +99,10 @@ def test_sqlite_runs_in_wal_mode_with_busy_timeout(client: TestClient) -> None:
     from backend.app.db.database import get_conn
 
     with get_conn() as conn:
-        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
-        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] >= 5000
+        if conn.dialect != "sqlite":
+            pytest.skip("SQLite fallback only; this run uses Postgres")
+        assert conn.execute("PRAGMA journal_mode").scalar() == "wal"
+        assert conn.execute("PRAGMA busy_timeout").scalar() >= 5000
     db_file = os.environ["SYSTEMCRAFT_DB_PATH"]
     with sqlite3.connect(db_file) as raw:  # WAL is a property of the file, not the connection
         assert raw.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
