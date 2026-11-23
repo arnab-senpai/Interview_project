@@ -1,0 +1,297 @@
+schemaVersion: 2
+id: dns-and-cdn
+track: hld
+kind: concept
+template: chapter
+title: DNS and CDN
+summary: Follow a name to an address with DNS and its TTL, then put a CDN in front of files and public pages, with fingerprinted file names and an origin shield, so far visitors get fast answers and the servers only see what needs them.
+prerequisites: [l7-load-balancer, caching-and-stampede]
+related: [one-server-to-a-million-users, numbers-that-matter, video-streaming]
+sandboxLessonId: dns-and-cdn
+sources:
+  - title: "RFC 1034, Domain Names: Concepts and Facilities"
+    url: https://www.rfc-editor.org/rfc/rfc1034
+  - title: "RFC 9111, HTTP Caching"
+    url: https://www.rfc-editor.org/rfc/rfc9111
+  - title: MDN Web Docs, Cache-Control
+    url: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control
+  - title: Amazon CloudFront documentation, Origin Shield
+    url: https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/origin-shield.html
+  - title: Round-trip times and hit rates are planning assumptions, not measurements
+    note: Measure your own hit rate in the CDN's reports before sizing the origin.
+lastVerified: 2026-11-23
+appliesTo: Public websites and APIs with visitors far from the servers, using a pull CDN (CloudFront, Fastly, Cloudflare, Akamai or similar).
+
+numbers:
+  inputs:
+    - { id: page_rps, label: Page and API requests a second, unit: req/s, default: 5500, min: 100, max: 200000, scale: log }
+    - { id: static_rps, label: Image and script requests a second, unit: req/s, default: 5200, min: 100, max: 500000, scale: log }
+    - { id: avg_kb, label: Average file size, unit: KB, default: 200, min: 5, max: 5000, scale: log }
+    - { id: edge_hit, label: Share of file requests the edge answers, unit: "%", default: 0.95, min: 0.5, max: 0.99, step: 0.01 }
+    - { id: shield_hit, label: Share of edge misses the shield answers, unit: "%", default: 0.8, min: 0, max: 0.99, step: 0.01 }
+    - { id: public_share, label: Share of pages that are the same for everyone, unit: "%", default: 0.6, min: 0, max: 0.95, step: 0.05 }
+    - { id: page_hit, label: Share of public pages the edge answers, unit: "%", default: 0.8, min: 0, max: 0.99, step: 0.01 }
+    - { id: rtt_far_ms, label: Round trip to the data centre from far away, unit: ms, default: 150, min: 10, max: 300, step: 5 }
+    - { id: rtt_edge_ms, label: Round trip to a nearby edge, unit: ms, default: 15, min: 2, max: 60, step: 1 }
+    - { id: round_trips, label: Round trips before the first byte of a page, unit: trips, default: 4, min: 1, max: 8, step: 1 }
+  values:
+    - { id: all_rps, label: All requests reaching the servers with no CDN, formula: "page_rps + static_rps", unit: req/s }
+    - { id: origin_mbps, label: File traffic leaving the data centre with no CDN, formula: "static_rps * avg_kb * 8 / 1000", unit: Mbit/s }
+    - { id: edge_miss, label: File requests the edge passes on, formula: "static_rps * (1 - edge_hit)", unit: req/s }
+    - { id: app_rps_cdn, label: Requests reaching the servers with a CDN for files, formula: "page_rps + edge_miss", unit: req/s }
+    - { id: shield_out, label: File requests that reach the origin with a shield, formula: "edge_miss * (1 - shield_hit)", unit: req/s }
+    - { id: app_rps_shield, label: Requests reaching the servers with a shield, formula: "page_rps + shield_out", unit: req/s }
+    - { id: public_hits, label: Public page requests the edge answers, formula: "page_rps * public_share * page_hit", unit: req/s }
+    - { id: app_rps_final, label: Requests reaching the servers with pages at the edge, formula: "app_rps_shield - public_hits", unit: req/s }
+    - { id: wait_far, label: Waiting before the first byte from far away, formula: "rtt_far_ms * round_trips", unit: ms }
+    - { id: wait_edge, label: Waiting before the first byte from an edge, formula: "rtt_edge_ms * round_trips", unit: ms }
+  presets:
+    - { id: ten-cities, label: CityBeat in ten cities, inputs: { page_rps: 5500, static_rps: 5200 } }
+    - { id: poster, label: A viral festival poster, inputs: { static_rps: 40000, avg_kb: 1000 } }
+    - { id: one-city, label: CityBeat in one city, inputs: { page_rps: 520, static_rps: 500, rtt_far_ms: 20 } }
+
+components:
+  - { id: client, label: Visitors, kind: client, pos: [0, 2] }
+  - { id: dns, label: DNS, kind: dns, example: "Resolver, then CityBeat's name servers", pos: [0.6, -0.2], note: "Answers are cached for the TTL." }
+  - { id: cdn, label: CDN edge, kind: cdn, example: "e.g. CloudFront, Fastly, Cloudflare", pos: [2, 0.4], load: static_rps, note: "About 15 ms from most visitors." }
+  - { id: shield, label: Origin shield, kind: cdn, example: "One CDN location near Frankfurt", pos: [3.6, 0.4], load: edge_miss }
+  - { id: lb, label: Load balancer, kind: load_balancer, pos: [3.2, 2.6], load: all_rps, capacity: 20000, capacitySource: "Planning assumption for one L7 balancer instance", instances: 2 }
+  - { id: app, label: App servers (Frankfurt), kind: compute, pos: [5.2, 2.6], load: all_rps, capacity: 1500, capacitySource: "Planning assumption for one app server, from chapter 4", instances: 8 }
+
+arrows:
+  - { id: a-client-dns, from: client, to: dns, label: "Where is citybeat.com?", mode: sync }
+  - { id: a-client-lb, from: client, to: lb, label: "Pages, images and scripts", mode: sync, rate: all_rps }
+  - { id: a-lb-app, from: lb, to: app, label: "Spread across servers", mode: sync, rate: all_rps }
+  - { id: a-client-cdn, from: client, to: cdn, label: "Images and scripts", mode: sync, rate: static_rps }
+  - { id: a-cdn-lb, from: cdn, to: lb, label: "Edge misses", mode: sync, rate: edge_miss }
+  - { id: a-cdn-shield, from: cdn, to: shield, label: "Edge misses", mode: sync, rate: edge_miss }
+  - { id: a-shield-lb, from: shield, to: lb, label: "Shield misses", mode: sync, rate: shield_out }
+
+layers:
+  understand:
+    level: Junior
+    minutes: 15
+    goal: Explain how DNS finds a server and how a CDN answers near the visitor, and size what still reaches the origin.
+    sections:
+      problem:
+        - { id: problem, type: prose, role: problem, title: "Quiet servers, slow pages", bodyFile: problem.md }
+      clarify:
+        - id: clarify-questions
+          type: structuredTable
+          variant: clarify
+          title: Questions to ask before adding a CDN
+          columns: [{ key: q, label: Ask }, { key: a, label: Answer }, { key: why, label: What it changes }]
+          rows:
+            - { q: "Where are the visitors, and where are the servers?", a: "Ten cities across three continents; servers in Frankfurt.", why: "Distance sets the round-trip time a CDN can remove." }
+            - { q: "What share of requests are files?", a: "About half: images and scripts.", why: "Files are the easiest part to serve from an edge." }
+            - { q: "Which pages are the same for everyone?", a: "Event and city pages; not my RSVPs.", why: "Only shared pages may be cached at the edge." }
+            - { q: "How fast must a change show up?", a: "Prices within a minute; images on the next release.", why: "Sets max-age and whether files need new names." }
+        - id: clarify-predict
+          type: predict
+          prompt: "A visitor in Mumbai loads a page from Frankfurt, 150 ms away. The servers answer in 20 ms. Roughly how long before the first byte arrives?"
+          options:
+            - { text: "About 20 ms, the server's own time", explanation: "That ignores the network; every round trip costs 150 ms." }
+            - { text: "About 170 ms, one trip plus the server", explanation: "Close, but a new visit needs several trips before the request." }
+            - { text: "About 600 ms, four trips of 150 ms", explanation: "DNS, TCP, TLS and the request itself each cost a round trip." }
+            - { text: "About 2 s, because of packet loss", explanation: "Loss can add time, but distance alone explains the wait." }
+          answer: 2
+          reveal: "A first visit pays for a DNS lookup, a TCP connection, a TLS handshake and the request: about 4 × 150 ms = 600 ms before the 20 ms of server work. From an edge 15 ms away the same trips take about 60 ms."
+          gradingVersion: 1
+      numbers:
+        - { id: numbers-intro, type: prose, role: numbers, title: "How much does distance cost?", bodyFile: numbers.md }
+        - id: numbers-worksheet
+          type: estimationWorksheet
+          title: Work it out
+          prompt: "Within 2× counts."
+          lines:
+            - { value: edge_miss, prompt: "File requests a second the edge passes on", hint: "file requests × (1 − 95%)" }
+            - { value: wait_far, prompt: "Milliseconds before the first byte from Frankfurt", hint: "round trips × 150 ms" }
+            - { value: origin_mbps, prompt: "Mbit/s of files leaving Frankfurt with no CDN", hint: "requests × KB × 8 ÷ 1,000" }
+          gradingVersion: 1
+      design:
+        - { id: step1-text, type: prose, role: steps, title: "Step 1 · A name, an address, one data centre", bodyFile: step1.md, why: "Why start here: every request crosses the same long distance, and half of them fetch files that rarely change." }
+        - id: fig-one-region
+          type: figure
+          title: DNS finds Frankfurt, and every request travels there
+          stage: { add: [client, dns, lb, app, a-client-dns, a-client-lb, a-lb-app] }
+          claims: ["Resolvers cache the DNS answer for its TTL.", "Pages, images and scripts all reach the Frankfurt servers."]
+        - { id: step2-text, type: prose, role: steps, title: "Step 2 · A CDN for images and scripts", bodyFile: step2.md, why: "Why a pull CDN: it fills itself on demand, so there is nothing to upload or keep in sync." }
+        - id: fig-cdn
+          type: figure
+          title: The CDN edge answers most file requests near the visitor
+          base: fig-one-region
+          stage:
+            add: [cdn, a-client-cdn, a-cdn-lb]
+            change: [lb, app, a-client-lb, a-lb-app]
+            overrides: { lb: { load: app_rps_cdn }, app: { load: app_rps_cdn } }
+            arrowOverrides: { a-client-lb: { label: "Pages and API", rate: page_rps }, a-lb-app: { rate: app_rps_cdn } }
+          claims: ["Files go to the CDN; pages still go to Frankfurt.", "The edge answers 95% of file requests from its copy."]
+          whatIf: "Drop the edge hit rate to 70%. How many file requests reach Frankfurt?"
+        - { id: step3-text, type: prose, role: steps, title: "Step 3 · Cache headers and file names", bodyFile: step3.md, why: "Why fingerprinted names: a file that keeps the same content at its address can be cached for a year with no purge." }
+        - id: fig-headers
+          type: figure
+          title: Fingerprinted file names let the edge keep files for a year
+          base: fig-cdn
+          stage:
+            change: [cdn, a-cdn-lb]
+            overrides: { cdn: { note: "app.3f9c2a.js: max-age one year. HTML: short max-age." } }
+            arrowOverrides: { a-cdn-lb: { label: "First request for each new file" } }
+          claims: ["The origin's Cache-Control header sets how long the edge keeps a file.", "A new release links to new file names, so nothing needs purging."]
+        - { id: step4-text, type: prose, role: steps, title: "Step 4 · An origin shield", bodyFile: step4.md, why: "Why a shield: edge misses meet in one place, so the origin fetches each file once instead of once per edge city." }
+        - id: fig-shield
+          type: figure
+          title: An origin shield collapses edge misses into one fetch per file
+          base: fig-headers
+          stage:
+            add: [shield, a-cdn-shield, a-shield-lb]
+            remove: [a-cdn-lb]
+            change: [lb, app, a-lb-app]
+            overrides: { lb: { load: app_rps_shield }, app: { load: app_rps_shield } }
+            arrowOverrides: { a-lb-app: { rate: app_rps_shield } }
+          claims: ["All edges ask the shield, not the origin.", "A new file reaches the origin once, not once per edge city."]
+          whatIf: "Set the shield hit rate to 0%. What reaches Frankfurt now?"
+        - { id: step5-text, type: prose, role: steps, title: "Step 5 · Public pages at the edge", bodyFile: step5.md, why: "Why only public pages: a page cached at the edge is shown to everyone, so it must not depend on who is logged in." }
+        - id: fig-pages
+          type: figure
+          title: Public pages cached for 30 seconds take more load off the servers
+          base: fig-shield
+          stage:
+            change: [cdn, lb, app, a-client-cdn, a-client-lb, a-lb-app]
+            overrides: { cdn: { load: "static_rps + public_hits" }, lb: { load: app_rps_final }, app: { load: app_rps_final } }
+            arrowOverrides:
+              a-client-cdn: { label: "Files and public pages", rate: "static_rps + page_rps * public_share" }
+              a-client-lb: { label: "Logged-in pages and API", rate: "page_rps * (1 - public_share)" }
+              a-lb-app: { rate: app_rps_final }
+          claims: ["Public pages are cached at the edge for 30 seconds.", "Logged-in pages are private and always reach the origin."]
+  apply:
+    level: Mid
+    minutes: 12
+    goal: Choose a DNS TTL and a way to update cached content, and justify both.
+    sections:
+      deepDive:
+        - { id: deep-ttl, type: prose, role: deepDive, title: "Question: a long DNS TTL or a short one?", bodyFile: deep-ttl.md }
+        - id: deep-ttl-options
+          type: structuredTable
+          variant: decisionMatrix
+          columns: [{ key: option, label: TTL }, { key: good, label: Good }, { key: bad, label: Costs }, { key: fit, label: Fits }]
+          rows:
+            - { option: "Long (a day)", good: "Fewer lookups; keeps working if your name servers are briefly down.", bad: "A changed address takes up to a day to reach everyone.", fit: "Names that rarely move" }
+            - { option: "Short (60 s)", good: "A failover or move reaches most visitors within a minute or two.", bad: "More lookups; some resolvers and clients hold answers longer anyway.", fit: "Names you may need to move in an incident" }
+            - { option: "Lower it before a planned move", good: "Long TTL day to day, short only when needed.", bad: "Must start at least one old TTL before the move.", fit: "Planned migrations" }
+          caption: "Choice: 300 s for citybeat.com day to day, lowered to 60 s a day before any planned move."
+        - { id: deep-change, type: prose, role: deepDive, title: "Question: purge, short max-age, or new file names?", bodyFile: deep-change.md }
+        - id: deep-change-options
+          type: structuredTable
+          variant: decisionMatrix
+          columns: [{ key: option, label: Way }, { key: good, label: Good }, { key: bad, label: Costs }, { key: fit, label: Fits }]
+          rows:
+            - { option: "Fingerprinted file names", good: "Instant and exact; old and new files can be served side by side.", bad: "Needs a build step that renames files and rewrites links.", fit: "Scripts, styles, images" }
+            - { option: "Short max-age", good: "No tooling; changes appear within the max-age.", bad: "More requests to the origin; content is stale for up to max-age.", fit: "Public HTML pages" }
+            - { option: "Purge through the CDN's API", good: "Removes a specific copy on demand.", bad: "Takes seconds to minutes to reach every edge; easy to forget a path.", fit: "Mistakes: a wrong image or a leaked file" }
+          caption: "Choice: fingerprinted names for files, 30 s max-age for public pages, purge only to fix mistakes."
+      remember:
+        - id: remember
+          type: rememberCard
+          figure: fig-pages
+          facts:
+            - "DNS turns a name into an address, and resolvers keep the answer for its TTL, so changes take up to one TTL to reach everyone."
+            - "A pull CDN answers from an edge near the visitor and fetches from the origin on a miss; an origin shield collapses those misses."
+            - "Cache files for a year under fingerprinted names; cache only public pages, briefly; mark per-user pages private."
+          number: { value: "600", unit: ms, label: "of round trips before the first byte for a visitor 150 ms away (4 trips)" }
+          tradeoff: { choice: "Caching public pages at the edge", buys: "fast pages far away and a much lighter origin", costs: "pages up to 30 seconds old" }
+          sayIt: "I'd put a pull CDN with an origin shield in front of files and public pages, use fingerprinted file names with a one-year max-age, keep per-user pages private, and run DNS with a 300 s TTL I can lower before a move."
+      check:
+        - id: check-figure-shield
+          type: quiz
+          aboutFigure: fig-shield
+          prompt: "In the shield figure, a new poster goes live and 30 edge cities miss at once. How many requests reach Frankfurt?"
+          options:
+            - { text: "Thirty, one from each edge city", explanation: "That is without a shield; the edges now ask the shield." }
+            - { text: "One, sent by the shield", explanation: "The shield fetches the file once and answers all the edges." }
+            - { text: "None, the shield already has it", explanation: "A brand-new file isn't anywhere yet; someone must fetch it." }
+            - { text: "One per visitor in each city", explanation: "Each edge keeps a copy after its first miss." }
+          answer: 1
+          gradingVersion: 1
+        - id: check-fingerprint
+          type: quiz
+          prompt: "Why can app.3f9c2a.js be cached for a year without a purge after each release?"
+          options:
+            - { text: "The CDN checks the file every hour", explanation: "With a one-year max-age it doesn't need to ask." }
+            - { text: "A release links to a different file name", explanation: "New content gets a new name, so the old copy just stops being asked for." }
+            - { text: "Browsers ignore max-age for scripts", explanation: "Browsers honour max-age for scripts too." }
+            - { text: "Scripts are small, so stale copies don't matter", explanation: "A stale script can break the page; size isn't the point." }
+          answer: 1
+          gradingVersion: 1
+        - id: check-ttl
+          type: quiz
+          prompt: "citybeat.com has a DNS TTL of one day. You move it to a new load balancer. What happens?"
+          options:
+            - { text: "Some still reach the old one for a day", explanation: "Resolvers keep the old answer until the TTL runs out." }
+            - { text: "Everyone moves as soon as you save the record", explanation: "Only resolvers without a cached answer see it at once." }
+            - { text: "The CDN updates every resolver for you", explanation: "A CDN doesn't control other people's resolvers." }
+            - { text: "Old addresses stop working at once", explanation: "The old balancer still answers until you turn it off." }
+          answer: 0
+          gradingVersion: 1
+        - id: check-private
+          type: quiz
+          prompt: "Which page must not be cached at the edge?"
+          options:
+            - { text: "This week's events in Lisbon", explanation: "Same for every visitor; fine to cache briefly." }
+            - { text: "The poster for a festival", explanation: "A shared file; ideal for the edge." }
+            - { text: "The list of my RSVPs", explanation: "It depends on who is logged in, so mark it private." }
+            - { text: "The site's main script file", explanation: "Shared and fingerprinted; cache it for a year." }
+          answer: 2
+          gradingVersion: 1
+  defend:
+    level: Senior
+    minutes: 15
+    goal: Find a caching leak in real code and defend a CDN design for a worldwide announcement.
+    blocks:
+      - id: bug-public
+        type: spotTheBug
+        title: Spot the bug
+        prompt: "After a release, some visitors saw another person's RSVP list. Find why in three steps."
+        language: python
+        code: |
+          1  @app.middleware("http")
+          2  async def cache_headers(request, call_next):
+          3      response = await call_next(request)
+          4      if request.method == "GET":
+          5          response.headers["Cache-Control"] = "public, max-age=60"
+          6      return response
+          7
+          8  @app.get("/me/rsvps")
+          9  def my_rsvps(user=Depends(current_user)):
+          10     return rsvps_for(user.id)
+        steps:
+          - prompt: "Which lines hold the problem?"
+            options: ["Lines 4-5: every GET is marked public", "Line 3: calling the next handler", "Lines 8-10: the RSVP query", "Line 1: using middleware"]
+            answer: 0
+            explanation: "The header is set for every GET, including pages that depend on the user."
+          - prompt: "What goes wrong?"
+            options: ["The page is cached in the browser only", "The edge stores one user's RSVP page and serves it to others at the same address", "Responses take 60 s to arrive", "The CDN refuses the header"]
+            answer: 1
+            explanation: "\"public\" lets shared caches keep the response, and the address /me/rsvps is the same for everyone."
+          - prompt: "Which change fixes it best?"
+            options: ["Lower max-age to 5 s", "Mark only known public pages public, send private, no-store on per-user pages, and purge the leaked copies", "Turn off the CDN", "Add the user's name to the page title"]
+            answer: 1
+            explanation: "Default to private and opt shared pages in. A shorter max-age only shrinks the leak."
+        gradingVersion: 1
+      - id: design-lineup
+        type: designPrompt
+        title: Defend a design
+        prompt: "A festival announces its lineup at 18:00. Within a minute, 40,000 visitors a second worldwide open the lineup page and its 1 MB poster. Describe how DNS and the CDN keep the servers healthy, and what you'd watch."
+        rubric:
+          - "Sizes the file traffic (40,000 × 1 MB is about 320 Gbit/s) and puts it on the CDN, not the origin."
+          - "Pre-warms the poster and page through the shield before 18:00, or accepts one fetch per file through the shield."
+          - "Caches the lineup page as public for a short max-age; keeps per-user parts out of it."
+          - "Uses fingerprinted names for the poster and assets so a late fix doesn't need a purge."
+          - "Names metrics: edge hit rate, origin requests a second, origin errors, time to first byte by region."
+        modelAnswers:
+          - level: Mid
+            answer: "Serve the poster and the lineup page from the CDN with an origin shield. Cache the page for 30 seconds and the poster for a year under a fingerprinted name. Watch the edge hit rate and origin requests."
+          - level: Senior
+            answer: "Publish the page and poster a few minutes early under fingerprinted names and request them through the shield so it is warm. Make the lineup page fully public and load per-user bits (my RSVP) with a separate private API call. Set stale-while-revalidate so the edge keeps serving while it refreshes. Alert on origin requests, error rate, and regional time to first byte."
+          - level: Staff
+            answer: "Treat the announcement as a planned event with the CDN provider: confirm capacity for about 320 Gbit/s, enable the shield in the origin's region, and set stale-if-error so the edge serves the last good page if the origin fails. Keep the private API on its own name and rate limit it. Lower the DNS TTL beforehand only if a failover might be needed, and rehearse a purge of a wrong poster."
+        gradingVersion: 1

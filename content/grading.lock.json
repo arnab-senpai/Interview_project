@@ -31,6 +31,38 @@
     "gradingVersion": 1,
     "hash": "1ee9b9cceae0dba5"
   },
+  "dns-and-cdn/bug-public": {
+    "gradingVersion": 1,
+    "hash": "b7e86a3ba15c71f9"
+  },
+  "dns-and-cdn/check-figure-shield": {
+    "gradingVersion": 1,
+    "hash": "cd6f901d0e055404"
+  },
+  "dns-and-cdn/check-fingerprint": {
+    "gradingVersion": 1,
+    "hash": "839d94f38a95c645"
+  },
+  "dns-and-cdn/check-private": {
+    "gradingVersion": 1,
+    "hash": "304fd31dbd4d8a54"
+  },
+  "dns-and-cdn/check-ttl": {
+    "gradingVersion": 1,
+    "hash": "c08628941836e71c"
+  },
+  "dns-and-cdn/clarify-predict": {
+    "gradingVersion": 1,
+    "hash": "bd38ef80bcf2188e"
+  },
+  "dns-and-cdn/design-lineup": {
+    "gradingVersion": 1,
+    "hash": "79032a055cd20d7a"
+  },
+  "dns-and-cdn/numbers-worksheet": {
+    "gradingVersion": 1,
+    "hash": "01b95f497fb254c8"
+  },
   "how-to-approach-a-design-question/check-figure-db": {
     "gradingVersion": 1,
     "hash": "7939c2baec4d648d"

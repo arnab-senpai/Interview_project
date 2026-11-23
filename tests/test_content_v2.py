@@ -167,7 +167,7 @@ def test_topic_routes_list_and_strip_keys(client: TestClient) -> None:
     ids = {t["id"] for t in listing["topics"]}
     assert PILOTS <= ids
     # Old v1 lessons are served as adapted v2 topics ("Preview"), not as a second format.
-    assert any(t["id"] == "dns-and-cdn" and t["format"] == "v2" and t["legacy"] for t in listing["topics"])
+    assert any(t["format"] == "v2" and t["legacy"] for t in listing["topics"])  # e.g. a chapter not yet rewritten
     assert all(t["status"] != "ready" for t in listing["v1Topics"])  # only planned v1 entries remain listed there
 
     res = client.get("/api/tracks/hld/topics/caching-and-stampede", headers=h)
