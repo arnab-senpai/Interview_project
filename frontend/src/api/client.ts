@@ -233,7 +233,7 @@ export interface CapacityResult {
 }
 
 export interface SearchHit {
-  kind: "lesson" | "case_study" | "pattern" | "ddia";
+  kind: "chapter" | "lesson" | "case_study" | "pattern" | "ddia";
   id: string;
   title: string;
   subtitle: string;

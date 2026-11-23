@@ -1,7 +1,16 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Search, X } from "lucide-react";
 import { api, type SearchHit } from "../api/client";
+import type { PathChapter } from "../content/types";
+
+const KIND_LABEL: Record<SearchHit["kind"], string> = {
+  chapter: "Chapter",
+  lesson: "Topic",
+  case_study: "Guided design",
+  pattern: "Pattern",
+  ddia: "Reading notes",
+};
 
 interface SearchModalProps {
   open: boolean;
@@ -12,6 +21,31 @@ interface SearchModalProps {
 export const SearchModal: React.FC<SearchModalProps> = ({ open, onClose, onSelectHit }) => {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchHit[]>([]);
+  const [chapters, setChapters] = useState<PathChapter[]>([]);
+
+  // The path is the source of truth for chapter names; the older search index still has the v1 titles.
+  useEffect(() => {
+    if (!open || chapters.length) return;
+    api
+      .getPath("start-here")
+      .then((p) => setChapters(p.stages.flatMap((s) => s.chapters).filter((c) => c.available)))
+      .catch(() => undefined);
+  }, [open]);
+
+  const merged = useMemo<SearchHit[]>(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const byId = new Map(chapters.map((c) => [c.topicId, c]));
+    const words = q.split(/\s+/);
+    const chapterHits: SearchHit[] = chapters
+      .filter((c) => {
+        const hay = `${c.title} ${c.summary ?? ""}`.toLowerCase();
+        return words.every((w) => hay.includes(w)) || results.some((r) => r.id === c.topicId);
+      })
+      .map((c) => ({ kind: "chapter", id: c.topicId, title: `${c.number}. ${c.title}`, subtitle: c.summary ?? "", status: "ready" }));
+    // Older hits for a chapter on the path are folded into that chapter.
+    return [...chapterHits, ...results.filter((r) => !byId.has(r.id))];
+  }, [query, chapters, results]);
 
   useEffect(() => {
     if (!open) return;
@@ -87,14 +121,14 @@ export const SearchModal: React.FC<SearchModalProps> = ({ open, onClose, onSelec
         <div style={{ maxHeight: 380, overflow: "auto", padding: 10 }}>
           {query.trim() === "" ? (
             <div className="mono" style={{ padding: 16, fontSize: 12, color: "var(--ink-muted)" }}>
-              Try typing: <strong>raft</strong>, <strong>lsm</strong>, <strong>stampede</strong>, <strong>rag</strong>, <strong>uber</strong>, <strong>write skew</strong>...
+              Try typing: <strong>load balancing</strong>, <strong>caching</strong>, <strong>queues</strong>, <strong>url shortener</strong>...
             </div>
-          ) : results.length === 0 ? (
+          ) : merged.length === 0 ? (
             <div className="mono" style={{ padding: 16, fontSize: 12, color: "var(--ink-muted)" }}>
               No matching topics found.
             </div>
           ) : (
-            results.map((hit) => (
+            merged.map((hit) => (
               <button
                 key={`${hit.kind}-${hit.id}`}
                 onClick={() => {
@@ -119,11 +153,12 @@ export const SearchModal: React.FC<SearchModalProps> = ({ open, onClose, onSelec
                 onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
               >
                 <div>
-                  <div className="mono" style={{ fontWeight: 700, fontSize: 13 }}>{hit.title}</div>
+                  <div style={{ fontWeight: 650, fontSize: 13.5 }}>{hit.title}</div>
                   <div style={{ fontSize: 11.5, color: "var(--ink-muted)" }}>{hit.subtitle}</div>
                 </div>
                 <span className={`badge ${hit.status === "ready" ? "badge-accent" : ""}`}>
-                  {hit.kind.toUpperCase()} {hit.status === "planned" ? "· PLANNED" : ""}
+                  {KIND_LABEL[hit.kind] ?? hit.kind}
+                  {hit.status === "planned" ? " · coming soon" : ""}
                 </span>
               </button>
             ))

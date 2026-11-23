@@ -310,6 +310,10 @@ export function App() {
   };
 
   const handleSearchHit = (hit: SearchHit) => {
+    if (hit.kind === "chapter") {
+      openChapter(hit.id);
+      return;
+    }
     if (hit.kind === "lesson" && hit.status === "ready") {
       openTopic(hit.id);
     } else if (hit.kind === "case_study" && hit.status === "ready") {
