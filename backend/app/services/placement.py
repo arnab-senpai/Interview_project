@@ -22,6 +22,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from backend.app.content.placement_pool import pool  # noqa: F401 (re-exported)
 from backend.app.db.database import get_conn, insert_attempt, insert_events, unit_statuses, utc_now_iso
 from backend.app.services import review
 from backend.app.services.grading import grade
@@ -29,15 +30,6 @@ from backend.app.services.grading import grade
 MAX_QUESTIONS = 12
 MISSES_TO_STOP = 2
 PLACED_FIRST_REVIEW_DAYS = 14
-
-
-def pool(topic: dict[str, Any]) -> list[dict[str, Any]]:
-    choice = [b for b in topic["blocks"] if b["type"] in ("quiz", "predict") and b.get("checkable")]
-    tagged = [b for b in choice if b.get("placement")]
-    if tagged:
-        return tagged
-    in_check = [b for b in choice if b.get("section") == "check"]
-    return in_check or choice
 
 
 def per_unit(n_units: int) -> int:
