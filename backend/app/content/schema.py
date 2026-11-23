@@ -56,6 +56,21 @@ class Source(_M):
     note: str | None = None
 
 
+class FurtherReading(_M):
+    """Reference reading shown after the chapter, e.g. the DDIA module essays."""
+
+    title: str
+    body: str | None = None
+    url: str | None = None
+
+
+class LegacySource(_M):
+    """Set on topics generated from v1 JSON by the adapter (v1_adapter.py)."""
+
+    kind: Literal["lesson", "case_study"]
+    id: str
+
+
 # ---------------------------------------------------------------- numbers layer
 
 
@@ -385,6 +400,8 @@ class Topic(_M):
     prerequisites: list[str] = Field(default_factory=list)
     related: list[str] = Field(default_factory=list)
     sandboxLessonId: str | None = None  # v1 Explorer lesson with this design, opened as the Sandbox
+    legacy: LegacySource | None = None  # generated from a v1 lesson; shown as "Preview" until rewritten
+    furtherReading: list[FurtherReading] = Field(default_factory=list)
     sources: list[Source]
     lastVerified: date
     appliesTo: str
@@ -406,6 +423,9 @@ class PathEntry(_M):
     number: int
     topic: str
     title: str  # shown even when the topic is still planned
+    # "planned": no topic exists yet. A "ready" entry must resolve to a v2 topic,
+    # written or adapted from v1, or the path lint fails.
+    status: Literal["ready", "planned"] = "ready"
     note: str | None = None
 
 

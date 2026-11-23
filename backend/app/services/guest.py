@@ -118,6 +118,8 @@ def load_guest(guest_id: str) -> dict[str, Any] | None:
 
 _USER_TABLES = (
     "block_progress",
+    "unit_status",
+    "learning_events",
     "attempts",
     "lesson_progress",
     "flashcard_reviews",
@@ -147,7 +149,7 @@ def merge_guest_into(guest_id: str, user_id: str) -> dict[str, int]:
             return {}
 
         # Append-only logs: every guest row moves over.
-        for table in ("attempts", "quiz_attempts", "estimation_runs"):
+        for table in ("attempts", "quiz_attempts", "estimation_runs", "learning_events"):
             moved[table] = conn.execute(
                 f"UPDATE {table} SET user_id = ? WHERE user_id = ?", (user_id, guest_id)
             ).rowcount
@@ -234,7 +236,7 @@ def merge_guest_into(guest_id: str, user_id: str) -> dict[str, int]:
                 conn.execute("UPDATE user_notes SET content_md = ?, updated_at = ? WHERE id = ?", (merged, utc_now_iso(), mine["id"]))
 
         # Spaced-repetition state and rubric drafts: keep the account's where both exist.
-        for table, key in (("flashcard_reviews", "card_id"), ("case_study_rubrics", "case_study_id")):
+        for table, key in (("flashcard_reviews", "card_id"), ("case_study_rubrics", "case_study_id"), ("unit_status", "topic_id")):
             for g in conn.execute(f"SELECT {key} FROM {table} WHERE user_id = ?", (guest_id,)).fetchall():
                 exists = conn.execute(
                     f"SELECT 1 FROM {table} WHERE user_id = ? AND {key} = ?", (user_id, g[key])

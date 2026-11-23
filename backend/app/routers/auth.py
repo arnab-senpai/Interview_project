@@ -8,7 +8,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
-from backend.app.db.database import get_conn, get_streak_summary, utc_now_iso
+from backend.app.db.database import get_conn, get_streak_summary, utc_now_iso, valid_timezone
 from backend.app.services.auth import (
     compute_expiry_iso,
     create_access_token,
@@ -44,6 +44,7 @@ class PreferencesIn(BaseModel):
     display_name: str | None = Field(default=None, max_length=60, alias="displayName")
     daily_goal: int | None = Field(default=None, ge=1, le=50, alias="dailyGoal")
     preferred_lens: str | None = Field(default=None, alias="preferredLens")
+    timezone: str | None = Field(default=None, max_length=64)  # IANA name from the browser
 
     model_config = {"populate_by_name": True}
 
@@ -163,10 +164,15 @@ def update_preferences(payload: PreferencesIn, user: dict = Depends(require_user
         next_display = (payload.display_name.strip() if payload.display_name is not None else row["display_name"]) or row["username"]
         next_goal = payload.daily_goal if payload.daily_goal is not None else row["daily_goal"]
         next_lens = payload.preferred_lens if payload.preferred_lens is not None else row["preferred_lens"]
+        next_tz = row["timezone"]
+        if payload.timezone is not None:
+            next_tz = valid_timezone(payload.timezone)
+            if not next_tz:
+                raise HTTPException(status_code=400, detail="timezone must be an IANA name such as Asia/Kolkata")
 
         conn.execute(
-            "UPDATE users SET display_name = ?, daily_goal = ?, preferred_lens = ? WHERE id = ?",
-            (next_display, next_goal, next_lens, uid),
+            "UPDATE users SET display_name = ?, daily_goal = ?, preferred_lens = ?, timezone = ? WHERE id = ?",
+            (next_display, next_goal, next_lens, next_tz, uid),
         )
         updated = conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
 

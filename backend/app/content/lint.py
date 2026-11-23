@@ -29,6 +29,19 @@ def lint_topic(ct: CompiledTopic) -> None:
     pub = ct.public
     if not pub:
         return
+    if pub.get("legacy"):
+        # Adapted v1 topics: report everything, fail on nothing. A rewrite to the
+        # chapter template replaces them and gets the full lint.
+        before = len(ct.errors)
+        _lint_topic(ct)
+        ct.warnings.extend(f"(preview) {e}" for e in ct.errors[before:])
+        del ct.errors[before:]
+        return
+    _lint_topic(ct)
+
+
+def _lint_topic(ct: CompiledTopic) -> None:
+    pub = ct.public
     blocks: list[dict[str, Any]] = pub["blocks"]
     by_id = {b["id"]: b for b in blocks}
 
@@ -188,7 +201,16 @@ def lint_graph(topics: list[CompiledTopic], v1_ids: Iterable[str]) -> list[str]:
             errors.append(f"path {p.id}: chapter numbers repeat")
         for s in p.stages:
             for e in s.chapters:
-                if e.topic in v2 and v2[e.topic].public.get("status") != "ready":
+                if e.status == "planned":
+                    if e.topic in v2:
+                        errors.append(f"path {p.id}: chapter {e.number} is marked planned but {e.topic!r} exists; drop status")
+                    continue
+                if e.topic not in v2:
+                    errors.append(
+                        f"path {p.id}: chapter {e.number} points at {e.topic!r}, which is not a v2 topic (written or adapted);"
+                        " write it or mark it status: planned"
+                    )
+                elif v2[e.topic].public.get("status") != "ready":
                     errors.append(f"path {p.id}: chapter {e.number} links a draft topic as if it were live")
     return errors
 
@@ -198,8 +220,8 @@ def lint_grading_lock(topics: list[CompiledTopic], lock: dict[str, dict[str, Any
     lock = load_grading_lock() if lock is None else lock
     errors: list[str] = []
     for t in topics:
-        if not t.public:
-            continue
+        if not t.public or t.public.get("legacy"):
+            continue  # adapted v1 quizzes have no authored gradingVersion yet
         versions = {b["id"]: b.get("gradingVersion", 1) for b in t.public["blocks"] if b.get("checkable")}
         for bid, sha in t.grading_hashes.items():
             key = f"{t.id}/{bid}"
@@ -219,7 +241,7 @@ def lint_grading_lock(topics: list[CompiledTopic], lock: dict[str, dict[str, Any
 def build_lock(topics: list[CompiledTopic]) -> dict[str, dict[str, Any]]:
     lock: dict[str, dict[str, Any]] = {}
     for t in topics:
-        if not t.public:
+        if not t.public or t.public.get("legacy"):
             continue
         versions = {b["id"]: b.get("gradingVersion", 1) for b in t.public["blocks"] if b.get("checkable")}
         for bid, sha in sorted(t.grading_hashes.items()):

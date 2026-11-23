@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.app.db.database import (
+    insert_attempt,
     get_conn,
     get_streak_summary,
     list_lesson_progress,
@@ -18,6 +19,7 @@ from backend.app.db.database import (
     utc_now_iso,
 )
 from backend.app.services.auth import require_user
+from backend.app.services.content_store import get_content
 from backend.app.services.curriculum_loader import get_store
 from backend.app.services.estimator import calculate_capacity
 from backend.app.services.sm2 import Rating, Sm2State, compute_next_sm2
@@ -328,7 +330,14 @@ def submit_quiz_answer(
             """,
             (uid, question_id, question.topic_id, payload.selected_index, int(is_correct), now),
         )
-    record_daily_activity(uid, "quiz")
+    # One progress record: the same answer counts on the chapter, whose adapted quiz block has this id.
+    content = get_content()
+    pub = content.public(question.topic_id)
+    if pub and content.block(question.topic_id, question_id):
+        insert_attempt(uid, question.topic_id, question_id, 1, pub["contentVersion"], {"choice": payload.selected_index},
+                       is_correct, 1.0 if is_correct else 0.0)
+    else:
+        record_daily_activity(uid, "quiz")
 
     return {
         "questionId": question_id,

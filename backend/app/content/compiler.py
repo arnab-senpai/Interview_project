@@ -194,6 +194,11 @@ def compile_topic(topic_dir: Path) -> CompiledTopic:
         ct.errors.append(f"YAML error: {exc}")
         return ct
     raw = _resolve_files(raw, topic_dir, ct.errors)
+    return compile_raw(raw, ct)
+
+
+def compile_raw(raw: Any, ct: CompiledTopic) -> CompiledTopic:
+    """Validate and compile one topic already loaded as a dict (from YAML or the v1 adapter)."""
     try:
         model = Topic.model_validate(raw)
     except ValidationError as exc:
@@ -202,8 +207,8 @@ def compile_topic(topic_dir: Path) -> CompiledTopic:
             ct.errors.append(f"schema: {loc}: {err['msg']}")
         return ct
     ct.model = model
-    if model.id != topic_dir.name:
-        ct.errors.append(f"id {model.id!r} must match its folder name {topic_dir.name!r}")
+    if model.id != ct.id:
+        ct.errors.append(f"id {model.id!r} must match its folder name {ct.id!r}")
 
     data = model.model_dump(mode="json", by_alias=True, exclude_none=True)
 

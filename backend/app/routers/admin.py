@@ -95,3 +95,22 @@ def update_feedback(feedback_id: int, payload: FeedbackUpdateIn) -> dict:
             raise HTTPException(status_code=404, detail="Feedback not found")
         row = conn.execute("SELECT * FROM content_feedback WHERE id = ?", (feedback_id,)).fetchone()
     return {"feedback": serialize_feedback(row)}
+
+
+@router.get("/funnel")
+def get_funnel(path_id: str = Query(default="start-here", alias="pathId"), since: str | None = Query(default=None)) -> dict:
+    """Per path chapter: how many learners opened it, tried a check, and passed one. Shows where people stop."""
+    from backend.app.db.database import funnel_counts
+    from backend.app.services.content_store import get_content
+
+    path = get_content().paths.get(path_id)
+    if not path:
+        raise HTTPException(status_code=404, detail=f"Path '{path_id}' not found")
+    counts = funnel_counts(since)
+    rows = []
+    for stage in path.stages:
+        for e in stage.chapters:
+            c = counts.get(e.topic, {"opened": 0, "attempted": 0, "passedACheck": 0})
+            rows.append({"number": e.number, "topicId": e.topic, "title": e.title, "stageId": stage.id,
+                         "planned": e.status == "planned", **c})
+    return {"pathId": path_id, "since": since, "chapters": rows}

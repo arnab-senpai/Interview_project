@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from backend.app.db.database import block_states, insert_attempt, list_lesson_progress, record_block_views
+from backend.app.db.database import EVENT_KINDS, block_states, insert_attempt, insert_events, record_block_views, unit_statuses
 from backend.app.services.auth import require_user
 from backend.app.services.content_store import get_content
 from backend.app.services.grading import grade
@@ -70,12 +71,14 @@ def topic_progress(user_id: str, topic: dict[str, Any], states=None) -> dict[str
 def list_topics(track: Track, user: dict = Depends(require_user)) -> dict:
     content = get_content()
     states = block_states(user["id"])
+    units = unit_statuses(user["id"])
     topics = []
     for summary in content.summaries(track):
         pub = content.public(summary["id"])
         assert pub is not None
         prog = topic_progress(user["id"], pub, {k: v for k, v in states.items() if k[0] == summary["id"]})
-        topics.append({**summary, "progress": {"status": prog["status"], "layers": prog["layers"]}})
+        status = overlay_unit_status(prog["status"], units.get(summary["id"]))
+        topics.append({**summary, "progress": {"status": status, "layers": prog["layers"]}})
     return {"track": track, "topics": topics, "v1Topics": content.v1_summaries(track)}
 
 
@@ -96,7 +99,9 @@ def get_topic(
         keep = {b for l in pub["layers"] if l["name"] == layer for b in l["blockIds"]}
         # Figures stay available: later layers' checks and the Remember card point at design figures.
         topic = {**pub, "blocks": [b for b in pub["blocks"] if b["id"] in keep or b["type"] == "figure"]}
-    return {"topic": topic, "progress": topic_progress(user["id"], pub)}
+    prog = topic_progress(user["id"], pub)
+    prog["status"] = overlay_unit_status(prog["status"], unit_statuses(user["id"]).get(topic_id))
+    return {"topic": topic, "progress": prog}
 
 
 @router.get("/graph")
@@ -104,55 +109,112 @@ def get_graph() -> dict:
     return get_content().graph()
 
 
-@router.get("/paths/{path_id}")
-def get_path(path_id: str, user: dict = Depends(require_user)) -> dict:
+def overlay_unit_status(status: str, unit: dict[str, Any] | None) -> str:
+    """A chapter finished under v1 or placed out stays done even before its checks are passed here."""
+    if status == "completed" or not unit:
+        return status
+    return "placed_out" if unit["status"] == "placed_out" else "completed"
+
+
+def resume_point(topic: dict[str, Any], prog: dict[str, Any]) -> dict[str, Any]:
+    """Where Continue should land: the first block not yet seen, else the first unpassed check."""
+    blocks = topic["blocks"]
+    per = prog["blocks"]
+    target = next((b for b in blocks if b["type"] != "figure" and per[b["id"]]["status"] == "new"), None)
+    if target is None:
+        target = next((b for b in blocks if b.get("checkable") and per[b["id"]]["status"] not in ("passed", "recheck")), None)
+    if target is None:
+        target = blocks[0] if blocks else None
+    if target is None:
+        return {"layer": None, "section": None, "blockId": None, "stepKey": None}
+    return {"layer": target.get("layer"), "section": target.get("section"), "blockId": target["id"],
+            "stepKey": step_keys(topic).get(target["id"])}
+
+
+def step_keys(topic: dict[str, Any]) -> dict[str, str]:
+    """Block id -> the reader's step key ("design-3", "section-check", "layer-apply").
+
+    Mirrors buildSteps() in frontend/src/components/chapter/ChapterView.tsx so Continue
+    can land on the right step."""
+    keys: dict[str, str] = {}
+    design_n = 0
+    current = ""
+    for b in topic["blocks"]:
+        if b.get("section") == "design":
+            if b["type"] == "prose" or not current.startswith("design-"):
+                design_n += 1
+                current = f"design-{design_n}"
+        else:
+            current = f"section-{b['section']}" if b.get("section") else f"layer-{b.get('layer')}"
+        keys[b["id"]] = current
+    return keys
+
+
+def path_view(user_id: str, path_id: str) -> dict[str, Any] | None:
     content = get_content()
     path = content.paths.get(path_id)
     if not path:
-        raise HTTPException(status_code=404, detail=f"Path '{path_id}' not found")
-    from backend.app.services.curriculum_loader import get_store
-
-    v1 = get_store()
-    v1_progress = list_lesson_progress(user["id"])
-    states = block_states(user["id"])
-    continue_id: str | None = None
+        return None
+    states = block_states(user_id)
+    units = unit_statuses(user_id)
+    cont: dict[str, Any] | None = None
     stages = []
+    done = total = 0
     for stage in path.stages:
         chapters = []
         for entry in stage.chapters:
-            pub = content.public(entry.topic)
-            if pub:
-                prog = topic_progress(user["id"], pub, {k: v for k, v in states.items() if k[0] == entry.topic})
-                chapters.append(
-                    {
-                        "number": entry.number,
-                        "topicId": entry.topic,
-                        "title": pub["title"],
-                        "summary": pub["summary"],
-                        "format": "v2",
-                        "available": True,
-                        "minutes": sum(l["minutes"] for l in pub["layers"]),
-                        "status": prog["status"],
-                        "note": entry.note,
-                    }
-                )
-            else:
-                ready_v1 = entry.topic in v1.lessons_by_id or entry.topic in v1.case_studies_by_id
-                chapters.append(
-                    {
-                        "number": entry.number,
-                        "topicId": entry.topic,
-                        "title": entry.title,
-                        "format": "v1" if ready_v1 else "planned",
-                        "available": ready_v1,
-                        "status": v1_progress.get(entry.topic, {}).get("status", "not_started") if ready_v1 else "planned",
-                        "note": entry.note,
-                    }
-                )
-            if continue_id is None and stage.fixedOrder and chapters[-1]["available"] and chapters[-1]["status"] != "completed":
-                continue_id = entry.topic
-        stages.append({"id": stage.id, "title": stage.title, "summary": stage.summary, "fixedOrder": stage.fixedOrder, "chapters": chapters})
-    return {"id": path.id, "title": path.title, "summary": path.summary, "stages": stages, "continueTopicId": continue_id}
+            pub = content.public(entry.topic) if entry.status == "ready" else None
+            row: dict[str, Any] = {
+                "number": entry.number,
+                "topicId": entry.topic,
+                "stageId": stage.id,
+                "title": pub["title"] if pub else entry.title,
+                "note": entry.note,
+            }
+            if pub is None:
+                row.update({"summary": None, "format": "planned", "legacy": False, "available": False, "minutes": None,
+                            "status": "planned"})
+                chapters.append(row)
+                continue
+            prog = topic_progress(user_id, pub, {k: v for k, v in states.items() if k[0] == entry.topic})
+            status = overlay_unit_status(prog["status"], units.get(entry.topic))
+            total += 1
+            done += status in ("completed", "placed_out")
+            row.update(
+                {
+                    "summary": pub["summary"],
+                    "format": "v2",
+                    "legacy": bool(pub.get("legacy")),
+                    "available": True,
+                    "minutes": sum(l["minutes"] for l in pub["layers"]),
+                    "status": status,
+                    "layers": prog["layers"],
+                }
+            )
+            chapters.append(row)
+            if cont is None and stage.fixedOrder and status not in ("completed", "placed_out"):
+                cont = {"topicId": entry.topic, "number": entry.number, "title": pub["title"], "stageId": stage.id,
+                        **resume_point(pub, prog)}
+        stages.append({"id": stage.id, "title": stage.title, "summary": stage.summary, "fixedOrder": stage.fixedOrder,
+                       "chapters": chapters})
+    return {
+        "id": path.id,
+        "title": path.title,
+        "summary": path.summary,
+        "stages": stages,
+        "chaptersDone": done,
+        "chaptersAvailable": total,
+        "continue": cont,
+        "continueTopicId": cont["topicId"] if cont else None,
+    }
+
+
+@router.get("/paths/{path_id}")
+def get_path(path_id: str, user: dict = Depends(require_user)) -> dict:
+    view = path_view(user["id"], path_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail=f"Path '{path_id}' not found")
+    return view
 
 
 class BlockViewsIn(BaseModel):
@@ -239,3 +301,29 @@ def list_attempts(topic_id: str = Query(..., alias="topicId"), user: dict = Depe
             for r in rows
         ]
     }
+
+
+class EventIn(BaseModel):
+    kind: str = Field(..., max_length=40)
+    topic_id: str | None = Field(default=None, alias="topicId", max_length=120)
+    ref: str | None = Field(default=None, max_length=120)
+    props: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"populate_by_name": True}
+
+
+class EventsIn(BaseModel):
+    events: list[EventIn] = Field(..., min_length=1, max_length=50)
+
+
+@router.post("/events")
+def post_events(payload: EventsIn, user: dict = Depends(require_user)) -> dict:
+    """Batched client events for the alpha funnel. Unknown kinds are rejected so the log stays queryable."""
+    bad = sorted({e.kind for e in payload.events} - EVENT_KINDS)
+    if bad:
+        raise HTTPException(status_code=400, detail=f"Unknown event kinds: {bad}; allowed: {sorted(EVENT_KINDS)}")
+    for e in payload.events:
+        if len(json.dumps(e.props)) > 2000:
+            raise HTTPException(status_code=400, detail="props must stay under 2,000 characters")
+    n = insert_events(user["id"], [{"kind": e.kind, "topicId": e.topic_id, "ref": e.ref, "props": e.props} for e in payload.events])
+    return {"recorded": n}

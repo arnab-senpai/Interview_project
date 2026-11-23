@@ -8,6 +8,7 @@ from typing import Any
 
 from backend.app.content.compiler import CompiledTopic, compile_all, load_paths
 from backend.app.content.schema import StudyPath
+from backend.app.content.v1_adapter import adapt_all
 from backend.app.services.curriculum_loader import get_store
 
 logger = logging.getLogger("systemcraft.content")
@@ -16,6 +17,10 @@ logger = logging.getLogger("systemcraft.content")
 class ContentStore:
     def __init__(self) -> None:
         compiled = compile_all()
+        written = {ct.id for ct in compiled if not ct.errors and ct.public}
+        # Old v1 lessons and case studies without a rewrite are served as adapted
+        # ("Preview") topics, so every path chapter uses the same model and progress.
+        compiled += adapt_all(skip=written)
         self.topics: dict[str, CompiledTopic] = {}
         for ct in compiled:
             if ct.errors or not ct.public:
@@ -60,6 +65,7 @@ class ContentStore:
                     "contentVersion": p["contentVersion"],
                     "prerequisites": p.get("prerequisites", []),
                     "sandboxLessonId": p.get("sandboxLessonId"),
+                    "legacy": bool(p.get("legacy")),
                     "layers": [
                         {k: layer[k] for k in ("name", "level", "minutes")} | {"blocks": len(layer["blockIds"])}
                         for layer in p["layers"]
@@ -97,7 +103,7 @@ class ContentStore:
         edges = []
         for ct in self.topics.values():
             p = ct.public
-            nodes.append({"id": p["id"], "title": p["title"], "format": "v2", "status": p["status"]})
+            nodes.append({"id": p["id"], "title": p["title"], "format": "v2", "legacy": bool(p.get("legacy")), "status": p["status"]})
             for pre in p.get("prerequisites", []):
                 edges.append({"from": pre, "to": p["id"], "kind": "prerequisite"})
             for rel in p.get("related", []):
