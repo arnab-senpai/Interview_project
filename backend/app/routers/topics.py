@@ -196,7 +196,9 @@ def path_view(user_id: str, path_id: str) -> dict[str, Any] | None:
             if cont is None and stage.fixedOrder and status not in ("completed", "placed_out"):
                 cont = {"topicId": entry.topic, "number": entry.number, "title": entry.title, "stageId": stage.id,
                         **resume_point(pub, prog)}
+        open_units = [c for c in chapters if c["available"] and c["status"] not in ("completed", "placed_out")]
         stages.append({"id": stage.id, "title": stage.title, "summary": stage.summary, "fixedOrder": stage.fixedOrder,
+                       "stageCheck": stage.stageCheck, "testOutAvailable": stage.stageCheck and bool(open_units),
                        "chapters": chapters})
     return {
         "id": path.id,
@@ -251,6 +253,7 @@ class AttemptIn(BaseModel):
     block_id: str = Field(..., alias="blockId")
     grading_version: int = Field(..., alias="gradingVersion", ge=1)
     response: dict[str, Any]
+    source: Literal["check", "drill"] = "check"  # "drill": answered in a repair drill
 
     model_config = {"populate_by_name": True}
 
@@ -270,7 +273,7 @@ def submit_attempt(payload: AttemptIn, user: dict = Depends(require_user)) -> di
     result = grade(block, content.key(payload.topic_id, payload.block_id), payload.response, pub)
     saved = insert_attempt(
         user["id"], payload.topic_id, payload.block_id, current, pub["contentVersion"], payload.response,
-        bool(result["passed"]), float(result["score"]),
+        bool(result["passed"]), float(result["score"]), source=payload.source,
     )
     prog = topic_progress(user["id"], pub)
     added = 0

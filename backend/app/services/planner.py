@@ -78,7 +78,10 @@ def plan_today(user: dict[str, Any], profile: dict[str, Any], path: dict[str, An
         topic = content.public(cont["topicId"])
         prereqs = topic.get("prerequisites", []) if topic else []
         if prereqs:
-            states = mastery.skill_states(uid, content, review.overdue_topics(uid, now=now), now=now)
+            from backend.app.services.placement import placed_topics
+
+            states = mastery.skill_states(uid, content, review.overdue_topics(uid, now=now), now=now,
+                                          placed_topic_ids=placed_topics(uid))
             for pre in prereqs:
                 pre_topic = content.public(pre)
                 if not pre_topic:
@@ -87,7 +90,7 @@ def plan_today(user: dict[str, Any], profile: dict[str, Any], path: dict[str, An
                 if weak:
                     cards.append({"kind": "repair", "title": f"Refresh: {pre_topic['title']}",
                                   "reason": f"Before {cont['title']}: this one is {states[weak[0]]['state']}",
-                                  "minutes": 5, "topicId": pre, "layer": "apply"})
+                                  "minutes": 5, "topicId": pre, "layer": "apply", "drill": f"/api/drills/{pre}"})
                     left -= 5
                     break
         chapter = next((c for c in chapters if c["topicId"] == cont["topicId"]), {})

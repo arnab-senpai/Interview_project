@@ -123,6 +123,7 @@ _USER_TABLES = (
     "learner_profiles",
     "enrollments",
     "review_items",
+    "placement_sessions",
     "attempts",
     "lesson_progress",
     "flashcard_reviews",
@@ -152,7 +153,7 @@ def merge_guest_into(guest_id: str, user_id: str) -> dict[str, int]:
             return {}
 
         # Append-only logs: every guest row moves over.
-        for table in ("attempts", "quiz_attempts", "estimation_runs", "learning_events"):
+        for table in ("attempts", "quiz_attempts", "estimation_runs", "learning_events", "placement_sessions"):
             moved[table] = conn.execute(
                 f"UPDATE {table} SET user_id = ? WHERE user_id = ?", (user_id, guest_id)
             ).rowcount

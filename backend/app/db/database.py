@@ -523,6 +523,9 @@ EVENT_KINDS = {
     "onboarding_started",
     "onboarding_finished",
     "review_session",
+    "placement_started",
+    "placement_finished",
+    "drill_started",
 }
 
 
