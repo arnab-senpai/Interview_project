@@ -32,6 +32,14 @@ class ContentStore:
             logger.error("Study path error: %s", e)
         self.paths: dict[str, StudyPath] = {p.id: p for p in paths}
 
+    def path_version(self, path_id: str) -> str:
+        """Content hash of a path, pinned on an enrollment."""
+        import hashlib
+        import json
+
+        p = self.paths[path_id]
+        return hashlib.sha256(json.dumps(p.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()[:12]
+
     def public(self, topic_id: str) -> dict[str, Any] | None:
         ct = self.topics.get(topic_id)
         return ct.public if ct else None

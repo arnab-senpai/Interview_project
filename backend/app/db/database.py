@@ -459,15 +459,16 @@ def insert_attempt(
     response: Any,
     passed: bool,
     score: float,
+    source: str = "check",
 ) -> dict[str, Any]:
     now = utc_now_iso()
     with get_conn() as conn:
         attempt_id = conn.execute(
-            "INSERT INTO attempts (user_id, topic_id, block_id, grading_version, content_version, response_json, passed, score, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-            (user_id, topic_id, block_id, grading_version, content_version, json.dumps(response), int(passed), score, now),
+            "INSERT INTO attempts (user_id, topic_id, block_id, grading_version, content_version, response_json, passed, score,"
+            " created_at, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            (user_id, topic_id, block_id, grading_version, content_version, json.dumps(response), int(passed), score, now, source),
         ).scalar()
-    record_daily_activity(user_id, "quiz")
+    record_daily_activity(user_id, "flashcard" if source == "review" else "quiz")
     return {"id": attempt_id, "createdAt": now}
 
 
@@ -491,6 +492,8 @@ def block_states(user_id: str, topic_id: str | None = None) -> dict[tuple[str, s
         ] = True
     for t in tries:
         st = out.setdefault((t["topic_id"], t["block_id"]), {"viewed": False, "attempts": 0, "passedVersions": set(), "last": None})
+        if st["attempts"] == 0:
+            st["firstPassed"] = bool(t["passed"])
         st["attempts"] += 1
         if t["passed"]:
             st["passedVersions"].add(int(t["grading_version"]))

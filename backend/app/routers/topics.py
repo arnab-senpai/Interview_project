@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.app.db.database import EVENT_KINDS, block_states, insert_attempt, insert_events, record_block_views, unit_statuses
+from backend.app.services import review
 from backend.app.services.auth import require_user
 from backend.app.services.content_store import get_content
 from backend.app.services.grading import grade
@@ -272,7 +273,17 @@ def submit_attempt(payload: AttemptIn, user: dict = Depends(require_user)) -> di
         bool(result["passed"]), float(result["score"]),
     )
     prog = topic_progress(user["id"], pub)
+    added = 0
+    if prog["status"] == "completed":
+        # Finishing a chapter fills the review queue with what it taught. First answers set the first due date.
+        states = block_states(user["id"], payload.topic_id)
+        first = {}
+        for (_, bid), st in states.items():
+            if st["attempts"]:
+                first[bid] = st["firstPassed"]
+        added = review.enroll_topic(user["id"], pub, first)
     return {
+        "reviewItemsAdded": added,
         "attemptId": saved["id"],
         "topicId": payload.topic_id,
         "blockId": payload.block_id,

@@ -64,6 +64,14 @@ class FurtherReading(_M):
     url: str | None = None
 
 
+class ReviewCard(_M):
+    """A recall card for the review queue: front shown, back revealed, learner rates recall."""
+
+    id: BlockId
+    front: str
+    back: str
+
+
 class LegacySource(_M):
     """Set on topics generated from v1 JSON by the adapter (v1_adapter.py)."""
 
@@ -188,9 +196,14 @@ class ArrowOverride(_M):
 # ---------------------------------------------------------------- blocks
 
 
+SkillId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9.-]*$", max_length=80)]
+
+
 class _Block(_M):
     id: BlockId
     title: str | None = None
+    # Skills this block gives evidence on. Empty: the topic's skills, else "<track>.<topic id>".
+    skills: list[SkillId] = Field(default_factory=list)
     # Set by the compiler from the layer / section the block sits in.
     section: SectionName | None = None
     layer: LayerName | None = None
@@ -402,6 +415,8 @@ class Topic(_M):
     sandboxLessonId: str | None = None  # v1 Explorer lesson with this design, opened as the Sandbox
     legacy: LegacySource | None = None  # generated from a v1 lesson; shown as "Preview" until rewritten
     furtherReading: list[FurtherReading] = Field(default_factory=list)
+    skills: list[SkillId] = Field(default_factory=list)  # default skills for this topic's checks
+    reviewCards: list[ReviewCard] = Field(default_factory=list)
     sources: list[Source]
     lastVerified: date
     appliesTo: str

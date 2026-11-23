@@ -52,6 +52,10 @@ def _module_reading(topic_id: str) -> list[dict[str, Any]]:
     return out
 
 
+def _review_cards(topic_id: str) -> list[dict[str, Any]]:
+    return [{"id": c["id"], "front": c["front"], "back": c["back"]} for c in _practice(topic_id).get("flashcards", [])]
+
+
 def _quiz_blocks(topic_id: str, wanted: list[str] | None = None) -> list[dict[str, Any]]:
     blocks = []
     quizzes = _practice(topic_id).get("quizzes", [])
@@ -291,6 +295,7 @@ def _topic(tid, kind, src, level, sources, reading, components, arrows, understa
         "sandboxLessonId": sandbox,
         "legacy": legacy,
         "furtherReading": reading,
+        "reviewCards": _review_cards(tid),
         "sources": sources,
         "lastVerified": LAST_VERIFIED,
         "appliesTo": "General system design; numbers are typical, not vendor-specific",

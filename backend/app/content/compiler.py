@@ -333,6 +333,14 @@ def compile_raw(raw: Any, ct: CompiledTopic) -> CompiledTopic:
                     if end not in comp_ids:
                         ct.errors.append(f"trace {blk['id']}: unknown component {end!r}")
 
+    default_skills = data.get("skills") or [f"{data['track']}.{data['id']}"]
+    for blk in ordered:
+        if blk["type"] in CHECKABLE_TYPES and not blk.get("skills"):
+            blk["skills"] = list(default_skills)
+    card_ids = [c["id"] for c in data.get("reviewCards", [])]
+    if len(card_ids) != len(set(card_ids)) or set(card_ids) & seen:
+        ct.errors.append("reviewCards ids must be unique and differ from block ids")
+
     public_blocks: list[dict[str, Any]] = []
     for blk in ordered:
         pub, key = _public_block(blk)
