@@ -135,7 +135,7 @@ layers:
           stage:
             change: [lb, a-lb-app]
             overrides: { lb: { label: "Load balancer (least requests)" } }
-            arrowOverrides: { a-lb-app: { label: "Fewest in progress, of two picked at random" } }
+            arrowOverrides: { a-lb-app: { label: "Least busy of two random picks" } }
           claims: ["The balancer tracks requests in progress per server.", "Power of two choices compares two random servers instead of all of them."]
         - { id: step5-text, type: prose, role: steps, title: "Step 5 · No single balancer", bodyFile: step5.md, why: "Why two: a balancer that fails takes down every healthy server behind it." }
         - id: fig-two-lbs

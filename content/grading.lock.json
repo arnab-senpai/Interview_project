@@ -170,5 +170,37 @@
   "one-server-to-a-million-users/numbers-worksheet": {
     "gradingVersion": 1,
     "hash": "96dc43acb7b8b3a6"
+  },
+  "replication-and-consensus/bug-watchdog": {
+    "gradingVersion": 1,
+    "hash": "2acccd640c971d9b"
+  },
+  "replication-and-consensus/check-async-loss": {
+    "gradingVersion": 1,
+    "hash": "663bf7788ae61adf"
+  },
+  "replication-and-consensus/check-figure-replicas": {
+    "gradingVersion": 1,
+    "hash": "6aa05ef40b76cc60"
+  },
+  "replication-and-consensus/check-lag": {
+    "gradingVersion": 1,
+    "hash": "acc6af66b7bb7f98"
+  },
+  "replication-and-consensus/check-majority": {
+    "gradingVersion": 1,
+    "hash": "c34ac5758ede1cbd"
+  },
+  "replication-and-consensus/clarify-predict": {
+    "gradingVersion": 1,
+    "hash": "1396536cd7f6357a"
+  },
+  "replication-and-consensus/design-tickets": {
+    "gradingVersion": 1,
+    "hash": "9e5b645571118afc"
+  },
+  "replication-and-consensus/numbers-worksheet": {
+    "gradingVersion": 1,
+    "hash": "17cb7685346f89ff"
   }
 }

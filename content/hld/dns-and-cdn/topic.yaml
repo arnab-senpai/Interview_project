@@ -52,11 +52,11 @@ numbers:
 
 components:
   - { id: client, label: Visitors, kind: client, pos: [0, 2] }
-  - { id: dns, label: DNS, kind: dns, example: "Resolver, then CityBeat's name servers", pos: [0.6, -0.2], note: "Answers are cached for the TTL." }
-  - { id: cdn, label: CDN edge, kind: cdn, example: "e.g. CloudFront, Fastly, Cloudflare", pos: [2, 0.4], load: static_rps, note: "About 15 ms from most visitors." }
-  - { id: shield, label: Origin shield, kind: cdn, example: "One CDN location near Frankfurt", pos: [3.6, 0.4], load: edge_miss }
-  - { id: lb, label: Load balancer, kind: load_balancer, pos: [3.2, 2.6], load: all_rps, capacity: 20000, capacitySource: "Planning assumption for one L7 balancer instance", instances: 2 }
-  - { id: app, label: App servers (Frankfurt), kind: compute, pos: [5.2, 2.6], load: all_rps, capacity: 1500, capacitySource: "Planning assumption for one app server, from chapter 4", instances: 8 }
+  - { id: dns, label: DNS, kind: dns, example: "Resolver, then CityBeat's name servers", pos: [-1.4, 1.2], note: "Answers are cached for the TTL." }
+  - { id: cdn, label: CDN edge, kind: cdn, example: "e.g. CloudFront, Fastly, Cloudflare", pos: [1.6, 0], load: static_rps, note: "About 15 ms from most visitors." }
+  - { id: shield, label: Origin shield, kind: cdn, example: "One CDN location near Frankfurt", pos: [4.6, -0.2], load: edge_miss }
+  - { id: lb, label: Load balancer, kind: load_balancer, pos: [3, 2.8], load: all_rps, capacity: 20000, capacitySource: "Planning assumption for one L7 balancer instance", instances: 2 }
+  - { id: app, label: App servers (Frankfurt), kind: compute, pos: [5.4, 2.8], load: all_rps, capacity: 1500, capacitySource: "Planning assumption for one app server, from chapter 4", instances: 8 }
 
 arrows:
   - { id: a-client-dns, from: client, to: dns, label: "Where is citybeat.com?", mode: sync }
