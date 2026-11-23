@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.app.core.config import FRONTEND_DIST_DIR, get_cors_origins
 from backend.app.db.database import init_db
-from backend.app.routers import admin, auth, curriculum, feedback, me, notes, practice, review, session, topics
+from backend.app.routers import admin, auth, curriculum, feedback, me, notes, placement, practice, review, session, topics
 from backend.app.services.auth import check_jwt_secret_config
 from backend.app.services.content_store import get_content
 from backend.app.services.curriculum_loader import get_store
@@ -51,6 +51,7 @@ def create_app() -> FastAPI:
     app.include_router(topics.router)
     app.include_router(me.router)
     app.include_router(review.router)
+    app.include_router(placement.router)
     app.include_router(feedback.router)
     app.include_router(admin.router)
     app.include_router(notes.router)

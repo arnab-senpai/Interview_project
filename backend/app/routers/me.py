@@ -14,6 +14,7 @@ from backend.app.routers.topics import path_view
 from backend.app.services import mastery, review
 from backend.app.services.auth import require_user
 from backend.app.services.content_store import get_content
+from backend.app.services.placement import placed_topics
 from backend.app.services.planner import TRACK_PATHS, plan_today
 
 router = APIRouter(prefix="/api/me", tags=["me"], dependencies=[Depends(require_user)])
@@ -120,5 +121,6 @@ def get_today(track: Goal = Query(default="hld"), user: dict = Depends(require_u
 @router.get("/skills")
 def get_skills(track: Goal = Query(default="hld"), user: dict = Depends(require_user)) -> dict:
     content = get_content()
-    states = mastery.skill_states(user["id"], content, review.overdue_topics(user["id"]), track=track)
+    states = mastery.skill_states(user["id"], content, review.overdue_topics(user["id"]), track=track,
+                                  placed_topic_ids=placed_topics(user["id"]))
     return {"track": track, "skills": sorted(states.values(), key=lambda s: s["skill"])}

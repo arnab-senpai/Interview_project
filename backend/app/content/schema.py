@@ -204,6 +204,8 @@ class _Block(_M):
     title: str | None = None
     # Skills this block gives evidence on. Empty: the topic's skills, else "<track>.<topic id>".
     skills: list[SkillId] = Field(default_factory=list)
+    # Use this check in the stage test-out. When a chapter marks none, its quiz/predict checks are used.
+    placement: bool = False
     # Set by the compiler from the layer / section the block sits in.
     section: SectionName | None = None
     layer: LayerName | None = None
@@ -450,6 +452,8 @@ class PathStage(_M):
     title: str
     summary: str
     fixedOrder: bool = True
+    # Offer "I already know this": an adaptive check that can mark chapters placed out.
+    stageCheck: bool = False
     chapters: list[PathEntry]
 
 

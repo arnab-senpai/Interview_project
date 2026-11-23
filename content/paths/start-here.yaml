@@ -5,6 +5,7 @@ stages:
   - id: stage-0
     title: "Stage 0 · On-ramp"
     summary: How to approach a design round, how a web system grows, and the numbers that decide it.
+    stageCheck: true
     chapters:
       - { number: 1, topic: how-to-approach-a-design-question, title: How to approach a design question }
       - { number: 2, topic: one-server-to-a-million-users, title: From one server to a million users }
@@ -12,6 +13,7 @@ stages:
   - id: stage-1
     title: "Stage 1 · Building blocks"
     summary: The parts every design reuses, in the order a learner needs them.
+    stageCheck: true
     chapters:
       - { number: 4, topic: l7-load-balancer, title: Load balancing }
       - { number: 5, topic: caching-and-stampede, title: Caching and the stampede }

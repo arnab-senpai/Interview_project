@@ -17,7 +17,7 @@ from typing import Any
 from backend.app.db.database import get_conn
 
 HALF_LIFE_DAYS = 30.0
-WEIGHTS = {"check": 1.0, "review": 0.7, "placement": 0.7}
+WEIGHTS = {"check": 1.0, "review": 0.7, "placement": 0.7, "drill": 0.7}
 SELF_ASSESSED_WEIGHT = 0.4  # designPrompt until AI grading lands
 
 
@@ -82,17 +82,22 @@ def state_for(items: list[dict[str, Any]], overdue: bool) -> str:
 
 
 def skill_states(user_id: str, content: Any, overdue_topic_ids: set[str], track: str | None = None,
-                 now: datetime | None = None) -> dict[str, dict[str, Any]]:
+                 now: datetime | None = None, placed_topic_ids: set[str] | None = None) -> dict[str, dict[str, Any]]:
+    """Skill -> state. A skill whose chapters were all placed out starts at Practiced, unless an answer on it was wrong."""
     ev = evidence(user_id, content, now)
+    placed_topic_ids = placed_topic_ids or set()
     out: dict[str, dict[str, Any]] = {}
     for skill, items in ev.items():
         if track and not skill.startswith(f"{track}."):
             continue
         topics = sorted({e["topic"] for e in items})
+        state = state_for(items, bool(set(topics) & overdue_topic_ids))
+        if state == "learning" and set(topics) <= placed_topic_ids and all(e["r"] >= 1.0 for e in items):
+            state = "practiced"
         out[skill] = {
             "skill": skill,
             "topics": topics,
-            "state": state_for(items, bool(set(topics) & overdue_topic_ids)),
+            "state": state,
             "score": round(score(items), 3),
             "evidence": len(items),
             "lastAt": max(e["at"] for e in items).isoformat(),

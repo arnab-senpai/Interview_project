@@ -66,8 +66,10 @@ def candidate_items(topic: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def enroll_topic(user_id: str, topic: dict[str, Any], first_results: dict[str, bool] | None = None,
-                 now: datetime | None = None) -> int:
-    """Add a finished chapter's items. A check first answered wrong is due tomorrow, one answered right in 3 days."""
+                 now: datetime | None = None, first_due_days: int | None = None) -> int:
+    """Add a finished chapter's items. A check first answered wrong is due tomorrow, one answered right in 3 days.
+
+    ``first_due_days`` overrides that (a placed-out chapter's items come back in 14 days)."""
     now = now or _now()
     first_results = first_results or {}
     added = 0
@@ -77,7 +79,9 @@ def enroll_topic(user_id: str, topic: dict[str, Any], first_results: dict[str, b
                 "SELECT 1 FROM review_items WHERE user_id = ? AND item_ref = ?", (user_id, it["itemRef"])
             ).fetchone():
                 continue
-            if it["kind"] == "recall":
+            if first_due_days is not None:
+                days = first_due_days
+            elif it["kind"] == "recall":
                 days = FIRST_DUE_DAYS["recall"]
             else:
                 days = FIRST_DUE_DAYS["passed_first" if first_results.get(it["blockId"], True) else "failed_first"]

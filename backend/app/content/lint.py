@@ -212,6 +212,14 @@ def lint_graph(topics: list[CompiledTopic], v1_ids: Iterable[str]) -> list[str]:
                     )
                 elif v2[e.topic].public.get("status") != "ready":
                     errors.append(f"path {p.id}: chapter {e.number} links a draft topic as if it were live")
+            if s.stageCheck:
+                from backend.app.services.placement import pool
+
+                for e in s.chapters:
+                    if e.status == "ready" and e.topic in v2 and not pool(v2[e.topic].public):
+                        errors.append(
+                            f"path {p.id}: stage {s.id} has a test-out but chapter {e.number} has no quiz or predict check to ask"
+                        )
     return errors
 
 
