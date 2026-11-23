@@ -169,7 +169,7 @@ def path_view(user_id: str, path_id: str) -> dict[str, Any] | None:
                 "number": entry.number,
                 "topicId": entry.topic,
                 "stageId": stage.id,
-                "title": pub["title"] if pub else entry.title,
+                "title": entry.title,
                 "note": entry.note,
             }
             if pub is None:
@@ -183,7 +183,7 @@ def path_view(user_id: str, path_id: str) -> dict[str, Any] | None:
             done += status in ("completed", "placed_out")
             row.update(
                 {
-                    "summary": pub["summary"],
+                    "summary": entry.summary or pub["summary"],
                     "format": "v2",
                     "legacy": bool(pub.get("legacy")),
                     "available": True,
@@ -194,7 +194,7 @@ def path_view(user_id: str, path_id: str) -> dict[str, Any] | None:
             )
             chapters.append(row)
             if cont is None and stage.fixedOrder and status not in ("completed", "placed_out"):
-                cont = {"topicId": entry.topic, "number": entry.number, "title": pub["title"], "stageId": stage.id,
+                cont = {"topicId": entry.topic, "number": entry.number, "title": entry.title, "stageId": stage.id,
                         **resume_point(pub, prog)}
         stages.append({"id": stage.id, "title": stage.title, "summary": stage.summary, "fixedOrder": stage.fixedOrder,
                        "chapters": chapters})

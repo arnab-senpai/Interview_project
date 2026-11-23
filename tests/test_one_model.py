@@ -97,6 +97,8 @@ def test_path_is_one_model_with_preview_and_planned_chapters(client: TestClient)
 
     legacy = client.get("/api/tracks/hld/topics/l7-load-balancer", headers=h).json()
     assert legacy["topic"]["legacy"]["kind"] == "lesson"
+    assert chapters[4]["title"] == "Load balancing" and chapters[13]["title"] == "URL shortener"
+    assert legacy["topic"]["title"] == "Load balancing" and legacy["topic"]["originalTitle"].startswith("L4 vs L7")
     assert legacy["progress"]["status"] == "not_started"
 
 

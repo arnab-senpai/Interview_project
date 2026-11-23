@@ -31,6 +31,17 @@ class ContentStore:
         for e in errors:
             logger.error("Study path error: %s", e)
         self.paths: dict[str, StudyPath] = {p.id: p for p in paths}
+        # Adapted v1 topics keep their old, senior-sounding titles; the path's
+        # beginner title is what the reader header and lists should show.
+        for p in paths:
+            for stage in p.stages:
+                for entry in stage.chapters:
+                    ct = self.topics.get(entry.topic)
+                    if ct and ct.public.get("legacy") and "originalTitle" not in ct.public:
+                        ct.public["originalTitle"] = ct.public["title"]
+                        ct.public["title"] = entry.title
+                        if entry.summary:
+                            ct.public["summary"] = entry.summary
 
     def path_version(self, path_id: str) -> str:
         """Content hash of a path, pinned on an enrollment."""

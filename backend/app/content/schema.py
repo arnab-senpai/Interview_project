@@ -441,6 +441,7 @@ class PathEntry(_M):
     # "planned": no topic exists yet. A "ready" entry must resolve to a v2 topic,
     # written or adapted from v1, or the path lint fails.
     status: Literal["ready", "planned"] = "ready"
+    summary: str | None = None  # beginner-facing one-liner; wins over the topic's own summary on the path
     note: str | None = None
 
 
