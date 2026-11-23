@@ -58,7 +58,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ tab, onTab, lessons, c
           title: ch.title,
           meta: `Chapter ${ch.number}${ch.minutes || lesson ? ` · ${ch.minutes ?? lesson?.estimatedMinutes} min` : ""}`,
           level: levelLabel(lesson?.difficulty) || (ch.number <= 3 ? "Beginner" : "Intermediate"),
-          preview: ch.format !== "v2",
+          preview: ch.format !== "v2" || Boolean(ch.legacy),
           open: () => onOpenChapter(ch.topicId),
         });
       }

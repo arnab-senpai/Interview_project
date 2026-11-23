@@ -37,4 +37,4 @@ export const LIBRARY_TABS = {
   playground: "Playground",
 } as const;
 
-export const PREVIEW_NOTE = "Preview: this chapter still uses the older lesson page.";
+export const PREVIEW_NOTE = "This chapter still uses the older lesson page.";

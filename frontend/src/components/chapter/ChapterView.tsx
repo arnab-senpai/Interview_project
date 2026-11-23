@@ -13,7 +13,8 @@ import {
 } from "../../content/numbers";
 import type { Block, LayerName, NumberInput, TopicProgressV2, TopicV2 } from "../../content/types";
 import { BlockRenderer, type BlockContext } from "./ChapterBlocks";
-import { LAYER_LABELS } from "../../copy";
+import { LAYER_LABELS, PREVIEW_NOTE } from "../../copy";
+import { renderMarkdown } from "../../utils/markdown";
 
 const SECTION_TITLES: Record<string, string> = {
   problem: "The problem",
@@ -38,6 +39,7 @@ const stripStep = (t?: string) => (t ?? "").replace(/^Step\s+\d+\s*[·:.-]\s*/i,
 
 /** Chapter steps: fixed sections, one step per design idea (its text and figures), then the later layers. */
 export function buildSteps(topic: TopicV2): Step[] {
+  if (topic.legacy) return buildPreviewSteps(topic);
   const steps: Step[] = [];
   let designN = 0;
   let current: Step | null = null;
@@ -66,6 +68,36 @@ export function buildSteps(topic: TopicV2): Step[] {
     const title = b.section ? SECTION_TITLES[b.section] ?? b.section : LAYER_TITLES[b.layer];
     push({ key, kicker: LAYER_TITLES[b.layer], title, layer: b.layer, blocks: [b] });
   }
+  return steps;
+}
+
+/**
+ * Older pages adapted into the reader have no chapter sections: each titled block becomes a step,
+ * untitled blocks join the step before them, and the questions are gathered into Check yourself.
+ */
+function buildPreviewSteps(topic: TopicV2): Step[] {
+  const steps: Step[] = [];
+  const checks: Block[] = [];
+  let n = 0;
+  for (const b of topic.blocks) {
+    if (b.checkable && !b.title) {
+      checks.push(b);
+      continue;
+    }
+    const last = steps[steps.length - 1];
+    if (!b.title && last) {
+      last.blocks.push(b);
+      continue;
+    }
+    // A figure or a walk-through belongs with the explanation right before it.
+    if ((b.type === "figure" || b.type === "trace") && last && last.blocks.length === 1 && last.blocks[0].type === "prose") {
+      last.blocks.push(b);
+      continue;
+    }
+    n += 1;
+    steps.push({ key: `part-${n}`, kicker: LAYER_TITLES[b.layer], title: b.title ?? topic.title, layer: b.layer, blocks: [b] });
+  }
+  if (checks.length) steps.push({ key: "section-check", kicker: LAYER_TITLES.apply, title: SECTION_TITLES.check, layer: "apply", blocks: checks });
   return steps;
 }
 
@@ -173,6 +205,12 @@ export const ChapterView: React.FC<ChapterViewProps> = ({
       cancelled = true;
     };
   }, [track, topicId, initialInputs, initialLabel]);
+
+  // Funnel events for the admin view (best effort).
+  useEffect(() => {
+    if (!topic) return;
+    api.sendEvents([{ kind: topic.legacy ? "preview_opened" : "chapter_opened", topicId: topic.id }]);
+  }, [topic]);
 
   // Where this chapter sits on the path, for "Chapter N" and the next chapter button.
   useEffect(() => {
@@ -476,6 +514,16 @@ export const ChapterView: React.FC<ChapterViewProps> = ({
           )}
         </div>
 
+        {topic.legacy && !finished && stepIdx === 0 && (
+          <div className="chapter-preview-banner" role="note">
+            <span className="pill-preview">Preview</span>
+            <span>
+              {PREVIEW_NOTE} It covers the topic, but it doesn't build the design step by step with live numbers yet.
+              {topic.sandboxLessonId && onOpenSandbox ? " You can also open it in the playground." : ""}
+            </span>
+          </div>
+        )}
+
         {finished ? (
           <div className="chapter-done">
             {remember && <BlockRenderer block={remember} ctx={ctx} />}
@@ -524,6 +572,19 @@ export const ChapterView: React.FC<ChapterViewProps> = ({
                 )}
               </div>
             </section>
+            {(topic.furtherReading?.length ?? 0) > 0 && (
+              <section className="chapter-further">
+                <div className="chapter-further-head">Go deeper</div>
+                <div className="chapter-further-essays">
+                  {topic.furtherReading!.map((r) => (
+                    <details key={r.title} className="card chapter-essay">
+                      <summary>{r.title.replace(/^Module \d+:\s*\d+(\.\d+)*\s*/, "")}</summary>
+                      {r.body && <div className="chapter-prose">{renderMarkdown(r.body)}</div>}
+                    </details>
+                  ))}
+                </div>
+              </section>
+            )}
             {topic.sources.length > 0 && (
               <section className="chapter-further">
                 <div className="chapter-further-head">Further reading</div>

@@ -2048,3 +2048,22 @@ svg text.mono,
     box-shadow: var(--shadow-md);
   }
 }
+
+/* ---------- Preview chapters (guided flow PR 3) ---------- */
+.chapter-preview-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  border-radius: 9px;
+  background: var(--warn-bg);
+  color: var(--ink-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.chapter-preview-banner .pill-preview { margin: 1px 0 0; background: var(--bg-surface-solid); flex-shrink: 0; }
+.chapter-further-essays { display: flex; flex-direction: column; gap: 8px; }
+.chapter-essay { padding: 10px 14px; }
+.chapter-essay summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
+.chapter-essay[open] summary { margin-bottom: 8px; }

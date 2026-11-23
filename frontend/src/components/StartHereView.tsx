@@ -72,7 +72,7 @@ export const StartHereView: React.FC<StartHereViewProps> = ({ pathId = "start-he
                 data-continue={ch.topicId === path.continueTopicId}
                 disabled={!ch.available}
                 onClick={() => open(ch)}
-                title={ch.available ? (ch.format === "v2" ? "" : "Preview: this chapter still uses the older lesson page") : "Coming soon"}
+                title={ch.available ? (ch.format === "v2" && !ch.legacy ? "" : "Preview: this chapter still uses the older lesson page") : "Coming soon"}
               >
                 <span className="chapter-card-top">
                   <span className="mono chapter-card-num">{String(ch.number).padStart(2, "0")}</span>
@@ -81,7 +81,9 @@ export const StartHereView: React.FC<StartHereViewProps> = ({ pathId = "start-he
                 <span className="chapter-card-title">{ch.title}</span>
                 {ch.summary && <span className="chapter-card-summary">{ch.summary}</span>}
                 <span className="chapter-card-meta">
-                  {ch.format === "v2" && ch.minutes ? (
+                  {ch.legacy ? (
+                    <span className="pill-preview">Preview</span>
+                  ) : ch.format === "v2" && ch.minutes ? (
                     <>
                       <Clock size={11} /> {ch.minutes} min
                     </>

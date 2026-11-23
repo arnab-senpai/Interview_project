@@ -169,6 +169,10 @@ export interface TopicV2 {
   prerequisites: string[];
   related: string[];
   sandboxLessonId?: string;
+  /** Set on chapters adapted from the older lesson and case-study pages; the reader shows them as Preview. */
+  legacy?: { kind: "lesson" | "case_study"; id: string } | null;
+  /** Longer reference essays (the old Modules text), shown at the end of the chapter. */
+  furtherReading?: { title: string; body?: string | null }[];
   sources: { title: string; url?: string; note?: string }[];
   lastVerified: string;
   appliesTo: string;
@@ -228,6 +232,9 @@ export interface PathChapter {
   minutes?: number;
   status: string;
   note?: string;
+  /** True when the chapter is an adapted older page (shown as Preview). */
+  legacy?: boolean;
+  stageId?: string;
 }
 
 export interface StudyPathResponse {
