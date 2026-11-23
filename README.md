@@ -40,20 +40,15 @@ An interactive, blueprint-styled engineering learning studio for **High-Level De
 
 ## Running Locally
 
-### 1. Backend API (FastAPI; Postgres or SQLite)
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r backend/requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload --port 8000
-```
-Without `SYSTEMCRAFT_DATABASE_URL` the API uses a local SQLite file, which is fine for development. To run against Postgres (what the alpha VM uses):
-```powershell
-docker run -d --name systemcraft-pg -e POSTGRES_USER=systemcraft -e POSTGRES_PASSWORD=systemcraft -e POSTGRES_DB=systemcraft -p 5432:5432 postgres:16
-$env:SYSTEMCRAFT_DATABASE_URL = "postgresql://systemcraft:systemcraft@localhost:5432/systemcraft"
-```
-Alembic migrations run at startup (`backend/migrations`). To move an existing SQLite database across once: `python -m backend.scripts.copy_sqlite_to_postgres backend/systemcraft.db` (with `SYSTEMCRAFT_DATABASE_URL` set; it refuses to run if Postgres already holds learner data).
+You need **Python 3.10 or newer** (CI uses 3.12), **Node.js 20 or newer** with npm, and Git. Docker is only needed if you want to run against Postgres.
 
-### 2. Backend (FastAPI + SQLite)
+### 1. Clone
+```bash
+git clone https://github.com/arnab-senpai/Interview_project.git
+cd Interview_project
+```
+
+### 2. Backend environment
 macOS / Linux:
 ```bash
 python3 -m venv .venv
@@ -68,24 +63,29 @@ python -m pip install -r backend/requirements.txt
 ```
 
 ### 3. Local settings
-Nothing is required for local development: without `SYSTEMCRAFT_JWT_SECRET` the backend creates `backend/.jwt_secret` on first start, and the default CORS list already covers the Vite dev server. To see the reviewer Feedback view, make your username an admin. Set it in the same terminal that runs the backend (the app does not read a `.env` file).
+Nothing is required for local development. Without `SYSTEMCRAFT_JWT_SECRET` the backend writes a dev secret to `backend/.jwt_secret` on first start, the default CORS list covers the Vite dev server, and without `SYSTEMCRAFT_DATABASE_URL` it uses SQLite. Set these in the terminal that runs the backend (the app does not read a `.env` file):
 
-macOS / Linux:
-```bash
-export SYSTEMCRAFT_ADMIN_USERNAMES=yourname
-```
-Windows (PowerShell):
-```powershell
-$env:SYSTEMCRAFT_ADMIN_USERNAMES = "yourname"
-```
+| | macOS / Linux | Windows (PowerShell) |
+| --- | --- | --- |
+| See the reviewer Feedback view | `export SYSTEMCRAFT_ADMIN_USERNAMES=yourname` | `$env:SYSTEMCRAFT_ADMIN_USERNAMES = "yourname"` |
+| Offer "Continue as guest" (optional) | `export SYSTEMCRAFT_ALLOW_GUESTS=1` | `$env:SYSTEMCRAFT_ALLOW_GUESTS = "1"` |
+
+Leave `SYSTEMCRAFT_ENV` unset locally; production mode also requires Postgres.
 
 ### 4. Run the backend
 ```bash
 python -m uvicorn backend.app.main:app --reload --port 8000
 ```
-On first start it creates the SQLite database at `backend/systemcraft.db` (WAL mode, so you will also see `-wal` and `-shm` files). Delete those three files to start from an empty database. Check it is up at `http://127.0.0.1:8000/api/health`.
+On first start it creates the SQLite database at `backend/systemcraft.db` (WAL mode, so `-wal` and `-shm` files appear next to it). Stop the server and delete those three files to start from an empty database. Check it is up at `http://127.0.0.1:8000/api/health`.
 
-### 5. Run the frontend (second terminal)
+To run against Postgres instead (what the alpha VM uses):
+```bash
+docker run -d --name systemcraft-pg -e POSTGRES_USER=systemcraft -e POSTGRES_PASSWORD=systemcraft -e POSTGRES_DB=systemcraft -p 5432:5432 postgres:16
+export SYSTEMCRAFT_DATABASE_URL=postgresql://systemcraft:systemcraft@localhost:5432/systemcraft   # PowerShell: $env:SYSTEMCRAFT_DATABASE_URL = "..."
+```
+Alembic migrations run at startup (`backend/migrations`). To move an existing SQLite database across once: `python -m backend.scripts.copy_sqlite_to_postgres backend/systemcraft.db` (with `SYSTEMCRAFT_DATABASE_URL` set; it refuses to run if Postgres already holds learner data).
+
+### 5. Run the frontend (second terminal, from the repo folder)
 ```bash
 npm --prefix frontend ci
 npm --prefix frontend run dev
@@ -93,7 +93,7 @@ npm --prefix frontend run dev
 Open `http://localhost:5173`. Vite proxies `/api/*` to FastAPI on port `8000`.
 
 ### 6. Create your account
-The app opens on the sign-in screen. Choose the **Create Account** tab, and use the username you put in `SYSTEMCRAFT_ADMIN_USERNAMES` (3–32 characters, password at least 6). A **Feedback** item appears in the nav for admins.
+On the sign-in screen pick the **Create Account** tab and use the username you put in `SYSTEMCRAFT_ADMIN_USERNAMES` (3–32 characters, password at least 6). Admins get a **Feedback** item in the nav.
 
 ### Single-server mode (FastAPI serves the built frontend)
 ```bash
@@ -133,10 +133,12 @@ Answer keys stay on the server; checks are graded by `POST /api/attempts`. `cont
 
 ## Verification Tests
 
-With the virtual environment active:
+Run these with the virtual environment active, in a terminal without `SYSTEMCRAFT_ALLOW_GUESTS` set (one test checks that guests are off by default):
 ```bash
 python backend/scripts/validate_content.py
-npm --prefix frontend run build   # one test checks that FastAPI serves frontend/dist
+npm --prefix frontend run build                  # one test checks that FastAPI serves frontend/dist
+python backend/scripts/build_content.py --out data/build
+npm --prefix frontend run check:numbers
 python -m pytest -v
 ```
 Set `SYSTEMCRAFT_TEST_DATABASE_URL` to a throwaway Postgres database to run the same suite on Postgres (CI runs both).
