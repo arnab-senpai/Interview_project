@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from alembic import command
 from alembic.config import Config
@@ -26,7 +27,26 @@ def utc_now_iso() -> str:
 
 
 def today_date_iso() -> str:
-    return datetime.now().date().isoformat()
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def valid_timezone(name: str | None) -> str | None:
+    """The IANA name if Python knows it, else None."""
+    if not name or len(name) > 64:
+        return None
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
+    return name
+
+
+def user_today(user_id: str, now: datetime | None = None) -> date:
+    """Today's date in the learner's own time zone (users.timezone, UTC when unset or unknown)."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT timezone FROM users WHERE id = ?", (user_id,)).fetchone()
+    tz = ZoneInfo(valid_timezone(row["timezone"] if row else None) or "UTC")
+    return (now or datetime.now(timezone.utc)).astimezone(tz).date()
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -141,7 +161,7 @@ def get_conn(db_path: Path | None = None) -> Iterator[DbConn]:
 
 def record_daily_activity(user_id: str, category: str, activity_date: str | None = None) -> None:
     """Increment user's daily study activity counter for heatmap & streaks."""
-    day_key = activity_date or today_date_iso()
+    day_key = activity_date or user_today(user_id).isoformat()
     now = utc_now_iso()
     col_map = {
         "lesson": "lessons_touched",
@@ -189,7 +209,7 @@ def get_streak_summary(user_id: str, daily_goal: int = 3, days: int = 84) -> dic
         for r in rows
     }
 
-    today = datetime.now().date()
+    today = user_today(user_id)
     today_iso = today.isoformat()
     today_actions = by_date.get(today_iso, {}).get("count", 0)
 
@@ -439,15 +459,16 @@ def insert_attempt(
     response: Any,
     passed: bool,
     score: float,
+    source: str = "check",
 ) -> dict[str, Any]:
     now = utc_now_iso()
     with get_conn() as conn:
         attempt_id = conn.execute(
-            "INSERT INTO attempts (user_id, topic_id, block_id, grading_version, content_version, response_json, passed, score, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-            (user_id, topic_id, block_id, grading_version, content_version, json.dumps(response), int(passed), score, now),
+            "INSERT INTO attempts (user_id, topic_id, block_id, grading_version, content_version, response_json, passed, score,"
+            " created_at, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            (user_id, topic_id, block_id, grading_version, content_version, json.dumps(response), int(passed), score, now, source),
         ).scalar()
-    record_daily_activity(user_id, "quiz")
+    record_daily_activity(user_id, "flashcard" if source == "review" else "quiz")
     return {"id": attempt_id, "createdAt": now}
 
 
@@ -471,9 +492,75 @@ def block_states(user_id: str, topic_id: str | None = None) -> dict[tuple[str, s
         ] = True
     for t in tries:
         st = out.setdefault((t["topic_id"], t["block_id"]), {"viewed": False, "attempts": 0, "passedVersions": set(), "last": None})
+        if st["attempts"] == 0:
+            st["firstPassed"] = bool(t["passed"])
         st["attempts"] += 1
         if t["passed"]:
             st["passedVersions"].add(int(t["grading_version"]))
         st["last"] = {"gradingVersion": int(t["grading_version"]), "passed": bool(t["passed"]),
                       "response": json.loads(t["response_json"]), "at": t["created_at"]}
+    return out
+
+
+# ---------------------------------------------------------------- Phase 2a: unit status and events
+
+
+def unit_statuses(user_id: str) -> dict[str, dict[str, Any]]:
+    """Path units finished outside the reader: under v1, or placed out (Phase 2c)."""
+    with get_conn() as conn:
+        rows = conn.execute("SELECT topic_id, status, source, updated_at FROM unit_status WHERE user_id = ?", (user_id,)).fetchall()
+    return {r["topic_id"]: {"status": r["status"], "source": r["source"], "updatedAt": r["updated_at"]} for r in rows}
+
+
+EVENT_KINDS = {
+    "chapter_opened",
+    "layer_finished",
+    "chapter_finished",
+    "step_viewed",
+    "sandbox_opened",
+    "preview_opened",
+    "chapter_skipped",
+    "onboarding_started",
+    "onboarding_finished",
+    "review_session",
+}
+
+
+def insert_events(user_id: str, events: list[dict[str, Any]]) -> int:
+    now = utc_now_iso()
+    with get_conn() as conn:
+        for e in events:
+            conn.execute(
+                "INSERT INTO learning_events (user_id, kind, topic_id, ref, props_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, e["kind"], e.get("topicId") or "", e.get("ref") or "", json.dumps(e.get("props") or {}), now),
+            )
+    return len(events)
+
+
+def funnel_counts(since_iso: str | None = None) -> dict[str, dict[str, int]]:
+    """Per topic: distinct learners who opened it, made an attempt, and passed at least one check.
+
+    Guests count too: the alpha wants to see where anyone stops."""
+    since = " AND created_at >= ?" if since_iso else ""
+    params: list[Any] = [since_iso] if since_iso else []
+    out: dict[str, dict[str, int]] = {}
+    with get_conn() as conn:
+        opened = conn.execute(
+            "SELECT topic_id, COUNT(DISTINCT user_id) AS n FROM ("
+            " SELECT topic_id, user_id, first_viewed_at AS created_at FROM block_progress"
+            " UNION ALL SELECT topic_id, user_id, created_at FROM learning_events WHERE kind = 'chapter_opened'"
+            f") t WHERE 1 = 1{since} GROUP BY topic_id",
+            params,
+        ).fetchall()
+        tried = conn.execute(
+            f"SELECT topic_id, COUNT(DISTINCT user_id) AS n FROM attempts WHERE 1 = 1{since} GROUP BY topic_id",
+            params,
+        ).fetchall()
+        passed = conn.execute(
+            f"SELECT topic_id, COUNT(DISTINCT user_id) AS n FROM attempts WHERE passed = 1{since} GROUP BY topic_id",
+            params,
+        ).fetchall()
+    for name, rows in (("opened", opened), ("attempted", tried), ("passedACheck", passed)):
+        for r in rows:
+            out.setdefault(r["topic_id"], {"opened": 0, "attempted": 0, "passedACheck": 0})[name] = int(r["n"])
     return out

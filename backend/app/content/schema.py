@@ -56,6 +56,29 @@ class Source(_M):
     note: str | None = None
 
 
+class FurtherReading(_M):
+    """Reference reading shown after the chapter, e.g. the DDIA module essays."""
+
+    title: str
+    body: str | None = None
+    url: str | None = None
+
+
+class ReviewCard(_M):
+    """A recall card for the review queue: front shown, back revealed, learner rates recall."""
+
+    id: BlockId
+    front: str
+    back: str
+
+
+class LegacySource(_M):
+    """Set on topics generated from v1 JSON by the adapter (v1_adapter.py)."""
+
+    kind: Literal["lesson", "case_study"]
+    id: str
+
+
 # ---------------------------------------------------------------- numbers layer
 
 
@@ -173,9 +196,14 @@ class ArrowOverride(_M):
 # ---------------------------------------------------------------- blocks
 
 
+SkillId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9.-]*$", max_length=80)]
+
+
 class _Block(_M):
     id: BlockId
     title: str | None = None
+    # Skills this block gives evidence on. Empty: the topic's skills, else "<track>.<topic id>".
+    skills: list[SkillId] = Field(default_factory=list)
     # Set by the compiler from the layer / section the block sits in.
     section: SectionName | None = None
     layer: LayerName | None = None
@@ -385,6 +413,10 @@ class Topic(_M):
     prerequisites: list[str] = Field(default_factory=list)
     related: list[str] = Field(default_factory=list)
     sandboxLessonId: str | None = None  # v1 Explorer lesson with this design, opened as the Sandbox
+    legacy: LegacySource | None = None  # generated from a v1 lesson; shown as "Preview" until rewritten
+    furtherReading: list[FurtherReading] = Field(default_factory=list)
+    skills: list[SkillId] = Field(default_factory=list)  # default skills for this topic's checks
+    reviewCards: list[ReviewCard] = Field(default_factory=list)
     sources: list[Source]
     lastVerified: date
     appliesTo: str
@@ -406,6 +438,10 @@ class PathEntry(_M):
     number: int
     topic: str
     title: str  # shown even when the topic is still planned
+    # "planned": no topic exists yet. A "ready" entry must resolve to a v2 topic,
+    # written or adapted from v1, or the path lint fails.
+    status: Literal["ready", "planned"] = "ready"
+    summary: str | None = None  # beginner-facing one-liner; wins over the topic's own summary on the path
     note: str | None = None
 
 

@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.app.content.compiler import GRADING_LOCK, compile_all  # noqa: E402
+from backend.app.content.v1_adapter import adapt_all  # noqa: E402
 from backend.app.content.lint import build_lock, lint_grading_lock, lint_graph, lint_topic  # noqa: E402
 
 
@@ -30,6 +31,8 @@ def ready_v1_lesson_ids() -> list[str]:
 
 def run(out: Path | None = None, update_lock: bool = False) -> dict:
     topics = compile_all()
+    written = {t.id for t in topics if t.public and not t.errors}
+    topics += adapt_all(skip=written)
     for t in topics:
         lint_topic(t)
     graph_errors = lint_graph(topics, ready_v1_lesson_ids())
@@ -64,7 +67,7 @@ def main() -> int:
         print(f"warning: {w}")
     for e in summary["errors"]:
         print(f"ERROR: {e}")
-    print(f"{summary['topics']} v2 topics, {len(summary['errors'])} errors, {len(summary['warnings'])} warnings")
+    print(f"{summary['topics']} v2 topics (written + adapted), {len(summary['errors'])} errors, {len(summary['warnings'])} warnings")
     return 1 if summary["errors"] else 0
 
 

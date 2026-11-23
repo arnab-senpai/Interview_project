@@ -159,6 +159,13 @@ def _row_is_guest(row: Any) -> bool:
         return False
 
 
+def _get(row: Any, key: str) -> Any:
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+
 def serialize_user(row: Any) -> dict[str, Any]:
     is_guest = _row_is_guest(row)
     return {
@@ -168,6 +175,7 @@ def serialize_user(row: Any) -> dict[str, Any]:
         "email": row["email"] or "",
         "dailyGoal": row["daily_goal"],
         "preferredLens": row["preferred_lens"],
+        "timezone": _get(row, "timezone") or "UTC",
         "isGuest": is_guest,
         "isAdmin": (not is_guest) and row["username"].lower() in get_admin_usernames(),
         "createdAt": row["created_at"],
