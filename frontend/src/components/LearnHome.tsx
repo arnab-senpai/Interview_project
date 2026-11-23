@@ -13,6 +13,10 @@ interface LearnHomeProps {
   onOpenReview: () => void;
   onOpenPlan: () => void;
   onSaveProgress: () => void;
+  /** "I already know this" for one stage. */
+  onTestOut: (stageId: string) => void;
+  /** A repair card's five-minute refresher on one chapter. */
+  onDrill: (topicId: string) => void;
 }
 
 const STATE_LABEL: Record<TodayChapter["state"], string> = {
@@ -52,9 +56,10 @@ function hours(min: number): string {
 }
 
 /** The home page: one next step at the top, today's small extras beside it, the whole path below. */
-export const LearnHome: React.FC<LearnHomeProps> = ({ refreshKey = 0, isGuest, onboarded, onOpenChapter, onOpenReview, onOpenPlan, onSaveProgress }) => {
+export const LearnHome: React.FC<LearnHomeProps> = ({ refreshKey = 0, isGuest, onboarded, onOpenChapter, onOpenReview, onOpenPlan, onSaveProgress, onTestOut, onDrill }) => {
   const [today, setToday] = useState<TodayResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [testOut, setTestOut] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -62,6 +67,11 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ refreshKey = 0, isGuest, o
       .getToday("hld")
       .then((t) => !cancelled && setToday(t))
       .catch((e) => !cancelled && setError(e.message ?? String(e)));
+    // Which stages still offer a test-out.
+    api
+      .getPath("start-here")
+      .then((p) => !cancelled && setTestOut(new Set(p.stages.filter((st) => st.testOutAvailable).map((st) => st.id))))
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -99,6 +109,7 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ refreshKey = 0, isGuest, o
 
   const openCard = (card: TodayCard) => {
     if (card.kind === "review") onOpenReview();
+    else if (card.kind === "repair" && card.drill && card.topicId) onDrill(card.topicId);
     else if (card.topicId) onOpenChapter(card.topicId, card.stepKey ?? null);
   };
 
@@ -247,7 +258,14 @@ export const LearnHome: React.FC<LearnHomeProps> = ({ refreshKey = 0, isGuest, o
 
         {stages.map((st) => (
           <div key={st.id} className="learn-stage">
-            <h3 className="learn-stage-title">{st.title.replace(/^Stage \d+\s*·\s*/, "")}</h3>
+            <div className="learn-stage-head">
+              <h3 className="learn-stage-title">{st.title.replace(/^Stage \d+\s*·\s*/, "")}</h3>
+              {testOut.has(st.id) && (
+                <button className="link-btn" onClick={() => onTestOut(st.id)}>
+                  Know this already? Test out
+                </button>
+              )}
+            </div>
             <ol className="learn-chapters">
               {st.chapters.map((c) => {
                 const label = STATE_LABEL[c.state];

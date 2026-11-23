@@ -7,6 +7,8 @@ import { useCallback, useEffect, useState } from "react";
  *   /learn                         the path (home)
  *   /learn/:topicId[/:stepKey]     a chapter, optionally at one step
  *   /welcome                       the three onboarding questions
+ *   /check/:stageId                "I already know this": the stage test-out
+ *   /drill/:topicId                a five-minute refresher on one chapter
  *   /review[/all]                  due cards, or every card and quiz (?topic= filters to one chapter)
  *   /library[/:tab]                topics | designs | reading | playground
  *   /library/designs/:id           one guided design (case study)
@@ -19,6 +21,8 @@ export type Route =
   | { name: "learn" }
   | { name: "chapter"; topicId: string; stepKey?: string }
   | { name: "welcome" }
+  | { name: "check"; stageId: string }
+  | { name: "drill"; topicId: string }
   | { name: "review"; topicId?: string; all?: boolean }
   | { name: "library"; tab: LibraryTab; id?: string }
   | { name: "notes" }
@@ -43,6 +47,10 @@ export function parseRoute(pathname: string, search = ""): Route {
     }
     case "welcome":
       return { name: "welcome" };
+    case "check":
+      return a ? { name: "check", stageId: a } : { name: "learn" };
+    case "drill":
+      return a ? { name: "drill", topicId: a } : { name: "learn" };
     case "notes":
       return { name: "notes" };
     case "feedback":
@@ -63,6 +71,10 @@ export function routeToPath(r: Route): string {
       return `/review${r.all ? "/all" : ""}${r.topicId ? `?topic=${enc(r.topicId)}` : ""}`;
     case "welcome":
       return "/welcome";
+    case "check":
+      return `/check/${enc(r.stageId)}`;
+    case "drill":
+      return `/drill/${enc(r.topicId)}`;
     case "library":
       return `/library/${r.tab}${r.id ? `/${enc(r.id)}` : ""}`;
     case "notes":
@@ -74,7 +86,7 @@ export function routeToPath(r: Route): string {
 
 /** The tab a route belongs to, for the top navigation. */
 export function navKey(r: Route): "learn" | "review" | "library" | "notes" | "feedback" {
-  if (r.name === "chapter" || r.name === "welcome") return "learn";
+  if (r.name === "chapter" || r.name === "welcome" || r.name === "check" || r.name === "drill") return "learn";
   return r.name;
 }
 

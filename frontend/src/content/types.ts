@@ -242,5 +242,15 @@ export interface StudyPathResponse {
   title: string;
   summary: string;
   continueTopicId: string | null;
-  stages: { id: string; title: string; summary: string; fixedOrder: boolean; chapters: PathChapter[] }[];
+  stages: {
+    id: string;
+    title: string;
+    summary: string;
+    fixedOrder: boolean;
+    chapters: PathChapter[];
+    /** The stage offers "I already know this": a short check that can mark its chapters as known. */
+    stageCheck?: boolean;
+    /** True while a ready chapter in the stage is not done yet. */
+    testOutAvailable?: boolean;
+  }[];
 }
