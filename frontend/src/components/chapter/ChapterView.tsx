@@ -131,6 +131,9 @@ interface ChapterViewProps {
   onOpenChapter?: (topicId: string) => void;
   /** Open review filtered to this chapter. */
   onOpenReview?: (topicId: string) => void;
+  /** Guests see "Save your progress" on the end screen. */
+  isGuest?: boolean;
+  onSaveProgress?: () => void;
 }
 
 /** Step key of the end-of-chapter screen, so it has its own URL. */
@@ -165,6 +168,8 @@ export const ChapterView: React.FC<ChapterViewProps> = ({
   onOpenSandbox,
   onOpenChapter,
   onOpenReview,
+  isGuest,
+  onSaveProgress,
 }) => {
   const [topic, setTopic] = useState<TopicV2 | null>(null);
   const [progress, setProgress] = useState<TopicProgressV2 | null>(null);
@@ -180,6 +185,7 @@ export const ChapterView: React.FC<ChapterViewProps> = ({
   const [railOpen, setRailOpen] = useState(false);
   const [nextChapter, setNextChapter] = useState<{ topicId: string; number: number; title: string } | null>(null);
   const [chapterNumber, setChapterNumber] = useState<number | null>(null);
+  const [reviewAdded, setReviewAdded] = useState<number | null>(null);
   const mainRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -260,6 +266,19 @@ export const ChapterView: React.FC<ChapterViewProps> = ({
     onStepChange?.(DONE_STEP);
     mainRef.current?.scrollTo({ top: 0 });
   };
+
+  // The end screen says how many cards this chapter put in the review queue.
+  useEffect(() => {
+    if (!finished || !topic) return;
+    let cancelled = false;
+    api
+      .getTopicReviewItems(topic.id)
+      .then((r) => !cancelled && setReviewAdded(r.added))
+      .catch(() => !cancelled && setReviewAdded(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [finished, topic, progress?.status]);
 
   const step = steps[Math.min(stepIdx, Math.max(0, steps.length - 1))];
   const env = useMemo(() => (topic ? solveValues(inputs, topic.numbers.values) : {}), [topic, inputs]);
@@ -560,9 +579,10 @@ export const ChapterView: React.FC<ChapterViewProps> = ({
                     Back to Learn <ArrowRight size={13} />
                   </button>
                 )}
-                {onOpenReview && (
+                {/* New chapters put their cards in Review (due from tomorrow). Older topics still have their own card bank. */}
+                {onOpenReview && topic.legacy && (
                   <button className="btn-secondary" onClick={() => onOpenReview(topic.id)}>
-                    <BookOpen size={13} /> Review this chapter
+                    <BookOpen size={13} /> Practise this chapter's cards
                   </button>
                 )}
                 {topic.sandboxLessonId && onOpenSandbox && (
@@ -571,7 +591,27 @@ export const ChapterView: React.FC<ChapterViewProps> = ({
                   </button>
                 )}
               </div>
+              {reviewAdded !== null && reviewAdded > 0 ? (
+                <p className="chapter-done-review">
+                  <BookOpen size={13} aria-hidden /> {reviewAdded} card{reviewAdded === 1 ? "" : "s"} added to Review. The first ones come back tomorrow, so there is nothing to do today.
+                </p>
+              ) : checks.n > 0 && tried < checks.n ? (
+                <p className="chapter-done-review">
+                  <BookOpen size={13} aria-hidden /> Answer the checks to finish the chapter. Its key points then go into Review.
+                </p>
+              ) : null}
             </section>
+            {isGuest && onSaveProgress && (
+              <section className="learn-save card" role="note">
+                <div>
+                  <b>Save your progress</b>
+                  <span> You finished a chapter as a guest. It is saved on this browser only; an account keeps it on every device.</span>
+                </div>
+                <button className="btn-primary" onClick={onSaveProgress}>
+                  Create an account
+                </button>
+              </section>
+            )}
             {(topic.furtherReading?.length ?? 0) > 0 && (
               <section className="chapter-further">
                 <div className="chapter-further-head">Go deeper</div>

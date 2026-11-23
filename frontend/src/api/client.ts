@@ -242,6 +242,87 @@ export interface SearchHit {
   status: string;
 }
 
+// ---- The learner's plan (Phase 2): profile, today, review queue
+export type StartLevel = "new" | "built_apps" | "experienced";
+export type Goal = "hld" | "lld" | "coding";
+
+export interface LearnerProfile {
+  goals: Goal[];
+  startLevel: StartLevel | null;
+  interviewDate: string | null;
+  hoursPerWeek: number | null;
+  timezone: string;
+  onboarded: boolean;
+  paths: string[];
+}
+
+export type TodayChapterState = "done" | "current" | "preview" | "open" | "soon" | "placed_out";
+
+export interface TodayChapter {
+  number: number;
+  topicId: string;
+  title: string;
+  stageId: string;
+  stageTitle: string;
+  state: TodayChapterState;
+  legacy: boolean;
+  minutes: number | null;
+}
+
+export interface TodayCard {
+  kind: string;
+  title: string;
+  reason: string;
+  minutes: number;
+  topicId: string | null;
+  layer?: string | null;
+  stepKey?: string | null;
+}
+
+export interface TodayResponse {
+  track: string;
+  pathId: string | null;
+  dailyMinutes: number;
+  continue: {
+    topicId: string;
+    number: number;
+    title: string;
+    stageId: string;
+    layer: string | null;
+    section: string | null;
+    blockId: string | null;
+    stepKey: string | null;
+  } | null;
+  cards: TodayCard[];
+  chapters: TodayChapter[];
+  review: { due: number; newToday: number };
+  pace: {
+    hoursPerWeek: number;
+    minutesThisWeek: number;
+    interviewDate: string | null;
+    chaptersLeft: number;
+    minutesLeft: number;
+    finishBy: string | null;
+    onTrack: boolean | null;
+  };
+  streak: { currentStreak: number; longestStreak: number; todayActions: number; dailyGoal: number };
+}
+
+export interface ReviewItem {
+  itemRef: string;
+  topicId: string;
+  chapterTitle: string;
+  kind: "choice" | "recall";
+  prompt: string;
+  options?: string[];
+  back?: string;
+  isNew: boolean;
+  dueAt: string;
+  changedSinceLastSeen?: boolean;
+}
+
+export type ReviewRating = "again" | "hard" | "good" | "easy";
+
 const AUTH_TOKEN_STORAGE_KEY = "systemcraft_auth_token";
 
 /** Fired when the API answers 401: the token is missing, expired or revoked. */
@@ -303,6 +384,24 @@ export const api = {
   /** Funnel events for the admin view. Best effort: a failure (or an older server) never bothers the learner. */
   sendEvents: (events: Array<{ kind: string; topicId?: string; ref?: string; props?: Record<string, unknown> }>) =>
     fetchJson<{ recorded: number }>("/api/events", { method: "POST", body: JSON.stringify({ events }) }).catch(() => null),
+  getToday: (track = "hld") => fetchJson<TodayResponse>(`/api/me/today?track=${encodeURIComponent(track)}`),
+  getProfile: () => fetchJson<LearnerProfile>("/api/me/profile"),
+  saveProfile: (payload: Partial<{ goals: Goal[]; startLevel: StartLevel; interviewDate: string; hoursPerWeek: number; timezone: string; clearInterviewDate: boolean }>) =>
+    fetchJson<LearnerProfile>("/api/me/profile", { method: "PUT", body: JSON.stringify(payload) }),
+  getReviewQueue: (limit = 20) => fetchJson<{ due: number; items: ReviewItem[] }>(`/api/review/queue?limit=${limit}`),
+  /** itemRef looks like "topic:block", so it is encoded for the path. */
+  answerReviewItem: (itemRef: string, choice: number) =>
+    fetchJson<{ itemRef: string; correct: boolean; correctIndex: number; explanation: string | null; nextDueAt: string }>(
+      `/api/review/${encodeURIComponent(itemRef)}/answer`,
+      { method: "POST", body: JSON.stringify({ choice }) }
+    ),
+  gradeReviewItem: (itemRef: string, rating: ReviewRating) =>
+    fetchJson<{ itemRef: string; nextDueAt: string; intervalDays: number }>(`/api/review/${encodeURIComponent(itemRef)}/grade`, {
+      method: "POST",
+      body: JSON.stringify({ rating }),
+    }),
+  getTopicReviewItems: (topicId: string) =>
+    fetchJson<{ topicId: string; added: number; items: ReviewItem[] }>(`/api/topics/${encodeURIComponent(topicId)}/review-items`),
   getPath: (pathId: string) => fetchJson<StudyPathResponse>(`/api/paths/${pathId}`),
   getTopicV2: (track: string, topicId: string) =>
     fetchJson<{ topic: TopicV2; progress: TopicProgressV2 }>(`/api/tracks/${track}/topics/${topicId}`),

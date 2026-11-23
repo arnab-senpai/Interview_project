@@ -6,7 +6,8 @@ import { useCallback, useEffect, useState } from "react";
  *
  *   /learn                         the path (home)
  *   /learn/:topicId[/:stepKey]     a chapter, optionally at one step
- *   /review                        review cards and checks
+ *   /welcome                       the three onboarding questions
+ *   /review[/all]                  due cards, or every card and quiz (?topic= filters to one chapter)
  *   /library[/:tab]                topics | designs | reading | playground
  *   /library/designs/:id           one guided design (case study)
  *   /library/playground/:lessonId  the simulator on one lesson
@@ -17,7 +18,8 @@ export type LibraryTab = "topics" | "designs" | "reading" | "playground";
 export type Route =
   | { name: "learn" }
   | { name: "chapter"; topicId: string; stepKey?: string }
-  | { name: "review"; topicId?: string }
+  | { name: "welcome" }
+  | { name: "review"; topicId?: string; all?: boolean }
   | { name: "library"; tab: LibraryTab; id?: string }
   | { name: "notes" }
   | { name: "feedback" };
@@ -33,12 +35,14 @@ export function parseRoute(pathname: string, search = ""): Route {
       return a ? { name: "chapter", topicId: a, stepKey: b } : { name: "learn" };
     case "review": {
       const topicId = new URLSearchParams(search).get("topic") ?? undefined;
-      return { name: "review", topicId };
+      return { name: "review", topicId, all: a === "all" };
     }
     case "library": {
       const tab = (LIBRARY_TABS as string[]).includes(a ?? "") ? (a as LibraryTab) : "topics";
       return { name: "library", tab, id: b };
     }
+    case "welcome":
+      return { name: "welcome" };
     case "notes":
       return { name: "notes" };
     case "feedback":
@@ -56,7 +60,9 @@ export function routeToPath(r: Route): string {
     case "chapter":
       return `/learn/${enc(r.topicId)}${r.stepKey ? `/${enc(r.stepKey)}` : ""}`;
     case "review":
-      return r.topicId ? `/review?topic=${enc(r.topicId)}` : "/review";
+      return `/review${r.all ? "/all" : ""}${r.topicId ? `?topic=${enc(r.topicId)}` : ""}`;
+    case "welcome":
+      return "/welcome";
     case "library":
       return `/library/${r.tab}${r.id ? `/${enc(r.id)}` : ""}`;
     case "notes":
@@ -68,7 +74,7 @@ export function routeToPath(r: Route): string {
 
 /** The tab a route belongs to, for the top navigation. */
 export function navKey(r: Route): "learn" | "review" | "library" | "notes" | "feedback" {
-  if (r.name === "chapter") return "learn";
+  if (r.name === "chapter" || r.name === "welcome") return "learn";
   return r.name;
 }
 

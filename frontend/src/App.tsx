@@ -4,7 +4,6 @@ import {
   BookOpen,
   Box,
   Flag,
-  Flame,
   Keyboard,
   LibraryBig,
   Map,
@@ -23,6 +22,7 @@ import {
   authStorage,
   type AuthSessionResponse,
   type HldModuleItem,
+  type LearnerProfile,
   type OverviewResponse,
   type ProgressSummary,
   type SearchHit,
@@ -40,7 +40,10 @@ import { ModulesView } from "./components/ModulesView";
 import { NotesVaultView } from "./components/NotesVaultView";
 import { PracticeAndDdiaView } from "./components/PracticeAndDdiaView";
 import { SearchModal } from "./components/SearchModal";
-import { StartHereView } from "./components/StartHereView";
+import { LandingView } from "./components/LandingView";
+import { LearnHome } from "./components/LearnHome";
+import { ReviewView } from "./components/ReviewView";
+import { WelcomeView } from "./components/WelcomeView";
 import type { HldCaseStudy, HldExplorerLesson, PatternPlaybook } from "./types/hld";
 import { NAV } from "./copy";
 import { navKey, useRoute, type LibraryTab, type Route } from "./router";
@@ -49,6 +52,7 @@ type NavKey = "learn" | "review" | "library" | "notes" | "feedback";
 
 /** Chapter 3 holds what the Capacity Lab used to: the estimator inputs and the reference tables. */
 const NUMBERS_CHAPTER = "numbers-that-matter";
+const FIRST_CHAPTER = "how-to-approach-a-design-question";
 
 const NAV_ITEMS: Array<{ key: NavKey; label: string; icon: typeof Map; route: Route }> = [
   { key: "learn", label: NAV.learn, icon: Flag, route: { name: "learn" } },
@@ -87,7 +91,9 @@ export function App() {
   const [streak, setStreak] = useState<StreakSummary | null>(null);
   // The alpha requires sign-in: nothing loads until there is a token, and any 401 signs the person out.
   const [signedIn, setSignedIn] = useState<boolean>(() => authStorage.hasSession());
-  const [authModalOpen, setAuthModalOpen] = useState<boolean>(() => !authStorage.hasSession());
+  const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [profile, setProfile] = useState<LearnerProfile | null>(null);
   const [accountModalOpen, setAccountModalOpen] = useState<boolean>(false);
   const [patterns, setPatterns] = useState<PatternPlaybook[]>([]);
   const [foundations, setFoundations] = useState<any>(null);
@@ -165,11 +171,12 @@ export function App() {
   useEffect(() => {
     const onSignedOut = () => {
       setSignedIn(false);
-      setAuthModalOpen(true);
+      setAuthModalOpen(false);
       setAccountModalOpen(false);
       setCurrentUser(null);
       setOverview(null);
       setSummary(null);
+      setProfile(null);
     };
     window.addEventListener(SIGNED_OUT_EVENT, onSignedOut);
     return () => window.removeEventListener(SIGNED_OUT_EVENT, onSignedOut);
@@ -197,6 +204,10 @@ export function App() {
       })
       .catch((err) => setErrorMsg(err.message));
     api
+      .getProfile()
+      .then(setProfile)
+      .catch(() => setProfile(null));
+    api
       .getPath("start-here")
       .then((p) => setV2TopicIds(new Set(p.stages.flatMap((st) => st.chapters.filter((c) => c.format === "v2").map((c) => c.topicId)))))
       .catch(() => undefined);
@@ -208,9 +219,36 @@ export function App() {
     setAuthModalOpen(false);
     if (signedIn) {
       await refreshSummary();
+      api.getProfile().then(setProfile).catch(() => undefined);
+      setPathRefresh((n) => n + 1);
     } else {
       setSignedIn(true);
     }
+  };
+
+  const openAuth = (mode: "login" | "register") => {
+    setAuthMode(mode);
+    setAuthModalOpen(true);
+  };
+
+  // New learners answer three short questions once. Skipping counts as answering, so this never nags.
+  useEffect(() => {
+    if (profile && !profile.onboarded && route.name === "learn") navigate({ name: "welcome" }, { replace: true });
+  }, [profile, route.name]);
+
+  /** "Start chapter 1" after onboarding opens wherever the plan says to begin. */
+  const startLearning = async () => {
+    setPathRefresh((n) => n + 1);
+    try {
+      const t = await api.getToday("hld");
+      if (t.continue) {
+        navigate({ name: "chapter", topicId: t.continue.topicId, stepKey: t.continue.stepKey ?? undefined });
+        return;
+      }
+    } catch {
+      /* fall through to chapter 1 */
+    }
+    navigate({ name: "chapter", topicId: FIRST_CHAPTER });
   };
 
   const handleLogoutSession = async () => {
@@ -329,7 +367,7 @@ export function App() {
               </div>
             </div>
 
-            <nav className="nav-pills">
+            <nav className="nav-pills" style={signedIn ? undefined : { display: "none" }}>
               {(currentUser?.isAdmin
                 ? [...NAV_ITEMS, { key: "feedback" as NavKey, label: NAV.feedback, icon: MessageSquareWarning, route: { name: "feedback" } as Route }]
                 : NAV_ITEMS
@@ -389,35 +427,22 @@ export function App() {
               {theme === "light" ? <Moon size={13} /> : <Sun size={13} />}
             </button>
 
-            {/* Daily Streak + Account Pill */}
-            <button
-              className="icon-btn"
-              onClick={() => (currentUser?.isGuest ? setAuthModalOpen(true) : setAccountModalOpen(true))}
-              aria-label={currentUser?.isGuest ? "Sign in to save your progress" : "Account and streak"}
-              title={currentUser?.isGuest ? "Sign in to save your progress" : "Account and streak"}
-              style={{
-                borderColor: currentUser && !currentUser.isGuest ? "color-mix(in srgb, var(--accent) 48%, transparent)" : undefined,
-                background: currentUser && !currentUser.isGuest ? "var(--accent-soft)" : undefined,
-              }}
-            >
-              <Flame size={12} color="var(--highlight)" />
-              <span className="streak-hand">{streak?.currentStreak ?? 0}<span className="hide-narrow">-day streak</span></span>
-              <span className="hide-narrow" style={{ opacity: 0.45 }}>|</span>
-              <User size={12} />
-              <span>{currentUser && !currentUser.isGuest ? currentUser.displayName : "Sign in"}</span>
-            </button>
-
-            {currentUser && (
+            {/* Account. The streak lives on Learn now, next to the plan. */}
+            {signedIn && (
               <button
-                className="icon-btn hide-narrow"
-                onClick={() => setAccountModalOpen(true)}
-                aria-label="Today's goal"
-                title="Steps done today against your daily goal"
-                style={{ padding: "0 8px" }}
+                className="icon-btn"
+                data-tone={currentUser?.isGuest ? "accent" : undefined}
+                onClick={() => (currentUser?.isGuest ? openAuth("register") : setAccountModalOpen(true))}
+                aria-label={currentUser?.isGuest ? "Save your progress to an account" : "Account"}
+                title={currentUser?.isGuest ? "Save your progress to an account" : "Account"}
               >
-                <span>
-                  Today {Math.min(streak?.todayActions ?? 0, streak?.dailyGoal ?? 3)} of {streak?.dailyGoal ?? 3}
-                </span>
+                <User size={12} />
+                <span>{currentUser && !currentUser.isGuest ? currentUser.displayName : <>Save<span className="hide-narrow"> progress</span></>}</span>
+              </button>
+            )}
+            {!signedIn && (
+              <button className="icon-btn" onClick={() => openAuth("login")}>
+                <User size={12} /> <span>Sign in</span>
               </button>
             )}
           </div>
@@ -429,9 +454,17 @@ export function App() {
           </div>
         )}
 
-        {!overview ? (
+        {!signedIn ? (
+          <LandingView
+            onOpenAuth={openAuth}
+            onAuthenticated={(session) => {
+              navigate({ name: "welcome" }, { replace: true });
+              handleAuthenticatedSession(session);
+            }}
+          />
+        ) : !overview ? (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }} className="mono">
-            {signedIn ? "Loading…" : "Sign in or continue as a guest to start."}
+            Loading…
           </div>
         ) : (
           <AnimatePresence mode="wait">
@@ -444,7 +477,32 @@ export function App() {
               style={{ display: "flex", flex: 1, minHeight: 0, overflow: "hidden" }}
             >
               {route.name === "learn" ? (
-                <StartHereView refreshKey={pathRefresh} onOpenChapter={(id) => openChapter(id)} onOpenSandboxLesson={openTopic} />
+                <LearnHome
+                  refreshKey={pathRefresh}
+                  isGuest={Boolean(currentUser?.isGuest)}
+                  onboarded={Boolean(profile?.onboarded)}
+                  onOpenChapter={(id, stepKey) => {
+                    setChapterInputs(null);
+                    navigate({ name: "chapter", topicId: id, stepKey: stepKey ?? undefined });
+                  }}
+                  onOpenReview={() => navigate({ name: "review" })}
+                  onOpenPlan={() => navigate({ name: "welcome" })}
+                  onSaveProgress={() => openAuth("register")}
+                />
+              ) : route.name === "welcome" ? (
+                <WelcomeView
+                  key={profile?.onboarded ? "edit" : "new"}
+                  profile={profile}
+                  onDone={(saved, start) => {
+                    if (saved) setProfile(saved);
+                    else setProfile((p) => (p ? { ...p, onboarded: true } : p));
+                    if (start) startLearning();
+                    else {
+                      setPathRefresh((n) => n + 1);
+                      navigate({ name: "learn" });
+                    }
+                  }}
+                />
               ) : route.name === "chapter" ? (
                 <ChapterView
                   key={route.topicId}
@@ -462,7 +520,9 @@ export function App() {
                     setPathRefresh((n) => n + 1);
                     openTopic(id);
                   }}
-                  onOpenReview={(id) => navigate({ name: "review", topicId: id })}
+                  onOpenReview={(id) => navigate({ name: "review", topicId: id, all: true })}
+                  isGuest={Boolean(currentUser?.isGuest)}
+                  onSaveProgress={() => openAuth("register")}
                 />
               ) : route.name === "library" ? (
                 <LibraryView
@@ -533,18 +593,33 @@ export function App() {
                     ...modules.map((m) => [m.id, m.title]),
                   ])}
                 />
-              ) : (
-                <PracticeAndDdiaView
-                  key={`${currentUser?.id ?? "guest"}:${route.name === "review" ? route.topicId ?? "" : ""}`}
-                  topicFilter={route.name === "review" ? route.topicId ?? null : null}
-                  onClearTopicFilter={() => navigate({ name: "review" })}
-                  patterns={patterns}
-                  foundations={foundations}
-                  topicMetaById={topicMeta}
-                  onPracticeUpdated={refreshSummary}
-                  onOpenTopic={openReadyTopic}
-                />
-              )}
+              ) : route.name === "review" ? (
+                <ReviewView
+                  key={currentUser?.id ?? "guest"}
+                  all={Boolean(route.all)}
+                  topicFilter={route.topicId ?? null}
+                  topicTitle={route.topicId ? topicMeta[route.topicId]?.title ?? null : null}
+                  onTab={(all) => navigate({ name: "review", topicId: route.topicId, all })}
+                  onClearTopic={() => navigate({ name: "review", all: route.all })}
+                  onContinueLearning={() => {
+                    setPathRefresh((n) => n + 1);
+                    navigate({ name: "learn" });
+                  }}
+                >
+                  {route.all && (
+                    <PracticeAndDdiaView
+                      key={`${currentUser?.id ?? "guest"}:${route.topicId ?? ""}`}
+                      topicFilter={route.topicId ?? null}
+                      onClearTopicFilter={() => navigate({ name: "review", all: true })}
+                      patterns={patterns}
+                      foundations={foundations}
+                      topicMetaById={topicMeta}
+                      onPracticeUpdated={refreshSummary}
+                      onOpenTopic={openReadyTopic}
+                    />
+                  )}
+                </ReviewView>
+              ) : null}
             </motion.div>
           </AnimatePresence>
         )}
@@ -589,8 +664,9 @@ export function App() {
         )}
 
         <AuthPortalModal
-          open={authModalOpen || !signedIn}
-          canDismiss={signedIn}
+          open={authModalOpen}
+          canDismiss
+          initialMode={authMode}
           onClose={() => setAuthModalOpen(false)}
           onAuthenticated={handleAuthenticatedSession}
         />
