@@ -20,6 +20,9 @@ import type {
   TraceBlock,
 } from "../../content/types";
 import { renderMarkdown } from "../../utils/markdown";
+import { markTerms } from "../../content/glossary";
+
+const NO_TERMS = new Set<string>();
 import { ReportIssueButton } from "../ReportIssueButton";
 import { ChapterFigure } from "./ChapterFigure";
 
@@ -29,6 +32,8 @@ export interface BlockContext {
   changedIds: Set<string>;
   status: Record<string, BlockStatus>;
   onAttempt: (result: AttemptResult, blockId: string) => void;
+  /** Glossary terms to underline in each block: only their first use in the current step. */
+  terms?: Map<string, Set<string>>;
 }
 
 const card: React.CSSProperties = { padding: 16, borderRadius: 12 };
@@ -90,7 +95,7 @@ function Prose({ block, ctx }: { block: ProseBlock; ctx: BlockContext }) {
   return (
     <section className="card" style={{ ...card, borderLeft: isProblem ? "3px solid var(--highlight)" : undefined }}>
       <BlockHeader block={block} ctx={ctx} />
-      <div className="chapter-prose">{renderMarkdown(block.body ?? "")}</div>
+      <div className="chapter-prose">{renderMarkdown(markTerms(block.body ?? "", ctx.terms?.get(block.id) ?? NO_TERMS))}</div>
       {block.why && (
         <p style={{ margin: "10px 0 0", fontSize: 13.5, color: "var(--accent)", fontWeight: 550 }}>{block.why}</p>
       )}

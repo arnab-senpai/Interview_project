@@ -458,6 +458,11 @@ export function App() {
                     navigate({ name: "learn" });
                   }}
                   onOpenSandbox={(lessonId) => setActiveLessonId(lessonId)}
+                  onOpenChapter={(id) => {
+                    setPathRefresh((n) => n + 1);
+                    openTopic(id);
+                  }}
+                  onOpenReview={(id) => navigate({ name: "review", topicId: id })}
                 />
               ) : route.name === "library" ? (
                 <LibraryView
