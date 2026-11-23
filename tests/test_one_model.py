@@ -66,7 +66,9 @@ def test_path_lint_requires_every_ready_chapter_to_be_a_v2_topic(tmp_path: Path,
 
     # Drop the adapted topics: the path now points at things that are not v2 topics.
     errors = lint_graph(written, v1_ids)
-    assert any("not a v2 topic" in e and "l7-load-balancer" in e for e in errors)
+    adapted = sorted({t.id for t in topics} - {t.id for t in written})
+    assert adapted
+    assert any("not a v2 topic" in e and any(a in e for a in adapted) for e in errors)
 
     paths, _ = load_paths()
     planned = [e for s in paths[0].stages for e in s.chapters if e.status == "planned"]
@@ -86,8 +88,9 @@ def test_path_is_one_model_with_preview_and_planned_chapters(client: TestClient)
     h = _signup(client, "path_reader")
     path = client.get("/api/paths/start-here", headers=h).json()
     chapters = {c["number"]: c for s in path["stages"] for c in s["chapters"]}
-    assert chapters[4]["format"] == "v2" and chapters[4]["legacy"] is True and chapters[4]["available"]
-    assert chapters[5]["legacy"] is False
+    old = next(n for n, c in sorted(chapters.items()) if c["legacy"])  # first chapter not yet rewritten
+    assert chapters[old]["format"] == "v2" and chapters[old]["available"]
+    assert chapters[4]["legacy"] is False and chapters[5]["legacy"] is False
     assert chapters[8]["status"] == "planned" and not chapters[8]["available"]
     assert all(c["stageId"] for c in chapters.values())
     assert path["continue"]["topicId"] == "how-to-approach-a-design-question"
@@ -95,10 +98,11 @@ def test_path_is_one_model_with_preview_and_planned_chapters(client: TestClient)
     assert path["continue"]["stepKey"] == "section-problem"
     assert path["chaptersAvailable"] == 15 and path["chaptersDone"] == 0
 
-    legacy = client.get("/api/tracks/hld/topics/l7-load-balancer", headers=h).json()
-    assert legacy["topic"]["legacy"]["kind"] == "lesson"
+    legacy = client.get(f"/api/tracks/hld/topics/{chapters[old]['topicId']}", headers=h).json()
+    assert legacy["topic"]["legacy"]["kind"] in ("lesson", "case_study")
     assert chapters[4]["title"] == "Load balancing" and chapters[13]["title"] == "URL shortener"
-    assert legacy["topic"]["title"] == "Load balancing" and legacy["topic"]["originalTitle"].startswith("L4 vs L7")
+    assert legacy["topic"]["title"] == chapters[old]["title"]  # the path title, not the old one
+    assert legacy["topic"]["originalTitle"] and legacy["topic"]["originalTitle"] != chapters[old]["title"]
     assert legacy["progress"]["status"] == "not_started"
 
 

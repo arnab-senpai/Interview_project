@@ -55,6 +55,38 @@
     "gradingVersion": 1,
     "hash": "ca53f71b050bc68a"
   },
+  "l7-load-balancer/bug-health": {
+    "gradingVersion": 1,
+    "hash": "123574b285dbbc73"
+  },
+  "l7-load-balancer/check-figure-health": {
+    "gradingVersion": 1,
+    "hash": "99a1516f844ab001"
+  },
+  "l7-load-balancer/check-http2": {
+    "gradingVersion": 1,
+    "hash": "fbc4fa0a6bf60c7e"
+  },
+  "l7-load-balancer/check-slow-requests": {
+    "gradingVersion": 1,
+    "hash": "7e4789c5147217f8"
+  },
+  "l7-load-balancer/check-stateless": {
+    "gradingVersion": 1,
+    "hash": "144560d101dc7525"
+  },
+  "l7-load-balancer/clarify-predict": {
+    "gradingVersion": 1,
+    "hash": "528d868b73100f12"
+  },
+  "l7-load-balancer/design-launch": {
+    "gradingVersion": 1,
+    "hash": "2f921eb2ffa90a0e"
+  },
+  "l7-load-balancer/numbers-worksheet": {
+    "gradingVersion": 1,
+    "hash": "d03f30a6dd783885"
+  },
   "numbers-that-matter/check-cache-size": {
     "gradingVersion": 1,
     "hash": "bdf28b877a150522"
