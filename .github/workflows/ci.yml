@@ -51,6 +51,9 @@ jobs:
       - run: npm --prefix frontend ci
       - run: npm --prefix frontend run build
       - run: pip install -r backend/requirements.txt
+      # The browser and the server must compute the same chapter numbers.
+      - run: python backend/scripts/build_content.py --out data/build
+      - run: npm --prefix frontend run check:numbers
       - run: python -m pytest -q
       # The SQLite fallback for local development keeps working too.
       - run: SYSTEMCRAFT_TEST_DATABASE_URL= python -m pytest -q

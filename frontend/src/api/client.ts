@@ -6,6 +6,7 @@ import type {
   QuizQuestion,
   QuizReveal,
 } from "../types/hld";
+import type { AttemptResult, StudyPathResponse, TopicProgressV2, TopicV2 } from "../content/types";
 
 export interface LayerMeta {
   layer: number;
@@ -246,12 +247,21 @@ const AUTH_TOKEN_STORAGE_KEY = "systemcraft_auth_token";
 /** Fired when the API answers 401: the token is missing, expired or revoked. */
 export const SIGNED_OUT_EVENT = "systemcraft:signed-out";
 
+const GUEST_FLAG_STORAGE_KEY = "systemcraft_guest";
+
 export const authStorage = {
   getToken: () => window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY),
   setToken: (token: string | null) => {
     if (token) window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
     else window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
   },
+  /** A guest has no token: the signed HttpOnly cookie identifies them. This flag only remembers that they chose it. */
+  isGuest: () => window.localStorage.getItem(GUEST_FLAG_STORAGE_KEY) === "1",
+  setGuest: (on: boolean) => {
+    if (on) window.localStorage.setItem(GUEST_FLAG_STORAGE_KEY, "1");
+    else window.localStorage.removeItem(GUEST_FLAG_STORAGE_KEY);
+  },
+  hasSession: () => Boolean(window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)) || window.localStorage.getItem(GUEST_FLAG_STORAGE_KEY) === "1",
 };
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -278,6 +288,7 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     // calls themselves means the session is gone, so send the person back to sign in.
     if (res.status === 401 && !url.startsWith("/api/auth/login") && !url.startsWith("/api/auth/register")) {
       authStorage.setToken(null);
+      authStorage.setGuest(false);
       window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
     }
     throw new Error(msg || `API ${res.status}`);
@@ -286,6 +297,20 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  // ---- Content model v2 (chapters) and guest sessions
+  getSessionConfig: () => fetchJson<{ guestsAllowed: boolean }>("/api/session/config"),
+  startGuest: () => fetchJson<Omit<AuthSessionResponse, "accessToken" | "tokenType" | "expiresAt">>("/api/session/guest", { method: "POST" }),
+  getPath: (pathId: string) => fetchJson<StudyPathResponse>(`/api/paths/${pathId}`),
+  getTopicV2: (track: string, topicId: string) =>
+    fetchJson<{ topic: TopicV2; progress: TopicProgressV2 }>(`/api/tracks/${track}/topics/${topicId}`),
+  saveBlockViews: (topicId: string, blockIds: string[]) =>
+    fetchJson<{ recorded: number; new: number; progress: TopicProgressV2 }>("/api/progress/blocks", {
+      method: "POST",
+      body: JSON.stringify({ topicId, blockIds }),
+    }),
+  submitAttempt: (payload: { topicId: string; blockId: string; gradingVersion: number; response: Record<string, unknown> }) =>
+    fetchJson<AttemptResult>("/api/attempts", { method: "POST", body: JSON.stringify(payload) }),
+
   reportIssue: (payload: {
     topicId: string;
     blockId: string;
