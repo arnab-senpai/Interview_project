@@ -241,13 +241,13 @@ export const NotesVaultView: React.FC<NotesVaultViewProps> = ({
         {!selectedTopicId ? (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, padding: 32, textAlign: "center" }}>
             <div className="mono" style={{ fontSize: 15, fontWeight: 700 }}>
-              Your Personal HLD Markdown Vault
+              Your notes
             </div>
             <p style={{ maxWidth: 420, margin: 0, fontSize: 13, color: "var(--ink-secondary)", lineHeight: 1.6 }}>
-              Every note you write inside an Explorer lesson or Case Study syncs right here under your active account, alongside custom architecture scratchpads.
+              Notes you write in a chapter, a guided design or the playground show up here. You can also write one of your own.
             </p>
             <button type="button" className="btn-primary" onClick={handleCreateScratchpad}>
-              <Plus size={13} /> Create First Scratchpad
+              <Plus size={13} /> Write a note
             </button>
           </div>
         ) : (

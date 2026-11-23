@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { ArrowRight, CheckCircle2, Circle, CircleDashed, Clock, Compass, Lock } from "lucide-react";
+import { ArrowRight, CheckCircle2, Circle, CircleDashed, Clock, Lock } from "lucide-react";
 import { api } from "../api/client";
 import type { PathChapter, StudyPathResponse } from "../content/types";
 
@@ -42,7 +42,7 @@ export const StartHereView: React.FC<StartHereViewProps> = ({ pathId = "start-he
     <div className="start-here">
       <header className="start-here-hero">
         <div>
-          <div className="mono" style={{ fontSize: 11, color: "var(--ink-muted)", letterSpacing: 0.5, textTransform: "uppercase" }}>Start here</div>
+          <div className="mono" style={{ fontSize: 11, color: "var(--ink-muted)", letterSpacing: 0.5, textTransform: "uppercase" }}>Learn</div>
           <h1 style={{ margin: "4px 0 6px", fontSize: 26, fontWeight: 700 }}>{path.title}</h1>
           <p style={{ margin: 0, color: "var(--ink-secondary)", maxWidth: 640, fontSize: 14, lineHeight: 1.55 }}>{path.summary}</p>
           <div style={{ fontSize: 12, color: "var(--ink-muted)", marginTop: 8 }}>
@@ -72,7 +72,7 @@ export const StartHereView: React.FC<StartHereViewProps> = ({ pathId = "start-he
                 data-continue={ch.topicId === path.continueTopicId}
                 disabled={!ch.available}
                 onClick={() => open(ch)}
-                title={ch.available ? "" : "Planned: not written yet"}
+                title={ch.available ? (ch.format === "v2" ? "" : "Preview: this chapter still uses the older lesson page") : "Coming soon"}
               >
                 <span className="chapter-card-top">
                   <span className="mono chapter-card-num">{String(ch.number).padStart(2, "0")}</span>
@@ -86,13 +86,10 @@ export const StartHereView: React.FC<StartHereViewProps> = ({ pathId = "start-he
                       <Clock size={11} /> {ch.minutes} min
                     </>
                   ) : ch.format === "v1" ? (
-                    <>
-                      <Compass size={11} /> Sandbox lesson
-                    </>
+                    <span className="pill-preview">Preview</span>
                   ) : (
-                    "Planned"
+                    "Coming soon"
                   )}
-                  {ch.note ? <span style={{ flexBasis: "100%" }}>{ch.note}</span> : null}
                 </span>
               </button>
             ))}

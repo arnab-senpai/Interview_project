@@ -5,6 +5,7 @@ import { solveValues } from "../../content/formula";
 import { computeFigureNumbers, diffFigure, formatValue, resolveFigure, type Change } from "../../content/numbers";
 import type { Block, LayerName, NumberInput, TopicProgressV2, TopicV2 } from "../../content/types";
 import { BlockRenderer, type BlockContext } from "./ChapterBlocks";
+import { LAYER_LABELS, levelLabel } from "../../copy";
 
 const SECTION_TITLES: Record<string, string> = {
   problem: "The problem",
@@ -14,13 +15,7 @@ const SECTION_TITLES: Record<string, string> = {
   remember: "Remember",
   check: "Check yourself",
 };
-const LAYER_TITLES: Record<LayerName, string> = {
-  understand: "Understand",
-  apply: "Apply",
-  defend: "Defend",
-  practice: "Practice",
-  cheatSheet: "Reference",
-};
+const LAYER_TITLES = LAYER_LABELS as Record<LayerName, string>;
 
 interface Step {
   key: string;
@@ -87,11 +82,14 @@ interface ChapterViewProps {
   /** Inputs to start with, e.g. a case study's estimation preset. */
   initialInputs?: Record<string, number> | null;
   initialLabel?: string | null;
+  /** The step in the URL, e.g. "design-3"; the chapter opens there. */
+  stepKey?: string | null;
+  onStepChange?: (stepKey: string) => void;
   onBack: () => void;
   onOpenSandbox?: (lessonId: string) => void;
 }
 
-export const ChapterView: React.FC<ChapterViewProps> = ({ topicId, track = "hld", initialInputs, initialLabel, onBack, onOpenSandbox }) => {
+export const ChapterView: React.FC<ChapterViewProps> = ({ topicId, track = "hld", initialInputs, initialLabel, stepKey, onStepChange, onBack, onOpenSandbox }) => {
   const [topic, setTopic] = useState<TopicV2 | null>(null);
   const [progress, setProgress] = useState<TopicProgressV2 | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -119,7 +117,6 @@ export const ChapterView: React.FC<ChapterViewProps> = ({ topicId, track = "hld"
         setPrevInputs(null);
         setLastChanged(new Set());
         setPresetLabel(initialInputs ? initialLabel ?? "Your inputs" : null);
-        setStepIdx(0);
       })
       .catch((e) => !cancelled && setError(e.message ?? String(e)));
     return () => {
@@ -128,6 +125,18 @@ export const ChapterView: React.FC<ChapterViewProps> = ({ topicId, track = "hld"
   }, [track, topicId, initialInputs, initialLabel]);
 
   const steps = useMemo(() => (topic ? buildSteps(topic) : []), [topic]);
+
+  // The URL owns the step: follow it (Back and Forward), and write it when the learner moves.
+  useEffect(() => {
+    if (!steps.length) return;
+    const i = stepKey ? steps.findIndex((s) => s.key === stepKey) : 0;
+    setStepIdx(i >= 0 ? i : 0);
+  }, [steps, stepKey]);
+  const goStep = (i: number) => {
+    const next = Math.max(0, Math.min(steps.length - 1, i));
+    setStepIdx(next);
+    if (steps[next]) onStepChange?.(steps[next].key);
+  };
   const step = steps[Math.min(stepIdx, Math.max(0, steps.length - 1))];
   const env = useMemo(() => (topic ? solveValues(inputs, topic.numbers.values) : {}), [topic, inputs]);
   const prevEnv = useMemo(() => (topic && prevInputs ? solveValues(prevInputs, topic.numbers.values) : null), [topic, prevInputs]);
@@ -226,7 +235,7 @@ export const ChapterView: React.FC<ChapterViewProps> = ({ topicId, track = "hld"
       {/* Steps */}
       <nav className="chapter-steps">
         <button className="btn-secondary" style={{ fontSize: 11.5, marginBottom: 12 }} onClick={onBack}>
-          <ArrowLeft size={12} /> Start here
+          <ArrowLeft size={12} /> Learn
         </button>
         <div style={{ fontWeight: 700, fontSize: 15, lineHeight: 1.3 }}>{topic.title}</div>
         <div style={{ fontSize: 12, color: "var(--ink-muted)", margin: "4px 0 12px" }}>{topic.summary}</div>
@@ -235,8 +244,8 @@ export const ChapterView: React.FC<ChapterViewProps> = ({ topicId, track = "hld"
             const lp = layerProgress.get(l.name);
             return (
               <span key={l.name} className={`layer-chip${lp?.passed ? " layer-chip-done" : ""}`} title={l.goal ?? ""}>
-                {LAYER_TITLES[l.name]} · {l.level} · {l.minutes} min
-                {lp && lp.checks > 0 ? ` · ${lp.checksPassed}/${lp.checks}` : ""}
+                {LAYER_TITLES[l.name]} · {levelLabel(l.level)} · {l.minutes} min
+                {lp?.passed ? " · done" : lp && lp.checks > 0 ? ` · ${lp.checksPassed} of ${lp.checks} checks` : ""}
               </span>
             );
           })}
@@ -246,7 +255,7 @@ export const ChapterView: React.FC<ChapterViewProps> = ({ topicId, track = "hld"
             const seen = s.blocks.every((b) => progress?.blocks[b.id] && progress.blocks[b.id].status !== "new");
             return (
               <li key={s.key}>
-                <button data-active={i === stepIdx} data-seen={seen} onClick={() => setStepIdx(i)}>
+                <button data-active={i === stepIdx} data-seen={seen} onClick={() => goStep(i)}>
                   <span className="mono chapter-step-kicker">{s.key.startsWith("design-") ? s.kicker : LAYER_TITLES[s.layer]}</span>
                   <span>{s.title}</span>
                 </button>
@@ -256,7 +265,7 @@ export const ChapterView: React.FC<ChapterViewProps> = ({ topicId, track = "hld"
         </ol>
         {topic.sandboxLessonId && onOpenSandbox && (
           <button className="btn-secondary" style={{ marginTop: 14, fontSize: 11.5, width: "100%" }} onClick={() => onOpenSandbox(topic.sandboxLessonId!)}>
-            <Compass size={12} /> Try it in the Sandbox
+            <Compass size={12} /> Try it in the playground
           </button>
         )}
         <div style={{ fontSize: 10.5, color: "var(--ink-muted)", marginTop: 14 }}>
@@ -276,16 +285,16 @@ export const ChapterView: React.FC<ChapterViewProps> = ({ topicId, track = "hld"
           ))}
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 28, paddingBottom: 40 }}>
-          <button className="btn-secondary" disabled={stepIdx === 0} onClick={() => setStepIdx((i) => Math.max(0, i - 1))}>
+          <button className="btn-secondary" disabled={stepIdx === 0} onClick={() => goStep(stepIdx - 1)}>
             <ArrowLeft size={13} /> Previous
           </button>
           {stepIdx < steps.length - 1 ? (
-            <button className="btn-primary" onClick={() => setStepIdx((i) => i + 1)}>
+            <button className="btn-primary" onClick={() => goStep(stepIdx + 1)}>
               Next: {steps[stepIdx + 1].title} <ArrowRight size={13} />
             </button>
           ) : (
             <button className="btn-primary" onClick={onBack}>
-              Back to Start here <ArrowRight size={13} />
+              Back to Learn <ArrowRight size={13} />
             </button>
           )}
         </div>

@@ -1,3 +1,4 @@
+import { levelLabel } from "../copy";
 import React, { useEffect, useState } from "react";
 import { BookMarked, CheckCircle2, Compass, Layers, RotateCw, XCircle } from "lucide-react";
 import { api, type FlashcardWithSm2, type QuizAnswerResult, type QuizWithAttempt } from "../api/client";
@@ -81,22 +82,22 @@ export const PracticeAndDdiaView: React.FC<PracticeAndDdiaViewProps> = ({
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <button onClick={() => setSubtab("flashcards")} className={subtab === "flashcards" ? "btn-primary" : "btn-secondary"}>
-              <RotateCw size={13} /> SM-2 FLASHCARDS ({cards.length})
+              <RotateCw size={13} /> Cards ({cards.length})
             </button>
             <button onClick={() => setSubtab("quizzes")} className={subtab === "quizzes" ? "btn-primary" : "btn-secondary"}>
-              <CheckCircle2 size={13} /> BOTTLENECK QUIZZES ({quizzes.length})
+              <CheckCircle2 size={13} /> Quick checks ({quizzes.length})
             </button>
             <button onClick={() => setSubtab("ddia")} className={subtab === "ddia" ? "btn-primary" : "btn-secondary"}>
-              <BookMarked size={13} /> DDIA & PRAGMATIC GUIDE
+              <BookMarked size={13} /> Reading notes
             </button>
             <button onClick={() => setSubtab("patterns")} className={subtab === "patterns" ? "btn-primary" : "btn-secondary"}>
-              <Layers size={13} /> 12 PATTERN PLAYBOOKS
+              <Layers size={13} /> Patterns
             </button>
           </div>
 
           {topicFilter && (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span className="badge badge-accent">Filtered: {topicFilter}</span>
+              <span className="badge badge-accent">Showing: {topicMetaById[topicFilter]?.title ?? humanizeKey(topicFilter)}</span>
               <button className="btn-secondary" onClick={onClearTopicFilter}>Show All Topics</button>
             </div>
           )}
@@ -117,18 +118,18 @@ export const PracticeAndDdiaView: React.FC<PracticeAndDdiaViewProps> = ({
 
             {!activeCard ? (
               <div className="card" style={{ textAlign: "center", padding: 36 }}>
-                <div className="mono" style={{ fontWeight: 700, fontSize: 15 }}>All caught up!</div>
-                <p style={{ color: "var(--ink-secondary)", fontSize: 13 }}>Uncheck "Due cards only" to review the full deck anytime.</p>
+                <div className="mono" style={{ fontWeight: 700, fontSize: 15 }}>All caught up</div>
+                <p style={{ color: "var(--ink-secondary)", fontSize: 13 }}>Untick "Due cards only" to go through every card.</p>
               </div>
             ) : (
               <div className="card" style={{ padding: 24 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    <span className="badge badge-accent">Layer {activeCard.layer} · {activeCard.difficulty}</span>
+                    <span className="badge badge-accent">{topicMetaById[activeCard.topicId]?.title ?? humanizeKey(activeCard.topicId)} · {levelLabel(activeCard.difficulty)}</span>
                     <ReportIssueButton topicId={activeCard.topicId} blockId={`flashcard:${activeCard.id}`} blockLabel={`Flashcard ${activeCard.id}`} />
                   </span>
                   <span className="mono" style={{ fontSize: 11, color: "var(--ink-muted)" }}>
-                    Interval: {activeCard.sm2.intervalDays}d · EF {activeCard.sm2.easinessFactor}
+                    {activeCard.sm2.intervalDays > 0 ? `Next review in ${activeCard.sm2.intervalDays} day${activeCard.sm2.intervalDays === 1 ? "" : "s"}` : "New card"}
                   </span>
                 </div>
 
@@ -139,19 +140,19 @@ export const PracticeAndDdiaView: React.FC<PracticeAndDdiaViewProps> = ({
                 {flipped ? (
                   <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--border-soft)" }}>
                     <div className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: "var(--success)", marginBottom: 6 }}>
-                      ANSWER & MENTAL MODEL
+                      ANSWER
                     </div>
                     <div style={{ fontSize: 14, lineHeight: 1.6 }}>{renderInlineCode(activeCard.back)}</div>
 
                     <div style={{ display: "flex", gap: 8, marginTop: 18, flexWrap: "wrap" }}>
                       <button className="btn-secondary" style={{ borderColor: "var(--danger)", color: "var(--danger)" }} onClick={() => handleRateCard("again")}>
-                        Again (1d)
+                        Again
                       </button>
                       <button className="btn-secondary" style={{ borderColor: "var(--warn)", color: "var(--warn)" }} onClick={() => handleRateCard("hard")}>
                         Hard
                       </button>
                       <button className="btn-primary" onClick={() => handleRateCard("good")}>
-                        Good
+                        Got it
                       </button>
                       <button className="btn-secondary" style={{ borderColor: "var(--success)", color: "var(--success)" }} onClick={() => handleRateCard("easy")}>
                         Easy
@@ -160,7 +161,7 @@ export const PracticeAndDdiaView: React.FC<PracticeAndDdiaViewProps> = ({
                   </div>
                 ) : (
                   <button className="btn-primary" style={{ marginTop: 16 }} onClick={() => setFlipped(true)}>
-                    Flip Card & Reveal Answer
+                    Show answer
                   </button>
                 )}
               </div>
@@ -177,7 +178,7 @@ export const PracticeAndDdiaView: React.FC<PracticeAndDdiaViewProps> = ({
                 <div key={q.id} className="card">
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                     <span className="mono" style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)" }}>
-                      SCENARIO #{qIdx + 1} · {topicMetaById[q.topicId]?.title ?? humanizeKey(q.topicId)} · Layer {q.layer} ({q.difficulty})
+                      Question {qIdx + 1} · {topicMetaById[q.topicId]?.title ?? humanizeKey(q.topicId)} · {levelLabel(q.difficulty)}
                     </span>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                       {q.lastAttempt && !fb && (

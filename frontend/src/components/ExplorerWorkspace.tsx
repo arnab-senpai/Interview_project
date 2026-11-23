@@ -624,7 +624,7 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
                 ) : (
                   <>
                     <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--success)", boxShadow: "none" }} />
-                    <span>Steady State</span>
+                    <span>Normal traffic</span>
                   </>
                 )}
                 <ChevronDown size={12} style={{ opacity: 0.75 }} />
@@ -670,7 +670,7 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
                       className="mono"
                     >
                       <CheckCircle2 size={13} />
-                      <span>Steady State (Happy Path)</span>
+                      <span>Normal traffic</span>
                     </button>
 
                     {activeLesson.chaosScenarios.map((cs) => (
@@ -755,11 +755,11 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
                 })}
               </span>
               <span>
-                Ingress: <strong>{formatCompactRps(telemetry.ingressRps)} req/s</strong>
+                Requests: <strong>{formatCompactRps(telemetry.ingressRps)} req/s</strong>
               </span>
               <span style={{ opacity: 0.4 }}>|</span>
               <span style={{ color: tierColor }}>
-                Busiest: <strong>{Math.round(telemetry.bottleneckUtilization * 100)}%</strong>
+                Busiest part: <strong>{Math.round(telemetry.bottleneckUtilization * 100)}%</strong>
               </span>
             </button>
 
@@ -1594,7 +1594,7 @@ export const ExplorerWorkspace: React.FC<ExplorerWorkspaceProps> = ({
               onClick={() => setTraceDrawerOpen((p) => !p)}
               title="Toggle Request Flow Waterfall table"
             >
-              <span>{traceDrawerOpen ? "Hide Trace Waterfall" : "Show Trace Waterfall"}</span>
+              <span>{traceDrawerOpen ? "Hide request timeline" : "Show request timeline"}</span>
               {traceDrawerOpen ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
             </button>
           )}

@@ -5,7 +5,6 @@ import {
   BookOpen,
   Box,
   Flame,
-  KeyRound,
   Layers,
   ShieldCheck,
   Sparkles,
@@ -142,7 +141,7 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
                   </div>
                   <div>
                     <div className="mono" style={{ fontSize: 13.5, fontWeight: 700, letterSpacing: "0.08em" }}>
-                      SYSTEMCRAFT STUDIO
+                      SYSTEMCRAFT
                     </div>
                     <div className="mono" style={{ fontSize: 9.5, color: "var(--accent)", letterSpacing: "0.09em" }}>
                       SYSTEM DESIGN, PRACTISED
@@ -151,18 +150,17 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
                 </div>
 
                 <h2 className="mono" style={{ margin: "0 0 10px", fontSize: 21, lineHeight: 1.3 }}>
-                  Your Personal Distributed Systems Lab
+                  Learn system design one step at a time
                 </h2>
                 <p style={{ margin: 0, fontSize: 13, color: "var(--ink-secondary)", lineHeight: 1.6 }}>
-                  Sign in with an isolated JWT study profile to track daily momentum, build spaced-repetition mastery, and keep searchable Markdown architecture notes per lesson.
+                  20 short chapters that take you from one server to the designs interviewers ask for. Each step adds one part to the picture and shows the numbers behind it.
                 </p>
 
                 <div style={{ display: "grid", gap: 10, marginTop: 22 }}>
                   {[
-                    { icon: Flame, color: "var(--highlight)", label: "Daily Study Streak & 12-Week Heatmap" },
-                    { icon: BookOpen, color: "var(--accent)", label: "Topic-Linked Markdown Study Vault" },
-                    { icon: KeyRound, color: "var(--purple)", label: "Personal sc_live_* Study API Tokens" },
-                    { icon: Layers, color: "var(--accent)", label: "16 Interactive Lessons · 8 Case Studies" },
+                    { icon: Layers, color: "var(--accent)", label: "Read a step: one idea, one figure, a few minutes" },
+                    { icon: BookOpen, color: "var(--accent)", label: "Check yourself before you move on" },
+                    { icon: Flame, color: "var(--highlight)", label: "Review what you finished, spaced out over days" },
                   ].map((item) => {
                     const Icon = item.icon;
                     return (
@@ -190,7 +188,7 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
 
               <div className="mono" style={{ fontSize: 10.5, color: "var(--ink-muted)", display: "flex", alignItems: "center", gap: 6, marginTop: 18 }}>
                 <ShieldCheck size={13} color="var(--accent)" />
-                <span>HS256 JWT Sessions · scrypt Salted Local Auth</span>
+                <span>Your progress and notes are private to you.</span>
               </div>
             </div>
 
@@ -235,12 +233,12 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
                 </div>
 
                 <h3 className="mono" style={{ margin: "0 0 4px", fontSize: 18 }}>
-                  {mode === "login" ? "Welcome Back, Architect" : "Create Personal Workspace"}
+                  {mode === "login" ? "Welcome back" : "Save your progress"}
                 </h3>
                 <p style={{ margin: "0 0 16px", fontSize: 12.5, color: "var(--ink-muted)" }}>
                   {mode === "login"
-                    ? "Sign in to load your streak heatmap, progress, and personal notes."
-                    : "Create an isolated account with its own SM-2 queue, streak, and notes."}
+                    ? "Sign in to pick up where you left off."
+                    : "An account keeps your progress, review cards and notes on any device."}
                 </p>
 
                 {error && (
@@ -273,7 +271,7 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
                       minLength={3}
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
-                      placeholder="e.g. staff_builder"
+                      placeholder="e.g. priya"
                       style={{
                         width: "100%",
                         padding: "9px 11px",
@@ -312,7 +310,7 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
                       </div>
                       <div>
                         <label htmlFor="auth-daily-goal" className="mono" style={{ display: "block", fontSize: 10.5, fontWeight: 700, color: "var(--ink-muted)", marginBottom: 4 }}>
-                          DAILY GOAL (ACTIONS)
+                          DAILY GOAL (STEPS)
                         </label>
                         <input
                           id="auth-daily-goal"
@@ -391,10 +389,10 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
                   <button type="submit" disabled={submitting} className="btn-primary" style={{ padding: "10px 14px", marginTop: 4 }}>
                     <Sparkles size={13} />
                     {submitting
-                      ? "Generating Session Token..."
+                      ? "Signing in…"
                       : mode === "login"
-                      ? "Sign In & Launch Studio"
-                      : "Create Account & Issue Token"}
+                      ? "Sign in"
+                      : "Create account"}
                     <ArrowRight size={13} />
                   </button>
                 </form>
