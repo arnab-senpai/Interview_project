@@ -17,6 +17,8 @@ interface AuthPortalModalProps {
   canDismiss: boolean;
   onClose: () => void;
   onAuthenticated: (session: AuthSessionResponse) => void;
+  /** Which form shows when the modal opens: "register" for "Save your progress". */
+  initialMode?: "login" | "register";
 }
 
 export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
@@ -24,8 +26,12 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
   canDismiss,
   onClose,
   onAuthenticated,
+  initialMode = "login",
 }) => {
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register">(initialMode);
+  useEffect(() => {
+    if (open) setMode(initialMode);
+  }, [open, initialMode]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -396,7 +402,7 @@ export const AuthPortalModal: React.FC<AuthPortalModalProps> = ({
                     <ArrowRight size={13} />
                   </button>
                 </form>
-                {guestsAllowed && (
+                {guestsAllowed && !authStorage.isGuest() && (
                   <button
                     type="button"
                     disabled={submitting}
