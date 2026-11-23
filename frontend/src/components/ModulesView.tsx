@@ -115,7 +115,7 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
       {/* Left Curriculum Module Selector */}
       <aside className="pane pane-left">
         <div className="pane-header">
-          <span className="pane-title">PRINCIPAL HLD MODULES</span>
+          <span className="pane-title">READING LIST</span>
           <span className="badge badge-accent">{modules.length} MODULES</span>
         </div>
 
@@ -192,7 +192,7 @@ export const ModulesView: React.FC<ModulesViewProps> = ({
             {(activeModule.linkedLessonIds.length > 0 || activeModule.linkedCaseStudyIds.length > 0) && (
               <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border-soft)", display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
                 <span className="mono" style={{ fontSize: 10.5, fontWeight: 700, color: "var(--ink-muted)" }}>
-                  INTERACTIVE 3D LABS:
+                  TRY IT IN THE PLAYGROUND:
                 </span>
                 {activeModule.linkedLessonIds.map((lid) => {
                   const meta = topicMetaById[lid];

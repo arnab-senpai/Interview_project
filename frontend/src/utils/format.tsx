@@ -1,3 +1,4 @@
+import { TERM_CLOSE, TERM_OPEN, termById } from "../content/glossary";
 import React from "react";
 
 const ACRONYMS: Record<string, string> = {
@@ -84,7 +85,7 @@ export function humanizeKey(key: string): string {
 }
 
 export function renderInlineCode(text: string): React.ReactNode {
-  if (!text.includes("`")) return text;
+  if (!text.includes("`")) return renderTerms(text);
   const parts = text.split(/(`[^`]+`)/g);
   return parts.map((part, idx) => {
     if (part.startsWith("`") && part.endsWith("`") && part.length >= 2) {
@@ -94,6 +95,33 @@ export function renderInlineCode(text: string): React.ReactNode {
         </code>
       );
     }
+    return <React.Fragment key={idx}>{renderTerms(part)}</React.Fragment>;
+  });
+}
+
+/** Glossary markers (⟦id|word⟧, added by markTerms) become underlined terms with a definition. */
+function renderTerms(text: string): React.ReactNode {
+  if (!text.includes(TERM_OPEN)) return text;
+  const parts = text.split(/(\u27e6[^\u27e7]*\u27e7)/g);
+  return parts.map((part, idx) => {
+    if (part.startsWith(TERM_OPEN) && part.endsWith(TERM_CLOSE)) {
+      const [id, word] = part.slice(1, -1).split("|");
+      const term = termById.get(id);
+      if (!term) return <React.Fragment key={idx}>{word}</React.Fragment>;
+      return <GlossaryTerm key={idx} word={word} definition={term.definition} />;
+    }
     return <React.Fragment key={idx}>{part}</React.Fragment>;
   });
+}
+
+function GlossaryTerm({ word, definition }: { word: string; definition: string }) {
+  const id = React.useId();
+  return (
+    <span className="glossary-term" tabIndex={0} aria-describedby={id}>
+      {word}
+      <span className="glossary-tip" role="tooltip" id={id}>
+        {definition}
+      </span>
+    </span>
+  );
 }

@@ -300,6 +300,9 @@ export const api = {
   // ---- Content model v2 (chapters) and guest sessions
   getSessionConfig: () => fetchJson<{ guestsAllowed: boolean }>("/api/session/config"),
   startGuest: () => fetchJson<Omit<AuthSessionResponse, "accessToken" | "tokenType" | "expiresAt">>("/api/session/guest", { method: "POST" }),
+  /** Funnel events for the admin view. Best effort: a failure (or an older server) never bothers the learner. */
+  sendEvents: (events: Array<{ kind: string; topicId?: string; ref?: string; props?: Record<string, unknown> }>) =>
+    fetchJson<{ recorded: number }>("/api/events", { method: "POST", body: JSON.stringify({ events }) }).catch(() => null),
   getPath: (pathId: string) => fetchJson<StudyPathResponse>(`/api/paths/${pathId}`),
   getTopicV2: (track: string, topicId: string) =>
     fetchJson<{ topic: TopicV2; progress: TopicProgressV2 }>(`/api/tracks/${track}/topics/${topicId}`),

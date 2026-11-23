@@ -93,7 +93,7 @@ export const DeepDiveDrawer: React.FC<DeepDiveDrawerProps> = ({
                   className={`hud-seg-btn ${activeTab === "module" ? "active" : ""}`}
                 >
                   <Layers size={11} style={{ marginRight: 5, verticalAlign: -1 }} />
-                  Module {linkedModule.moduleNumber} Staff Blueprint
+                  Module {linkedModule.moduleNumber} reference design
                 </button>
               </div>
             )}

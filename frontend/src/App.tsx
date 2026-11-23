@@ -1,14 +1,12 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  BookMarked,
   BookOpen,
   Box,
-  Compass,
   Flag,
   Flame,
   Keyboard,
-  Layers,
+  LibraryBig,
   Map,
   Maximize2,
   MessageSquareWarning,
@@ -37,36 +35,54 @@ import { AuthPortalModal } from "./components/AuthPortalModal";
 import { CaseStudiesView } from "./components/CaseStudiesView";
 import { ChapterView } from "./components/chapter/ChapterView";
 import { ExplorerWorkspace } from "./components/ExplorerWorkspace";
+import { LibraryView } from "./components/LibraryView";
 import { ModulesView } from "./components/ModulesView";
 import { NotesVaultView } from "./components/NotesVaultView";
 import { PracticeAndDdiaView } from "./components/PracticeAndDdiaView";
-import { RoadmapView } from "./components/RoadmapView";
 import { SearchModal } from "./components/SearchModal";
 import { StartHereView } from "./components/StartHereView";
 import type { HldCaseStudy, HldExplorerLesson, PatternPlaybook } from "./types/hld";
+import { NAV } from "./copy";
+import { navKey, useRoute, type LibraryTab, type Route } from "./router";
 
-type MainView = "start" | "chapter" | "roadmap" | "modules" | "explorer" | "cases" | "notes" | "practice" | "feedback";
+type NavKey = "learn" | "review" | "library" | "notes" | "feedback";
 
 /** Chapter 3 holds what the Capacity Lab used to: the estimator inputs and the reference tables. */
 const NUMBERS_CHAPTER = "numbers-that-matter";
 
-const NAV_ITEMS: Array<{ key: MainView; label: string; icon: typeof Map }> = [
-  { key: "start", label: "Start here", icon: Flag },
-  { key: "roadmap", label: "Roadmap", icon: Map },
-  { key: "modules", label: "Modules", icon: BookMarked },
-  { key: "explorer", label: "Sandbox", icon: Compass },
-  { key: "cases", label: "Case Studies", icon: Layers },
-  { key: "notes", label: "Notes", icon: NotebookPen },
-  { key: "practice", label: "Practice", icon: BookOpen },
+const NAV_ITEMS: Array<{ key: NavKey; label: string; icon: typeof Map; route: Route }> = [
+  { key: "learn", label: NAV.learn, icon: Flag, route: { name: "learn" } },
+  { key: "review", label: NAV.review, icon: BookOpen, route: { name: "review" } },
+  { key: "library", label: NAV.library, icon: LibraryBig, route: { name: "library", tab: "topics" } },
+  { key: "notes", label: NAV.notes, icon: NotebookPen, route: { name: "notes" } },
 ];
 
+const THEME_KEY = "systemcraft.theme";
+type Theme = "light" | "dark";
+/** An explicit choice is remembered; otherwise the theme follows the system setting. */
+function readThemeChoice(): Theme | null {
+  try {
+    const v = window.localStorage.getItem(THEME_KEY);
+    return v === "light" || v === "dark" ? v : null;
+  } catch {
+    return null;
+  }
+}
+function systemTheme(): Theme {
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 export function App() {
-  const [theme, setTheme] = useState<"light" | "dark">("dark");
-  const [view, setView] = useState<MainView>("start");
+  const [themeChoice, setThemeChoice] = useState<Theme | null>(readThemeChoice);
+  const [sysTheme, setSysTheme] = useState<Theme>(systemTheme);
+  const theme: Theme = themeChoice ?? sysTheme;
+  const [route, navigate] = useRoute();
+  const isPlayground = route.name === "library" && route.tab === "playground";
+  const [v2TopicIds, setV2TopicIds] = useState<Set<string>>(new Set());
   const [selectedLayer, setSelectedLayer] = useState<number | null>(null);
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [modules, setModules] = useState<HldModuleItem[]>([]);
-  const [summary, setSummary] = useState<ProgressSummary | null>(null);
+  const [, setSummary] = useState<ProgressSummary | null>(null);
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [streak, setStreak] = useState<StreakSummary | null>(null);
   // The alpha requires sign-in: nothing loads until there is a token, and any 401 signs the person out.
@@ -76,15 +92,13 @@ export function App() {
   const [patterns, setPatterns] = useState<PatternPlaybook[]>([]);
   const [foundations, setFoundations] = useState<any>(null);
 
-  const [activeLessonId, setActiveLessonId] = useState<string>("dns-and-cdn");
+  const activeLessonId = route.name === "library" && route.tab === "playground" && route.id ? route.id : "dns-and-cdn";
   const [activeLesson, setActiveLesson] = useState<HldExplorerLesson | null>(null);
   const [loadingLesson, setLoadingLesson] = useState<boolean>(false);
 
-  const [activeCaseId, setActiveCaseId] = useState<string>("url-shortener");
-  const [chapterTopicId, setChapterTopicId] = useState<string>("how-to-approach-a-design-question");
+  const activeCaseId = route.name === "library" && route.tab === "designs" && route.id ? route.id : "url-shortener";
   const [chapterInputs, setChapterInputs] = useState<{ inputs: Record<string, number>; label: string } | null>(null);
   const [pathRefresh, setPathRefresh] = useState(0);
-  const [practiceTopicFilter, setPracticeTopicFilter] = useState<string | null>(null);
 
   const [showLeftPane, setShowLeftPane] = useState<boolean>(false);
   const [diagramOnly, setDiagramOnly] = useState<boolean>(false);
@@ -97,6 +111,28 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
+    const mq = window.matchMedia?.("(prefers-color-scheme: dark)");
+    if (!mq) return;
+    const onChange = () => setSysTheme(mq.matches ? "dark" : "light");
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, []);
+
+  const toggleTheme = () => {
+    const next: Theme = theme === "light" ? "dark" : "light";
+    setThemeChoice(next);
+    try {
+      window.localStorage.setItem(THEME_KEY, next);
+    } catch {
+      /* storage blocked: the choice lasts for this visit */
+    }
+  };
+
+  const setActiveLessonId = (id: string) => navigate({ name: "library", tab: "playground", id });
+  const setActiveCaseId = (id: string) => navigate({ name: "library", tab: "designs", id });
+  const goLibrary = (tab: LibraryTab) => navigate({ name: "library", tab });
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
@@ -107,16 +143,16 @@ export function App() {
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (e.key === "?") {
         setShortcutsOpen((prev) => !prev);
-      } else if (view === "explorer" && e.key.toLowerCase() === "l") {
+      } else if (isPlayground && e.key.toLowerCase() === "l") {
         setDiagramOnly(false);
         setShowLeftPane((p) => !p);
-      } else if (view === "explorer" && e.key.toLowerCase() === "d") {
+      } else if (isPlayground && e.key.toLowerCase() === "d") {
         setDiagramOnly((p) => !p);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [view]);
+  }, [isPlayground]);
 
   const refreshSummary = async () => {
     const [ov, sum, me] = await Promise.all([api.getOverview(), api.getProgressSummary(), api.getMe()]);
@@ -160,6 +196,10 @@ export function App() {
         setFoundations(fnd);
       })
       .catch((err) => setErrorMsg(err.message));
+    api
+      .getPath("start-here")
+      .then((p) => setV2TopicIds(new Set(p.stages.flatMap((st) => st.chapters.filter((c) => c.format === "v2").map((c) => c.topicId)))))
+      .catch(() => undefined);
   }, [signedIn]);
 
   const handleAuthenticatedSession = async (session: AuthSessionResponse) => {
@@ -201,11 +241,8 @@ export function App() {
 
   const handleLayerSelect = (layer: number | null) => {
     setSelectedLayer(layer);
-    setView("explorer");
-    if (layer !== null && overview) {
-      const match = overview.lessons.find((l) => l.layer === layer && l.status === "ready");
-      if (match) setActiveLessonId(match.id);
-    }
+    const match = layer !== null && overview ? overview.lessons.find((l) => l.layer === layer && l.status === "ready") : null;
+    navigate({ name: "library", tab: "playground", id: match?.id ?? activeLessonId });
   };
 
   const handleUpdateProgress = async (
@@ -223,21 +260,28 @@ export function App() {
 
   const handleSearchHit = (hit: SearchHit) => {
     if (hit.kind === "lesson" && hit.status === "ready") {
-      setActiveLessonId(hit.id);
-      setView("explorer");
+      openTopic(hit.id);
     } else if (hit.kind === "case_study" && hit.status === "ready") {
       setActiveCaseId(hit.id);
-      setView("cases");
     } else if (hit.kind === "pattern" || hit.kind === "ddia") {
-      setPracticeTopicFilter(null);
-      setView("practice");
+      navigate({ name: "review" });
     }
   };
 
   const openChapter = (topicId: string, inputs: { inputs: Record<string, number>; label: string } | null = null) => {
-    setChapterTopicId(topicId);
     setChapterInputs(inputs);
-    setView("chapter");
+    navigate({ name: "chapter", topicId });
+  };
+
+  /** Chapters in the new format open in the reader; older lessons still open in the playground. */
+  const openTopic = (id: string) => {
+    if (v2TopicIds.has(id)) {
+      openChapter(id);
+      return;
+    }
+    const cs = overview?.caseStudies.find((c) => c.id === id);
+    if (cs) setActiveCaseId(id);
+    else setActiveLessonId(id);
   };
 
   /** A case study's estimation preset opens chapter 3 with those inputs (it replaced the Capacity Lab). */
@@ -258,27 +302,24 @@ export function App() {
     });
   };
 
-  const openV1Topic = (id: string) => {
-    const cs = overview?.caseStudies.find((c) => c.id === id);
-    if (cs) {
-      setActiveCaseId(id);
-      setView("cases");
-    } else {
-      setActiveLessonId(id);
-      setView("explorer");
-    }
+  const openReadyTopic = (id: string) => {
+    if (!overview) return;
+    const ready = overview.lessons.some((l) => l.id === id && l.status === "ready") || overview.caseStudies.some((c) => c.id === id && c.status === "ready");
+    if (ready || v2TopicIds.has(id)) openTopic(id);
   };
 
-  const activeLayerNum = activeLesson?.layer ?? selectedLayer ?? 1;
-  void activeLayerNum;
+  const topicMeta = Object.fromEntries([
+    ...(overview?.lessons ?? []).map((l) => [l.id, { title: l.title, ready: l.status === "ready", kind: "lesson" as const }]),
+    ...(overview?.caseStudies ?? []).map((c) => [c.id, { title: c.title, ready: c.status === "ready", kind: "case_study" as const }]),
+  ]);
 
   return (
     <>
       <div className="app-shell">
         {/* Studio 1 Frosted Glass Command Top Bar */}
         <header className="top-bar">
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div className="brand-block" onClick={() => setView("start")} title="Back to Start here">
+          <div className="top-bar-left" style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <div className="brand-block" onClick={() => navigate({ name: "learn" })} title="Back to Learn">
               <div className="brand-reticle">
                 <Box size={18} strokeWidth={1.9} />
               </div>
@@ -290,15 +331,16 @@ export function App() {
 
             <nav className="nav-pills">
               {(currentUser?.isAdmin
-                ? [...NAV_ITEMS, { key: "feedback" as MainView, label: "Feedback", icon: MessageSquareWarning }]
+                ? [...NAV_ITEMS, { key: "feedback" as NavKey, label: NAV.feedback, icon: MessageSquareWarning, route: { name: "feedback" } as Route }]
                 : NAV_ITEMS
               ).map((item) => {
-                const isActive = view === item.key;
+                const isActive = navKey(route) === item.key;
                 const Icon = item.icon;
                 return (
                   <button
                     key={item.key}
-                    onClick={() => setView(item.key)}
+                    aria-current={isActive ? "page" : undefined}
+                    onClick={() => navigate(item.route)}
                     className={`nav-pill ${isActive ? "active" : ""}`}
                   >
                     {isActive && (
@@ -316,14 +358,14 @@ export function App() {
           </div>
 
           {/* Right Controls: Search + Diagram Focus + Theme + Profile */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-            <button className="icon-btn" onClick={() => setSearchOpen(true)} title="Search (Ctrl+K)" style={{ whiteSpace: "nowrap" }}>
+          <div className="top-bar-right" style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+            <button className="icon-btn" onClick={() => setSearchOpen(true)} title="Search (Ctrl+K)" aria-label="Search" style={{ whiteSpace: "nowrap" }}>
               <Search size={13} />
-              <span>Search</span>
-              <span className="badge" style={{ fontSize: 9.5 }}>Ctrl K</span>
+              <span className="hide-narrow">Search</span>
+              <span className="badge hide-narrow" style={{ fontSize: 9.5 }}>Ctrl K</span>
             </button>
 
-            {view === "explorer" && (
+            {isPlayground && (
               <button
                 className={`icon-btn ${diagramOnly ? "active" : ""}`}
                 onClick={() => setDiagramOnly((p) => !p)}
@@ -334,15 +376,15 @@ export function App() {
               </button>
             )}
 
-            <button className="icon-btn" aria-label="Keyboard shortcuts" onClick={() => setShortcutsOpen(true)} title="Keyboard shortcuts (?)">
+            <button className="icon-btn hide-narrow" aria-label="Keyboard shortcuts" onClick={() => setShortcutsOpen(true)} title="Keyboard shortcuts (?)">
               <Keyboard size={13} />
             </button>
 
             <button
               className="icon-btn"
-              aria-label="Toggle Light or Dark Blueprint theme"
-              onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
-              title="Toggle Light / Dark Blueprint"
+              aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+              onClick={toggleTheme}
+              title={theme === "light" ? "Dark theme" : "Light theme"}
             >
               {theme === "light" ? <Moon size={13} /> : <Sun size={13} />}
             </button>
@@ -351,30 +393,30 @@ export function App() {
             <button
               className="icon-btn"
               onClick={() => (currentUser?.isGuest ? setAuthModalOpen(true) : setAccountModalOpen(true))}
-              aria-label="Open study profile, streak and API tokens"
-              title={currentUser?.isGuest ? "Sign in / Personalize workspace" : "Account, Streak & Study Tokens"}
+              aria-label={currentUser?.isGuest ? "Sign in to save your progress" : "Account and streak"}
+              title={currentUser?.isGuest ? "Sign in to save your progress" : "Account and streak"}
               style={{
                 borderColor: currentUser && !currentUser.isGuest ? "color-mix(in srgb, var(--accent) 48%, transparent)" : undefined,
                 background: currentUser && !currentUser.isGuest ? "var(--accent-soft)" : undefined,
               }}
             >
               <Flame size={12} color="var(--highlight)" />
-              <span className="streak-hand">{streak?.currentStreak ?? 0}d</span>
-              <span style={{ opacity: 0.45 }}>|</span>
+              <span className="streak-hand">{streak?.currentStreak ?? 0}<span className="hide-narrow">-day streak</span></span>
+              <span className="hide-narrow" style={{ opacity: 0.45 }}>|</span>
               <User size={12} />
-              <span>{currentUser && !currentUser.isGuest ? currentUser.displayName : "Sign In"}</span>
+              <span>{currentUser && !currentUser.isGuest ? currentUser.displayName : "Sign in"}</span>
             </button>
 
             {currentUser && (
               <button
-                className="icon-btn"
+                className="icon-btn hide-narrow"
                 onClick={() => setAccountModalOpen(true)}
-                aria-label="Manage daily goals and API tokens"
-                title="Streak Settings & Personal API Tokens"
+                aria-label="Today's goal"
+                title="Steps done today against your daily goal"
                 style={{ padding: "0 8px" }}
               >
                 <span>
-                  {Math.min(streak?.todayActions ?? 0, streak?.dailyGoal ?? 3)}/{streak?.dailyGoal ?? 3}
+                  Today {Math.min(streak?.todayActions ?? 0, streak?.dailyGoal ?? 3)} of {streak?.dailyGoal ?? 3}
                 </span>
               </button>
             )}
@@ -383,151 +425,107 @@ export function App() {
 
         {errorMsg && (
           <div style={{ padding: "8px 16px", background: "var(--danger-bg)", color: "var(--danger)", fontSize: 12 }} className="mono">
-            API connection error: {errorMsg}
+            Could not reach the server: {errorMsg}. Check your connection and reload.
           </div>
         )}
 
         {!overview ? (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }} className="mono">
-            {signedIn ? "Loading your workspace…" : "Sign in to open your workspace."}
+            {signedIn ? "Loading…" : "Sign in or continue as a guest to start."}
           </div>
         ) : (
           <AnimatePresence mode="wait">
             <motion.div
-              key={view}
+              key={route.name === "library" ? `library:${route.tab}` : route.name}
               initial={{ opacity: 0, y: 5 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -4 }}
               transition={{ duration: 0.16, ease: "easeOut" }}
               style={{ display: "flex", flex: 1, minHeight: 0, overflow: "hidden" }}
             >
-              {view === "start" ? (
-                <StartHereView refreshKey={pathRefresh} onOpenChapter={(id) => openChapter(id)} onOpenSandboxLesson={openV1Topic} />
-              ) : view === "chapter" ? (
+              {route.name === "learn" ? (
+                <StartHereView refreshKey={pathRefresh} onOpenChapter={(id) => openChapter(id)} onOpenSandboxLesson={openTopic} />
+              ) : route.name === "chapter" ? (
                 <ChapterView
-                  key={chapterTopicId}
-                  topicId={chapterTopicId}
+                  key={route.topicId}
+                  topicId={route.topicId}
+                  stepKey={route.stepKey ?? null}
+                  onStepChange={(stepKey) => navigate({ name: "chapter", topicId: route.topicId, stepKey }, { replace: true })}
                   initialInputs={chapterInputs?.inputs ?? null}
                   initialLabel={chapterInputs?.label ?? null}
                   onBack={() => {
                     setPathRefresh((n) => n + 1);
-                    setView("start");
+                    navigate({ name: "learn" });
                   }}
-                  onOpenSandbox={(lessonId) => {
-                    setActiveLessonId(lessonId);
-                    setView("explorer");
+                  onOpenSandbox={(lessonId) => setActiveLessonId(lessonId)}
+                  onOpenChapter={(id) => {
+                    setPathRefresh((n) => n + 1);
+                    openTopic(id);
                   }}
+                  onOpenReview={(id) => navigate({ name: "review", topicId: id })}
                 />
-              ) : view === "roadmap" ? (
-                <RoadmapView
-                  layers={overview.layers}
+              ) : route.name === "library" ? (
+                <LibraryView
+                  tab={route.tab}
+                  onTab={goLibrary}
                   lessons={overview.lessons}
                   caseStudies={overview.caseStudies}
-                  modules={modules}
-                  progressByTopic={overview.progressByTopic}
-                  summary={summary}
-                  streak={streak}
-                  theme={theme}
-                  onStartLesson={(id) => {
-                    setSelectedLayer(null);
-                    setActiveLessonId(id);
-                    setView("explorer");
-                  }}
-                  onOpenCaseStudy={(cid) => {
-                    setActiveCaseId(cid);
-                    setView("cases");
-                  }}
-                  onOpenCapacityLab={() => openChapter(NUMBERS_CHAPTER)}
-                  onOpenModules={() => setView("modules")}
-                  onOpenPractice={() => {
-                    setPracticeTopicFilter(null);
-                    setView("practice");
-                  }}
-                />
-              ) : view === "modules" ? (
-                <ModulesView
-                  modules={modules}
-                  topicMetaById={Object.fromEntries([
-                    ...overview.lessons.map((l) => [l.id, { title: l.title, ready: l.status === "ready", kind: "lesson" as const }]),
-                    ...overview.caseStudies.map((c) => [c.id, { title: c.title, ready: c.status === "ready", kind: "case_study" as const }]),
-                  ])}
-                  onNoteSaved={refreshSummary}
-                  onOpenTopic={(id) => {
-                    const lesson = overview.lessons.find((l) => l.id === id && l.status === "ready");
-                    if (lesson) {
-                      setActiveLessonId(lesson.id);
-                      setView("explorer");
-                      return;
-                    }
-                    const cs = overview.caseStudies.find((c) => c.id === id && c.status === "ready");
-                    if (cs) {
-                      setActiveCaseId(cs.id);
-                      setView("cases");
-                    }
-                  }}
-                />
-              ) : view === "explorer" ? (
-                <ExplorerWorkspace
-                  lessonsIndex={overview.lessons}
-                  selectedLayer={selectedLayer}
-                  activeLessonId={activeLessonId}
-                  activeLesson={activeLesson}
-                  linkedModule={modules.find((m) => m.linkedLessonIds.includes(activeLessonId)) ?? null}
-                  loadingLesson={loadingLesson}
-                  progressByTopic={overview.progressByTopic}
-                  theme={theme}
-                  showLeftPane={showLeftPane && !diagramOnly}
-                  showRightPane={!diagramOnly}
-                  showBottomPane={!diagramOnly}
-                  onToggleLeftPane={() => {
-                    setDiagramOnly(false);
-                    setShowLeftPane((p) => !p);
-                  }}
-                  onSelectLayer={handleLayerSelect}
-                  onSelectLesson={setActiveLessonId}
-                  onUpdateProgress={handleUpdateProgress}
-                  onNoteSaved={refreshSummary}
-                  onJumpToPractice={(topicId) => {
-                    setPracticeTopicFilter(topicId);
-                    setView("practice");
-                  }}
-                />
-              ) : view === "cases" ? (
-                <CaseStudiesView
-                  key={currentUser?.id ?? "guest"}
-                  caseStudiesIndex={overview.caseStudies}
-                  activeCaseId={activeCaseId}
-                  onSelectCaseId={setActiveCaseId}
-                  onLoadPresetInEstimator={handleLoadCasePreset}
-                  progressByTopic={overview.progressByTopic}
-                  theme={theme}
-                  onNoteSaved={refreshSummary}
-                  onUpdateProgress={handleUpdateProgress}
-                />
-              ) : view === "notes" ? (
+                  onOpenChapter={openTopic}
+                  onOpenDesign={setActiveCaseId}
+                >
+                  {route.tab === "reading" ? (
+                    <ModulesView
+                      modules={modules}
+                      topicMetaById={topicMeta}
+                      onNoteSaved={refreshSummary}
+                      onOpenTopic={openReadyTopic}
+                    />
+                  ) : route.tab === "playground" ? (
+                    <ExplorerWorkspace
+                      lessonsIndex={overview.lessons}
+                      selectedLayer={selectedLayer}
+                      activeLessonId={activeLessonId}
+                      activeLesson={activeLesson}
+                      linkedModule={modules.find((m) => m.linkedLessonIds.includes(activeLessonId)) ?? null}
+                      loadingLesson={loadingLesson}
+                      progressByTopic={overview.progressByTopic}
+                      theme={theme}
+                      showLeftPane={showLeftPane && !diagramOnly}
+                      showRightPane={!diagramOnly}
+                      showBottomPane={!diagramOnly}
+                      onToggleLeftPane={() => {
+                        setDiagramOnly(false);
+                        setShowLeftPane((p) => !p);
+                      }}
+                      onSelectLayer={handleLayerSelect}
+                      onSelectLesson={setActiveLessonId}
+                      onUpdateProgress={handleUpdateProgress}
+                      onNoteSaved={refreshSummary}
+                      onJumpToPractice={(topicId) => navigate({ name: "review", topicId })}
+                    />
+                  ) : route.tab === "designs" && route.id ? (
+                    <CaseStudiesView
+                      key={currentUser?.id ?? "guest"}
+                      caseStudiesIndex={overview.caseStudies}
+                      activeCaseId={activeCaseId}
+                      onSelectCaseId={setActiveCaseId}
+                      onLoadPresetInEstimator={handleLoadCasePreset}
+                      progressByTopic={overview.progressByTopic}
+                      theme={theme}
+                      onNoteSaved={refreshSummary}
+                      onUpdateProgress={handleUpdateProgress}
+                    />
+                  ) : null}
+                </LibraryView>
+              ) : route.name === "notes" ? (
                 <NotesVaultView
                   key={currentUser?.id ?? "guest"}
                   streak={streak}
-                  topicMetaById={Object.fromEntries([
-                    ...overview.lessons.map((l) => [l.id, { title: l.title, ready: l.status === "ready", kind: "lesson" as const }]),
-                    ...overview.caseStudies.map((c) => [c.id, { title: c.title, ready: c.status === "ready", kind: "case_study" as const }]),
-                  ])}
+                  topicMetaById={topicMeta}
                   onDataChanged={refreshSummary}
-                  onOpenTopic={(id) => {
-                    const lesson = overview.lessons.find((l) => l.id === id && l.status === "ready");
-                    if (lesson) {
-                      setActiveLessonId(lesson.id);
-                      setView("explorer");
-                      return;
-                    }
-                    const cs = overview.caseStudies.find((c) => c.id === id && c.status === "ready");
-                    if (cs) {
-                      setActiveCaseId(cs.id);
-                      setView("cases");
-                    }
-                  }}
+                  onOpenTopic={openReadyTopic}
                 />
-              ) : view === "feedback" && currentUser?.isAdmin ? (
+              ) : route.name === "feedback" && currentUser?.isAdmin ? (
                 <AdminFeedbackView
                   topicTitleById={Object.fromEntries([
                     ...overview.lessons.map((l) => [l.id, l.title]),
@@ -537,29 +535,14 @@ export function App() {
                 />
               ) : (
                 <PracticeAndDdiaView
-                  key={currentUser?.id ?? "guest"}
-                  topicFilter={practiceTopicFilter}
-                  onClearTopicFilter={() => setPracticeTopicFilter(null)}
+                  key={`${currentUser?.id ?? "guest"}:${route.name === "review" ? route.topicId ?? "" : ""}`}
+                  topicFilter={route.name === "review" ? route.topicId ?? null : null}
+                  onClearTopicFilter={() => navigate({ name: "review" })}
                   patterns={patterns}
                   foundations={foundations}
-                  topicMetaById={Object.fromEntries([
-                    ...overview.lessons.map((l) => [l.id, { title: l.title, ready: l.status === "ready" }]),
-                    ...overview.caseStudies.map((c) => [c.id, { title: c.title, ready: c.status === "ready" }]),
-                  ])}
+                  topicMetaById={topicMeta}
                   onPracticeUpdated={refreshSummary}
-                  onOpenTopic={(id) => {
-                    const lesson = overview.lessons.find((l) => l.id === id && l.status === "ready");
-                    if (lesson) {
-                      setActiveLessonId(lesson.id);
-                      setView("explorer");
-                      return;
-                    }
-                    const cs = overview.caseStudies.find((c) => c.id === id && c.status === "ready");
-                    if (cs) {
-                      setActiveCaseId(cs.id);
-                      setView("cases");
-                    }
-                  }}
+                  onOpenTopic={openReadyTopic}
                 />
               )}
             </motion.div>
@@ -592,13 +575,13 @@ export function App() {
               </div>
               <table className="spec-table">
                 <tbody>
-                  <tr><td>Space</td><td>Play / Pause packet flow</td></tr>
-                  <tr><td>S</td><td>Step forward one hop</td></tr>
+                  <tr><td>Space</td><td>Play or pause requests (playground)</td></tr>
+                  <tr><td>S</td><td>Move one hop forward</td></tr>
                   <tr><td>←</td><td>Previous step</td></tr>
-                  <tr><td>Esc</td><td>Reset simulation to Overview</td></tr>
-                  <tr><td>L / D</td><td>Toggle Lesson list / Diagram focus</td></tr>
-                  <tr><td>N</td><td>Open Markdown Study Notes drawer</td></tr>
-                  <tr><td>Ctrl + K</td><td>Quick jump search across HLD</td></tr>
+                  <tr><td>Esc</td><td>Reset the playground</td></tr>
+                  <tr><td>L / D</td><td>Show the lesson list / show only the diagram</td></tr>
+                  <tr><td>N</td><td>Open notes</td></tr>
+                  <tr><td>Ctrl + K</td><td>Search</td></tr>
                 </tbody>
               </table>
             </div>
