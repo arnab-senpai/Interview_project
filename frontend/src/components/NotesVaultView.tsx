@@ -10,19 +10,16 @@ import {
   Table2,
   Trash2,
 } from "lucide-react";
-import { api, type StreakSummary, type StudyNote } from "../api/client";
+import { api, type StudyNote } from "../api/client";
 import { renderMarkdown } from "../utils/markdown";
-import { StreakHeatmapCard } from "./StreakHeatmapCard";
 
 interface NotesVaultViewProps {
-  streak: StreakSummary | null;
   topicMetaById: Record<string, { title: string; ready: boolean; kind: "lesson" | "case_study" }>;
   onOpenTopic: (topicId: string) => void;
   onDataChanged: () => void;
 }
 
 export const NotesVaultView: React.FC<NotesVaultViewProps> = ({
-  streak,
   topicMetaById,
   onOpenTopic,
   onDataChanged,
@@ -140,9 +137,6 @@ export const NotesVaultView: React.FC<NotesVaultViewProps> = ({
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", padding: "16px 20px", gap: 14 }}>
-      {/* Top Personal Daily Study Streak Heatmap */}
-      <StreakHeatmapCard streak={streak} compact />
-
       {/* Two-pane Personal Markdown Notes Vault */}
       <div
         className="card"
@@ -190,7 +184,7 @@ export const NotesVaultView: React.FC<NotesVaultViewProps> = ({
           <div style={{ flex: 1, overflowY: "auto" }}>
             {filteredNotes.length === 0 ? (
               <div className="mono" style={{ padding: 16, fontSize: 11.5, color: "var(--ink-muted)", lineHeight: 1.5 }}>
-                No notes yet. Click <strong>New Note</strong> above or press <strong>Quick Note</strong> inside any Lesson / Case Study.
+                No notes yet. Use <strong>New Note</strong> above, or write one from any chapter or guided design.
               </div>
             ) : (
               filteredNotes.map((n) => {

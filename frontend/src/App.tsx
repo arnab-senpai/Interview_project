@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import {
   BookOpen,
   Box,
@@ -42,6 +42,7 @@ import { PracticeAndDdiaView } from "./components/PracticeAndDdiaView";
 import { SearchModal } from "./components/SearchModal";
 import { LandingView } from "./components/LandingView";
 import { LearnHome } from "./components/LearnHome";
+import { QuickCheckView } from "./components/QuickCheckView";
 import { ReviewView } from "./components/ReviewView";
 import { WelcomeView } from "./components/WelcomeView";
 import type { HldCaseStudy, HldExplorerLesson, PatternPlaybook } from "./types/hld";
@@ -123,6 +124,18 @@ export function App() {
     mq.addEventListener?.("change", onChange);
     return () => mq.removeEventListener?.("change", onChange);
   }, []);
+
+  // Screen readers hear the new page: a title per screen, and focus moves to the content when the screen changes.
+  const screenKey = route.name === "library" ? `library:${route.tab}` : route.name === "chapter" ? `chapter:${route.topicId}` : route.name;
+  useEffect(() => {
+    const titles: Record<string, string> = {
+      learn: "Learn", chapter: "Chapter", welcome: "Your plan", check: "Test out", drill: "Refresher",
+      review: "Review", library: "Library", notes: "Notes", feedback: "Feedback",
+    };
+    document.title = `${titles[route.name] ?? "SystemCraft"} · SystemCraft`;
+    const main = document.getElementById("main-content");
+    if (main && document.activeElement && document.activeElement !== document.body) main.focus({ preventScroll: true });
+  }, [screenKey]);
 
   const toggleTheme = () => {
     const next: Theme = theme === "light" ? "dark" : "light";
@@ -353,21 +366,25 @@ export function App() {
 
   return (
     <>
+      <MotionConfig reducedMotion="user">
+      <a className="skip-link" href="#main-content">
+        Skip to content
+      </a>
       <div className="app-shell">
         {/* Studio 1 Frosted Glass Command Top Bar */}
         <header className="top-bar">
           <div className="top-bar-left" style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div className="brand-block" onClick={() => navigate({ name: "learn" })} title="Back to Learn">
-              <div className="brand-reticle">
+            <button className="brand-block" onClick={() => navigate({ name: "learn" })} title="Back to Learn" aria-label="SystemCraft, back to Learn">
+              <span className="brand-reticle">
                 <Box size={18} strokeWidth={1.9} />
-              </div>
-              <div>
-                <div className="brand-title">SystemCraft</div>
-                <div className="brand-sub">System design, practised</div>
-              </div>
-            </div>
+              </span>
+              <span>
+                <span className="brand-title">SystemCraft</span>
+                <span className="brand-sub">System design, practised</span>
+              </span>
+            </button>
 
-            <nav className="nav-pills" style={signedIn ? undefined : { display: "none" }}>
+            <nav className="nav-pills" aria-label="Main" style={signedIn ? undefined : { display: "none" }}>
               {(currentUser?.isAdmin
                 ? [...NAV_ITEMS, { key: "feedback" as NavKey, label: NAV.feedback, icon: MessageSquareWarning, route: { name: "feedback" } as Route }]
                 : NAV_ITEMS
@@ -468,7 +485,9 @@ export function App() {
           </div>
         ) : (
           <AnimatePresence mode="wait">
-            <motion.div
+            <motion.main
+              id="main-content"
+              tabIndex={-1}
               key={route.name === "library" ? `library:${route.tab}` : route.name}
               initial={{ opacity: 0, y: 5 }}
               animate={{ opacity: 1, y: 0 }}
@@ -488,6 +507,18 @@ export function App() {
                   onOpenReview={() => navigate({ name: "review" })}
                   onOpenPlan={() => navigate({ name: "welcome" })}
                   onSaveProgress={() => openAuth("register")}
+                  onTestOut={(stageId) => navigate({ name: "check", stageId })}
+                  onDrill={(topicId) => navigate({ name: "drill", topicId })}
+                />
+              ) : route.name === "check" || route.name === "drill" ? (
+                <QuickCheckView
+                  key={route.name === "check" ? `check:${route.stageId}` : `drill:${route.topicId}`}
+                  mode={route.name === "check" ? { kind: "check", pathId: "start-here", stageId: route.stageId } : { kind: "drill", topicId: route.topicId }}
+                  onDone={() => {
+                    setPathRefresh((n) => n + 1);
+                    navigate({ name: "learn" });
+                  }}
+                  onOpenChapter={(id) => navigate({ name: "chapter", topicId: id })}
                 />
               ) : route.name === "welcome" ? (
                 <WelcomeView
@@ -580,7 +611,6 @@ export function App() {
               ) : route.name === "notes" ? (
                 <NotesVaultView
                   key={currentUser?.id ?? "guest"}
-                  streak={streak}
                   topicMetaById={topicMeta}
                   onDataChanged={refreshSummary}
                   onOpenTopic={openReadyTopic}
@@ -620,7 +650,7 @@ export function App() {
                   )}
                 </ReviewView>
               ) : null}
-            </motion.div>
+            </motion.main>
           </AnimatePresence>
         )}
 
@@ -684,6 +714,7 @@ export function App() {
           onLogout={handleLogoutSession}
         />
       </div>
+      </MotionConfig>
     </>
   );
 }

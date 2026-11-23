@@ -277,6 +277,8 @@ export interface TodayCard {
   topicId: string | null;
   layer?: string | null;
   stepKey?: string | null;
+  /** Repair cards: a short drill of this chapter's checks. */
+  drill?: string | null;
 }
 
 export interface TodayResponse {
@@ -322,6 +324,26 @@ export interface ReviewItem {
 }
 
 export type ReviewRating = "again" | "hard" | "good" | "easy";
+
+export interface QuizQuestionItem {
+  topicId?: string;
+  chapterTitle?: string;
+  blockId: string;
+  gradingVersion?: number;
+  prompt: string;
+  options: string[];
+  index?: number;
+  total?: number;
+}
+
+export interface StageCheckResult {
+  placedOut: string[];
+  needsStudy: string[];
+  notChecked: string[];
+  stoppedEarly: boolean;
+  correct: number;
+  answered: number;
+}
 
 const AUTH_TOKEN_STORAGE_KEY = "systemcraft_auth_token";
 
@@ -402,6 +424,18 @@ export const api = {
     }),
   getTopicReviewItems: (topicId: string) =>
     fetchJson<{ topicId: string; added: number; items: ReviewItem[] }>(`/api/topics/${encodeURIComponent(topicId)}/review-items`),
+  startStageCheck: (pathId: string, stageId: string) =>
+    fetchJson<{ sessionId: string; stageId: string; total: number; chapters: string[]; question: QuizQuestionItem }>(
+      `/api/paths/${encodeURIComponent(pathId)}/stages/${encodeURIComponent(stageId)}/check`,
+      { method: "POST" }
+    ),
+  answerStageCheck: (sessionId: string, choice: number) =>
+    fetchJson<{ correct: boolean; correctIndex: number; explanation: string | null; finished: boolean; question?: QuizQuestionItem; result?: StageCheckResult }>(
+      `/api/placement/${encodeURIComponent(sessionId)}/answer`,
+      { method: "POST", body: JSON.stringify({ choice }) }
+    ),
+  getDrill: (topicId: string) =>
+    fetchJson<{ topicId: string; chapterTitle: string; items: QuizQuestionItem[] }>(`/api/drills/${encodeURIComponent(topicId)}`),
   getPath: (pathId: string) => fetchJson<StudyPathResponse>(`/api/paths/${pathId}`),
   getTopicV2: (track: string, topicId: string) =>
     fetchJson<{ topic: TopicV2; progress: TopicProgressV2 }>(`/api/tracks/${track}/topics/${topicId}`),
@@ -410,7 +444,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ topicId, blockIds }),
     }),
-  submitAttempt: (payload: { topicId: string; blockId: string; gradingVersion: number; response: Record<string, unknown> }) =>
+  submitAttempt: (payload: { topicId: string; blockId: string; gradingVersion: number; response: Record<string, unknown>; source?: "check" | "drill" }) =>
     fetchJson<AttemptResult>("/api/attempts", { method: "POST", body: JSON.stringify(payload) }),
 
   reportIssue: (payload: {
