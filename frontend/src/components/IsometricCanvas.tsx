@@ -40,9 +40,10 @@ function easeInOutCubic(t: number): number {
   return c < 0.5 ? 4 * c * c * c : 1 - Math.pow(-2 * c + 2, 3) / 2;
 }
 
+// Same thresholds as the chapter figures: 60% planning target, 100% = one instance can't keep up.
 function utilColor(u: number): string {
-  if (u >= 0.85) return "var(--danger)";
-  if (u >= 0.65) return "var(--warn)";
+  if (u >= 1) return "var(--danger)";
+  if (u >= 0.6) return "var(--warn)";
   return "var(--success)";
 }
 
@@ -80,7 +81,7 @@ function clipSegment(
   };
 }
 
-function IsometricNodeGlyph({
+export function IsometricNodeGlyph({
   kind,
   active,
   faulted,

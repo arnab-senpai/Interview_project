@@ -63,6 +63,8 @@ class CapacityCalcIn(BaseModel):
     retention_years: int = Field(default=5, ge=1, alias="retentionYears")
     read_share_percent: float = Field(default=90.0, ge=0.0, le=100.0, alias="readSharePercent")
     replication_factor: int = Field(default=3, ge=1, le=7, alias="replicationFactor")
+    distinct_items_read_per_day: int | None = Field(default=None, gt=0, alias="distinctItemsReadPerDay")
+    hot_fraction: float = Field(default=0.2, gt=0, le=1, alias="hotFraction")
     save_run: bool = Field(default=False, alias="saveRun")
 
     model_config = {"populate_by_name": True}
@@ -351,6 +353,8 @@ def run_estimator(
         retention_years=payload.retention_years,
         read_share_percent=payload.read_share_percent,
         replication_factor=payload.replication_factor,
+        distinct_items_read_per_day=payload.distinct_items_read_per_day,
+        hot_fraction=payload.hot_fraction,
     )
     if payload.save_run:
         now = utc_now_iso()

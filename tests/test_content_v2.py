@@ -308,3 +308,20 @@ def test_idle_guests_are_purged(client: TestClient, monkeypatch: pytest.MonkeyPa
 
     with get_conn() as conn:
         assert conn.execute("SELECT COUNT(*) FROM users WHERE id = ?", (g["id"],)).scalar() == 0
+
+
+def test_estimator_agrees_with_chapter_three() -> None:
+    """The old Capacity Lab maths and chapter 3's formulas must give the same numbers."""
+    from backend.app.services.estimator import calculate_capacity
+
+    t = next(t for t in compile_all() if t.id == "numbers-that-matter")
+    d = t.defaults
+    m = calculate_capacity(
+        dau=20_000_000, actions_per_user_per_day=20, peak_multiplier=3, avg_payload_bytes=500,
+        retention_years=5, read_share_percent=99, replication_factor=3,
+        distinct_items_read_per_day=10_000_000, hot_fraction=0.2,
+    )["metrics"]
+    assert m["peakQps"] == pytest.approx(d["peak_rps"], abs=0.01)
+    assert m["writeQpsPeak"] == pytest.approx(d["write_rps"], abs=0.01)
+    assert m["replicatedRetentionTB"] == pytest.approx(d["storage_bytes"] / 1e12, abs=0.001)
+    assert m["hotCacheGB"] == pytest.approx(d["cache_bytes"] / 1e9, abs=0.001)

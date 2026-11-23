@@ -203,7 +203,8 @@ def test_progress_sm2_quiz_estimator_and_rubric_persistence(isolated_db, learner
         ),
         user=user,
     )
-    assert calc["metrics"]["avgQps"] == 4000.0
+    # 400M actions a day ÷ 86,400 s (not ÷ 100,000, which gave 4,000).
+    assert calc["metrics"]["avgQps"] == pytest.approx(4629.63, abs=0.01)
     assert len(calc["workedSteps"]) == 6
 
     runs = practice.list_saved_estimations(user=user)["runs"]
